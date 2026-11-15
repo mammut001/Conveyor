@@ -52,8 +52,8 @@ async function install(page: Page, options: Options = {}) {
     const json = (body: unknown, status = 200) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
-    // Only the very first response is slow: that is the second the owner sees on a reload.
-    if (firstResponse && slowFirstResponse > 0 && path === '/api/system/status') {
+    // Only the very first essential response is slow: that is the second the owner sees on a reload.
+    if (firstResponse && slowFirstResponse > 0 && path === '/api/sessions') {
       firstResponse = false
       await new Promise(resolve => setTimeout(resolve, slowFirstResponse))
     }

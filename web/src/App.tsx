@@ -304,6 +304,10 @@ export default function App() {
   transcriptSessionRef.current = selectedSessionId
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
+  // The one group of slow extras (/api/nodes, /api/system/status, /api/computer/status,
+  // /api/config/provider, /api/workers) currently in flight: a new poll joins it instead of
+  // firing a second round of the same cold-server requests.
+  const extrasInFlightRef = useRef<Promise<[{ nodes: NodeInfo[] }, SystemStatus, ComputerStatus, any, any] | null> | null>(null)
   const approvalInboxFetchGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
@@ -322,6 +326,8 @@ export default function App() {
   const [syncStale, setSyncStale] = useState(false)
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true)
   const [initialLoaded, setInitialLoaded] = useState(false)
+  // 首览清单要看的额外数据（模型配置、执行者）单独加载：没到之前一律算「未知」，不闪错状态。
+  const [extrasLoaded, setExtrasLoaded] = useState(false)
   const [pollFailed, setPollFailed] = useState(false)
   const [notice, setNotice] = useState('')
   const pollAbortRef = useRef<AbortController>(new AbortController())
@@ -713,14 +719,44 @@ export default function App() {
   const refresh = useCallback(async () => {
     if (!token || isLockedRef.current) return
     const gen = ++refreshGen.current
-    try {
-      const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData, providerData, workersPayload] = await Promise.all([
-        api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
-        api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
-        api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
-        api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
+    // 慢的那五个请求（冷服务器上 /api/workers 会去探安装好的 CLI）绝不拖住解锁和下一次轮询：
+    // 它们和必需品并行发出，各自落自己的状态；失败就默默保持原值。同一个在飞的分组
+    // 不会被第二个轮询重复发起。
+    const startExtras = () => {
+      const inFlight = extrasInFlightRef.current
+      if (inFlight) return inFlight
+      const request = Promise.all([
+        api<{ nodes: NodeInfo[] }>('/api/nodes'),
+        api<SystemStatus>('/api/system/status'),
+        api<ComputerStatus>('/api/computer/status'),
         api<any>('/api/config/provider').catch(() => null),
         api<any>('/api/workers').catch(() => null),
+      ]).catch(() => null)
+      extrasInFlightRef.current = request
+      void request.then(() => { if (extrasInFlightRef.current === request) extrasInFlightRef.current = null })
+      return request
+    }
+    void startExtras().then(payload => {
+      // A newer refresh (or a decision that bumped the generation) started while this one was
+      // in flight. Drop it so a late answer cannot paint over newer data.
+      if (isStale(gen, refreshGen.current) || isLockedRef.current) return
+      if (payload) {
+        const [nodeData, systemData, computerData, providerData, workersPayload] = payload
+        setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData)
+        if (providerData) setProviderConfig(providerData.config || providerData)
+        if (workersPayload) setWorkersData(workersPayload)
+      }
+      // 清单的数据到齐了（或确认拿不到）：在此之前缺失一律算「未知」。
+      setExtrasLoaded(true)
+    }).catch(() => {
+      // Extras never fail the app: the previous value simply stays.
+      if (!isStale(gen, refreshGen.current) && !isLockedRef.current) setExtrasLoaded(true)
+    })
+    try {
+      const [sessionData, jobData, approvalData, agentData] = await Promise.all([
+        api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
+        api<{ approvals: Approval[] }>('/api/approvals'),
+        api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
       ])
       // A newer refresh (or a decision that bumped the generation) started
       // while this one was in flight. Drop it so a late poll cannot restore
@@ -735,14 +771,8 @@ export default function App() {
       setAnySessionHasMessages(sessionData.sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0))
       setChatSessions(chatSessionsOnly(sessionData.sessions))
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
-      setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setTokenDraft(''); setError('')
+      setAuthenticated(true); setTokenDraft(''); setError('')
       setAgentState(agentData)
-      if (providerData) {
-        setProviderConfig(providerData.config || providerData)
-      }
-      if (workersPayload) {
-        setWorkersData(workersPayload)
-      }
       const pinned = agentData.enabled
         ? (agentData.agents.find(agent => agent.id === (localStorage.getItem('conveyor-agent') || '')) || agentData.agents[0])?.session_id
         : ''
@@ -1324,11 +1354,11 @@ export default function App() {
     (jobs && jobs.length > 0) ||
     (transcript && transcript.length > 0)
   )
-  const hasNoUsableWay = Boolean(initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
+  const hasNoUsableWay = Boolean(extrasLoaded && initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
   // ① is honest: the chosen executor must be installed AND actually work (or be untestable).
   // With the 执行者 feature off the owner cannot act, so ① never blocks (today's behaviour).
   const executorStepDone = !workersEnabled || (executorInstalled && executorTestPassed)
-  const onboardingStepsOpen = Boolean(hasNoUsableWay || !executorStepDone || !modelConfigured || !hasSentFirstMessage)
+  const onboardingStepsOpen = Boolean(extrasLoaded && (hasNoUsableWay || !executorStepDone || !modelConfigured || !hasSentFirstMessage))
 
   // Checklist step ① inline 测试: really call the chosen executor once (up to ~45s) and adopt the
   // fresh workers payload so the badge / step ticks without a reload.
@@ -1349,7 +1379,7 @@ export default function App() {
   const ONBOARDING_HEALTHY_KEY = 'conveyor-onboarding-healthy'
 
   useEffect(() => {
-    if (!initialLoaded) return
+    if (!initialLoaded || !extrasLoaded) return
     if (hasNoUsableWay) {
       try {
         if (localStorage.getItem(ONBOARDING_HEALTHY_KEY) === 'true') {
@@ -1363,7 +1393,7 @@ export default function App() {
         localStorage.setItem(ONBOARDING_HEALTHY_KEY, 'true')
       } catch { /* ignore */ }
     }
-  }, [hasNoUsableWay, initialLoaded])
+  }, [hasNoUsableWay, initialLoaded, extrasLoaded])
 
   const handleDismissChecklist = useCallback(() => {
     setChecklistDismissed(true)
@@ -1378,7 +1408,9 @@ export default function App() {
   const stepsOpenAtLoadRef = useRef<boolean | null>(null)
   const [checklistFinished, setChecklistFinished] = useState(false)
   useEffect(() => {
-    if (!initialLoaded || checklistDismissed) return
+    // The extras (model config, workers) load after the essentials: wait for them, otherwise
+    // "were the steps open?" would be answered from data that has not arrived yet.
+    if (!initialLoaded || !extrasLoaded || checklistDismissed) return
     // Whether the steps were still open when this page opened: only then is there a
     // completed state worth showing once. A page that opens already finished shows nothing.
     if (stepsOpenAtLoadRef.current === null) stepsOpenAtLoadRef.current = onboardingStepsOpen
