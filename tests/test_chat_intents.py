@@ -296,10 +296,15 @@ class ChatIntentsFlowTests(unittest.TestCase):
         self.assertEqual(goals[0]["title"], "把它做成一个好用的待办应用")
         self.assertEqual(goals[0]["outcome"], long_outcome)
 
-        # Without deadline_at from backend, must report max_iterations and never invent an end time.
+        # Backend supports duration_minutes, so the goal has deadline_at and reports an end time.
         follow_text = res["follow_up_message"]["text"]
-        self.assertEqual(follow_text, "已经开始了，最多跑 5 轮。随时在 项目 › 目标 里看进度或停止。")
-        self.assertNotIn("预计", follow_text)
+        self.assertRegex(
+            follow_text,
+            r"^已经开始了，预计 \d{2}:\d{2} 结束。随时在 项目 › 目标 里看进度或停止。$",
+        )
+        self.assertIn("预计", follow_text)
+        self.assertEqual(goals[0]["mode"], "continuous")
+        self.assertTrue(goals[0]["deadline_at"])
 
         # Replay of same action_id -> 409 rejected.
         replay_status, replay_body = chat_intents.execute_action(None, self.settings, start_btn_id)

@@ -109,18 +109,14 @@ class TimeboxedGoalTests(unittest.TestCase):
     def _set_task_state(self, task_id: str, state: str, *, error: str = "") -> None:
         if state == "completed":
             identity = ags.target_identity(self.wt_path)
-            with patch.object(
-                ags,
-                "effective_acceptance",
-                return_value={
-                    "passed": True,
-                    "sha": identity["sha"],
-                    "fingerprint": identity["fingerprint"],
-                    "evidence_source": "manual_or_direct",
-                    "issues": [],
-                },
-            ):
-                ags.transition(self.settings, task_id, "completed", stage="completed")
+            ags.record_acceptance(self.settings, task_id, sha=identity["sha"], passed=True,
+                                  fingerprint=identity["fingerprint"],
+                                  evidence_source="operator_validation+independent_review",
+                                  executed_checks=[{"passed": True, "execution_id": "test-check",
+                                                    "target_sha": identity["sha"],
+                                                    "target_fingerprint": identity["fingerprint"]}],
+                                  provenance_verified=True)
+            ags.transition(self.settings, task_id, "completed", stage="completed")
             return
         ags.transition(self.settings, task_id, state, stage=state, error=error or None)
 
