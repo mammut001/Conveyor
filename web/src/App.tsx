@@ -288,6 +288,13 @@ export default function App() {
   // 对话: which conversation the panel shows, and the one a sidebar row asked it to open.
   const [chatSessionId, setChatSessionId] = useState('')
   const [chatOpenRequest, setChatOpenRequest] = useState<{ id: string; nonce: number } | null>(null)
+  const [supervisorNavRequest, setSupervisorNavRequest] = useState<{
+    nonce: number
+    repoId: string
+    worktreeId?: string
+    tab?: 'goals' | 'workspace'
+    goalOutcome?: string
+  } | null>(null)
   // A message sent from 对话 right now: checklist step ③ ticks before the next poll.
   const [chatMessageSent, setChatMessageSent] = useState(false)
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'live' | 'reconnecting'>('connecting')
@@ -1440,6 +1447,31 @@ export default function App() {
     setupChecklist: view === 'chat' ? checklistNode : undefined,
     // A failed turn whose explanation points at 模型设置 can open that dialog in one tap.
     onOpenModelSettings: () => void openSettings(),
+    onOpenSupervisorProject: (req) => {
+      if (req.repoId) {
+        try {
+          localStorage.setItem('conveyor-supervisor-context-v1', JSON.stringify({
+            repoId: req.repoId,
+            worktreeId: req.worktreeId || '',
+          }))
+        } catch {
+          // ignore storage unavailability
+        }
+      }
+      setSupervisorNavRequest(prev => ({
+        nonce: Math.max(Date.now(), (prev?.nonce ?? 0) + 1),
+        repoId: req.repoId,
+        worktreeId: req.worktreeId,
+        tab: req.tab,
+        goalOutcome: req.goalOutcome,
+      }))
+      historyModeRef.current = 'push'
+      setView('code')
+    },
+    onOpenWorkers: () => {
+      historyModeRef.current = 'push'
+      setView('workers')
+    },
   }
 
   // Shell values for this render: right panel, connection, navigation groups and header text.
@@ -1665,6 +1697,7 @@ export default function App() {
                 coordinatorFallbackName={providerConfig ? `${providerConfig.provider_name} · ${providerConfig.model}` : selectedAgent?.name}
                 onOpenWorkers={workersEnabled ? () => { historyModeRef.current = 'push'; setView('workers') } : undefined}
                 workersData={workersData}
+                navigationRequest={supervisorNavRequest}
               />
             </Suspense>
           )

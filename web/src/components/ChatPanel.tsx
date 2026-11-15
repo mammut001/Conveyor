@@ -33,6 +33,7 @@ export type ChatMessage = {
   /** The chat provider failed this turn: `text` is the Chinese sentence, `detail` the raw error (under 详情). */
   failure?: { text: string; detail?: string };
   taskSuggestion?: TaskSuggestion;
+  actionCard?: ActionCard;
   originChannel?: 'web' | 'telegram' | 'feishu';
   pendingApproval?: {
     id: string;
@@ -51,8 +52,25 @@ export type ChatMessage = {
   };
 };
 
+export type ActionCardButton = {
+  id: string;
+  label: string;
+  action: string;
+  style?: string;
+  payload?: Record<string, unknown>;
+};
+
+export type ActionCard = {
+  id: string;
+  title: string;
+  text: string;
+  buttons: ActionCardButton[];
+  used?: boolean;
+  outcome?: string;
+};
+
 type HistoryApproval = { id: string; tool_name: string; arg: string; status: string; expires_in_seconds?: number };
-type HistoryMessage = { origin_channel?: 'web' | 'telegram' | 'feishu'; role: 'user' | 'assistant'; text: string; created_at?: string; kind?: string; approval?: HistoryApproval; task_suggestion?: TaskSuggestion };
+type HistoryMessage = { origin_channel?: 'web' | 'telegram' | 'feishu'; role: 'user' | 'assistant'; text: string; created_at?: string; kind?: string; approval?: HistoryApproval; task_suggestion?: TaskSuggestion; action_card?: ActionCard };
 
 /** One short Chinese sentence; the technical text stays behind 详情. */
 type ChatError = { message: string; detail?: string; action?: 'send' | 'history' };
@@ -90,12 +108,25 @@ export type ChatPanelProps = {
   onMakeGoal?: (draft: string) => void;
   /** 有值时「设为目标」不能点，这句话作为悬停提示。 */
   makeGoalDisabledReason?: string;
+  onOpenSupervisorProject?: (req: {
+    repoId: string;
+    worktreeId?: string;
+    tab?: 'goals' | 'workspace';
+    goalOutcome?: string;
+  }) => void;
+  onOpenWorkers?: () => void;
 };
 
 const VOICE_PLACEHOLDER = '🎤 正在识别语音…';
 const MAX_LENGTH = 8000;
 const COUNTER_FROM = Math.ceil(MAX_LENGTH * 0.9);
 const INTERRUPTED_NOTICE = '上次的回复被打断了，消息已放回输入框，可以重新发送';
+const NAVIGATION_ONLY_ACTIONS = new Set([
+  'open_project',
+  'open_goal_progress',
+  'open_workers',
+  'open_code',
+]);
 
 function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: boolean }) {
   if (!tasks || tasks.length === 0) return null;
@@ -189,7 +220,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, onOpenModelSettings, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '' }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, onOpenModelSettings, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '', onOpenSupervisorProject, onOpenWorkers }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Reading a restored conversation must not flash the welcome state first.
@@ -218,6 +249,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const subagentsRef = useRef<SubagentProgress[]>([]);
   subagentsRef.current = subagents;
   const [approvalsInProgress, setApprovalsInProgress] = useState<Record<string, boolean>>({});
+  const [actionsInProgress, setActionsInProgress] = useState<Record<string, boolean>>({});
   const streamRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -308,8 +340,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               id: `hist-${idx}-${m.created_at || Date.now()}`,
               role: m.role,
               text: m.text,
-              failedReply: m.role === 'assistant' && !m.approval && looksLikeRawError(m.text) ? m.text : undefined,
+              failedReply: m.role === 'assistant' && !m.approval && !m.action_card && looksLikeRawError(m.text) ? m.text : undefined,
               taskSuggestion: m.task_suggestion,
+              actionCard: m.action_card,
               originChannel: m.origin_channel,
               // No recorded time: show none rather than pretend it is "now".
               created_at: m.created_at || '',
@@ -694,6 +727,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   role: 'assistant',
                   text: payload.text,
                   taskSuggestion: payload.task_suggestion,
+                  actionCard: payload.action_card,
                   created_at: new Date().toISOString(),
                   subagents: finishedSubagents,
                   failure: payload.failure ? { text: String(payload.text || ''), detail: String(payload.failure.detail || '') || undefined } : undefined,
@@ -759,6 +793,99 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
     const failed = failedSendRef.current;
     if (failed) void handleSend(undefined, undefined, failed);
+  };
+
+  const handleCardAction = async (card: ActionCard, btn: ActionCardButton) => {
+    const payload = btn.payload || {};
+    if (btn.action === 'open_workers') {
+      onOpenWorkers?.();
+      return;
+    }
+    if (
+      btn.action === 'open_project'
+      || btn.action === 'open_goal_progress'
+      || btn.action === 'open_code'
+    ) {
+      onOpenSupervisorProject?.({
+        repoId: typeof payload.repo_id === 'string' ? payload.repo_id : '',
+        worktreeId: typeof payload.worktree_id === 'string' ? payload.worktree_id : undefined,
+        tab: payload.tab === 'goals' ? 'goals' : undefined,
+        goalOutcome: typeof payload.goal_outcome === 'string' ? payload.goal_outcome : undefined,
+      });
+      return;
+    }
+
+    if (!btn.id || card.used || actionsInProgress[card.id]) return;
+    setActionsInProgress(prev => ({ ...prev, [card.id]: true }));
+    try {
+      const res = await fetch('/api/chat/actions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ action_id: btn.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const msg = typeof data.error === 'string' && data.error ? data.error : '操作失败，请稍后再试';
+        if (res.status === 409) {
+          setMessages(prev => prev.map(m => (
+            m.actionCard?.id === card.id
+              ? { ...m, actionCard: { ...m.actionCard, used: true, outcome: m.actionCard.outcome || msg } }
+              : m
+          )));
+        } else {
+          setError({ message: msg });
+        }
+        return;
+      }
+
+      const updatedCard: ActionCard = data.card || {
+        ...card,
+        used: true,
+        outcome: typeof data.outcome === 'string' ? data.outcome : card.outcome,
+      };
+      setMessages(prev => {
+        const mapped = prev.map(m => (
+          m.actionCard?.id === card.id ? { ...m, actionCard: updatedCard } : m
+        ));
+        if (data.follow_up_message && typeof data.follow_up_message.text === 'string') {
+          mapped.push({
+            id: `act-follow-${Date.now()}`,
+            role: 'assistant',
+            text: data.follow_up_message.text,
+            actionCard: data.follow_up_message.action_card,
+            created_at: data.follow_up_message.created_at || new Date().toISOString(),
+          });
+        }
+        return mapped;
+      });
+      if (data.client_action?.type === 'prefill_chat' && typeof data.client_action.text === 'string') {
+        setInput(data.client_action.text);
+        window.setTimeout(() => textareaRef.current?.focus(), 0);
+      } else if (data.client_action?.type === 'edit_timed_goal') {
+        const navPayload = (
+          data.client_action.payload && typeof data.client_action.payload === 'object'
+            ? data.client_action.payload
+            : payload
+        ) as Record<string, unknown>;
+        onOpenSupervisorProject?.({
+          repoId: typeof navPayload.repo_id === 'string' ? navPayload.repo_id : '',
+          worktreeId: typeof navPayload.worktree_id === 'string' ? navPayload.worktree_id : undefined,
+          tab: 'goals',
+          goalOutcome: typeof navPayload.goal_outcome === 'string' ? navPayload.goal_outcome : undefined,
+        });
+      }
+    } catch {
+      setError({ message: '操作暂时没连上服务，请稍后再试' });
+    } finally {
+      setActionsInProgress(prev => {
+        const next = { ...prev };
+        delete next[card.id];
+        return next;
+      });
+    }
   };
 
   const placeholder = `给 ${displayName} 发消息…`;
@@ -977,6 +1104,42 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                       {prepareButtonLabel(message.taskSuggestion)}
                     </button>
                   </div>
+                )}
+                {message.actionCard && (
+                  <section className="chat-action-card" aria-label={message.actionCard.title || '可执行操作'}>
+                    {message.actionCard.title && (
+                      <div className="chat-action-card-title">{message.actionCard.title}</div>
+                    )}
+                    {message.actionCard.text && message.actionCard.text !== shownText && (
+                      <p className="chat-action-card-text">{message.actionCard.text}</p>
+                    )}
+                    {message.actionCard.buttons.length > 0 && (
+                      <div className="action-row">
+                        {message.actionCard.buttons.map(btn => {
+                          const isNav = NAVIGATION_ONLY_ACTIONS.has(btn.action);
+                          const disabled = !isNav && Boolean(
+                            message.actionCard!.used || actionsInProgress[message.actionCard!.id],
+                          );
+                          return (
+                            <button
+                              key={btn.id}
+                              type="button"
+                              className={btn.style === 'primary' ? 'primary' : 'secondary'}
+                              disabled={disabled}
+                              onClick={() => void handleCardAction(message.actionCard!, btn)}
+                            >
+                              {btn.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {message.actionCard.used && message.actionCard.outcome && (
+                      <div className="chat-action-card-outcome" role="status">
+                        {message.actionCard.outcome}
+                      </div>
+                    )}
+                  </section>
                 )}
                 <footer className="transcript-footer chat-meta">
                   {message.interrupted && <span>回答中断 · 已保留收到的内容</span>}
