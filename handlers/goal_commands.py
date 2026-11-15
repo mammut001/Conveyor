@@ -34,13 +34,14 @@ from typing import Any, Callable
 log = logging.getLogger("conveyor.handlers.goal_commands")
 
 # Only these states are worth the owner's attention on a phone.
-LISTED_STATES = ("waiting_user", "running")
+LISTED_STATES = ("waiting_user", "waiting_quota", "running")
 # A phone message that lists 40 goals is a message nobody reads.
 MAX_LISTED_GOALS = 10
 
 STATE_LABELS = {
     "running": "进行中",
     "waiting_user": "等待你回复",
+    "waiting_quota": "等待额度恢复",
     "achieved": "已达成",
     "stopped": "已停止",
     "exhausted": "轮数用尽",

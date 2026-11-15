@@ -20,7 +20,8 @@ import { readGoalDraft, writeGoalDraft } from './supDrafts'
 // All owner-facing copy is Simplified Chinese; raw backend codes never render.
 // ---------------------------------------------------------------------------
 
-export type GoalState = 'running' | 'waiting_user' | 'achieved' | 'stopped' | 'exhausted' | 'failed'
+export type GoalState = 'running' | 'waiting_user' | 'waiting_quota' | 'achieved' | 'stopped' | 'exhausted' | 'failed'
+export type GoalMode = 'outcome' | 'continuous'
 
 export type Goal = {
   id: string
@@ -38,6 +39,12 @@ export type Goal = {
   stop_reason: string
   last_next_prompt: string
   iterations_used?: number
+  deadline_at?: string | null
+  mode?: GoalMode
+  resume_at?: string | null
+  rounds_passed?: number
+  rounds_total?: number
+  remaining_seconds?: number | null
 }
 
 export type Iteration = {
@@ -50,6 +57,8 @@ export type Iteration = {
   finished_at: string
   task_final_state: string
   task_state: string
+  passed?: boolean
+  round_title?: string
 }
 
 export type GoalDetail = Goal & {
@@ -60,6 +69,7 @@ export type GoalDetail = Goal & {
 const GOAL_STATE_LABELS: Record<GoalState, string> = {
   running: '进行中',
   waiting_user: '等你回复',
+  waiting_quota: '等待额度恢复',
   achieved: '已达成',
   stopped: '已停止',
   exhausted: '已用完轮数',
@@ -73,13 +83,21 @@ const GOAL_DECISION_LABELS: Record<string, string> = {
   give_up: '放弃',
 }
 
-const GOAL_ACTIVE_STATES: GoalState[] = ['running', 'waiting_user']
+const GOAL_ACTIVE_STATES: GoalState[] = ['running', 'waiting_user', 'waiting_quota']
 
 const ROLE_KEYS: SupervisorRoleKey[] = ['analyst', 'implementer', 'reviewer']
 
 const DEFAULT_MAX_ROUNDS = 5
 const MIN_MAX_ROUNDS = 1
 const MAX_MAX_ROUNDS = 20
+const MIN_DURATION_MINUTES = 30
+const MAX_DURATION_MINUTES = 1440
+const COUNTDOWN_TICK_MS = 30000
+const DURATION_PRESETS: Array<{ label: string; minutes: 60 | 180 | 600 }> = [
+  { label: '1 小时', minutes: 60 },
+  { label: '3 小时', minutes: 180 },
+  { label: '10 小时', minutes: 600 },
+]
 const POLL_INTERVAL_MS = 3000
 /** 当前这一轮的任务详情最多每 5 秒读一次（只在页面看得见时）。 */
 const ROUND_TASK_POLL_MS = 5000
@@ -124,6 +142,26 @@ function isTerminalTaskState(state?: string | null): boolean {
   return TASK_TERMINAL_STATES.includes((state || '').trim().toLowerCase())
 }
 
+function formatRemainingDuration(totalSeconds?: number | null): string {
+  if (totalSeconds == null || !Number.isFinite(totalSeconds)) return ''
+  const clamped = Math.max(0, Math.floor(totalSeconds))
+  const totalMinutes = Math.floor(clamped / 60)
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours > 0) return `还剩 ${hours} 小时 ${minutes} 分`
+  if (totalMinutes > 0) return `还剩 ${minutes} 分`
+  return clamped > 0 ? '还剩不到 1 分钟' : '已到截止时间'
+}
+
+function formatQuotaResumeClock(resumeAt?: string | null): string {
+  const raw = (resumeAt || '').trim()
+  if (!raw) return '模型额度暂时用完，稍后会自动继续'
+  const parsed = new Date(raw)
+  if (Number.isNaN(parsed.getTime())) return '模型额度暂时用完，稍后会自动继续'
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `模型额度暂时用完，会在 ${pad(parsed.getHours())}:${pad(parsed.getMinutes())} 自动继续`
+}
+
 // 结果卡片怎么说这一步是怎么结束的：全部白话中文。
 function goalResultCopy(
   goal: Goal,
@@ -141,6 +179,20 @@ function goalResultCopy(
         extra: summary && reason && summary !== reason ? reason : '',
       }
     case 'exhausted':
+      if (reason === 'deadline') {
+        return {
+          headline: '时间到',
+          main: summary || `时间到了，${kept}`,
+          extra: '',
+        }
+      }
+      if (reason === 'quota') {
+        return {
+          headline: '额度用完',
+          main: summary || `模型额度用完了，下次可用时间已经超过截止时间，先停在这里。`,
+          extra: '',
+        }
+      }
       return {
         headline: '轮数用完了，还没有达成',
         main: reason || `已经跑完 ${goal.max_iterations} 轮，目标还没有达成，${kept}`,
@@ -155,7 +207,7 @@ function goalResultCopy(
     case 'stopped':
       return {
         headline: '已经停止',
-        main: reason || `已经按你的要求停止，${kept}`,
+        main: reason ? `你停止了这个目标（${reason}），${kept}` : `你停止了这个目标，${kept}`,
         extra: summary,
       }
     default:
@@ -174,7 +226,7 @@ export function goalChineseError(err: unknown): string {
 function goalStateTone(state?: string | null): string {
   const key = (state || '').trim().toLowerCase()
   if (key === 'running') return 'running'
-  if (key === 'waiting_user') return 'waiting'
+  if (key === 'waiting_user' || key === 'waiting_quota') return 'waiting'
   if (key === 'achieved') return 'achieved'
   if (key === 'failed' || key === 'exhausted') return 'failed'
   return 'finished'
@@ -540,6 +592,12 @@ export default function SupervisorGoals({
     writeGoalDraft(contextKey, outcome)
   }, [contextKey, outcome])
   const [maxRounds, setMaxRounds] = useState(String(DEFAULT_MAX_ROUNDS))
+  const [budgetKind, setBudgetKind] = useState<'rounds' | 'duration'>('rounds')
+  const [durationPreset, setDurationPreset] = useState<60 | 180 | 600 | 'custom'>(600)
+  const [customMinutes, setCustomMinutes] = useState('120')
+  const [continuousMode, setContinuousMode] = useState(false)
+  const [countdownNowMs, setCountdownNowMs] = useState(() => Date.now())
+  const countdownAnchorRef = useRef<{ key: string; baseSeconds: number; anchoredAtMs: number } | null>(null)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   // When the start is rejected because the executor failed its pre-flight check, remember the
@@ -664,14 +722,39 @@ export default function SupervisorGoals({
     setMergeOpen(false)
   }, [shownGoalId])
 
-  // Poll the running goal every 3s while this tab is visible; stop otherwise.
+  // Poll the running / waiting_quota goal every 3s while this tab is visible; stop otherwise.
   useEffect(() => {
-    if (!visible || !hasActiveGoal || activeGoal?.state !== 'running') return
+    if (!visible || !hasActiveGoal || (activeGoal?.state !== 'running' && activeGoal?.state !== 'waiting_quota')) return
     const timer = window.setInterval(() => {
       void refresh()
     }, POLL_INTERVAL_MS)
     return () => window.clearInterval(timer)
   }, [visible, hasActiveGoal, activeGoal?.state, refresh])
+
+  const shownServerRemaining = shownGoal?.remaining_seconds ?? null
+  useEffect(() => {
+    if (!shownGoal?.id || shownServerRemaining == null) {
+      countdownAnchorRef.current = null
+      return
+    }
+    const nowMs = Date.now()
+    const key = `${shownGoal.id}:${shownGoal.updated_at}:${shownServerRemaining}`
+    if (countdownAnchorRef.current?.key !== key) {
+      countdownAnchorRef.current = { key, baseSeconds: shownServerRemaining, anchoredAtMs: nowMs }
+      setCountdownNowMs(nowMs)
+    }
+  }, [shownGoal?.id, shownGoal?.updated_at, shownServerRemaining])
+
+  // 本地每 30 秒刷新一次倒计时文本，不额外发网络请求。
+  useEffect(() => {
+    if (!visible || !shownGoal?.deadline_at || !isActiveGoalState(shownGoal.state) || shownServerRemaining == null) {
+      return
+    }
+    const timer = window.setInterval(() => {
+      setCountdownNowMs(Date.now())
+    }, COUNTDOWN_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [visible, shownGoal?.deadline_at, shownGoal?.state, shownServerRemaining])
 
   const activeGoalKey = activeGoal?.id || ''
   useEffect(() => {
@@ -683,6 +766,25 @@ export default function SupervisorGoals({
       event.preventDefault()
       const text = outcome.trim()
       if (!text || creating || readOnly || locked) return
+      const payload: Record<string, unknown> = {
+        outcome: text,
+        repo_id: repo.id,
+        worktree_id: worktree.id,
+      }
+      if (budgetKind === 'duration') {
+        const rawDuration = durationPreset === 'custom' ? Number.parseInt(customMinutes, 10) : durationPreset
+        if (!Number.isFinite(rawDuration) || rawDuration < MIN_DURATION_MINUTES || rawDuration > MAX_DURATION_MINUTES) {
+          setCreateError(`持续时间请填 ${MIN_DURATION_MINUTES} 到 ${MAX_DURATION_MINUTES} 分钟之间的整数`)
+          return
+        }
+        payload.duration_minutes = rawDuration
+        payload.mode = continuousMode ? 'continuous' : 'outcome'
+      } else {
+        payload.max_iterations = clampRounds(maxRounds)
+        if (continuousMode) {
+          payload.mode = 'continuous'
+        }
+      }
       const roleOverrides: Record<string, { executor: string; model?: string }> = {}
       for (const key of ROLE_KEYS) {
         const role = effectiveRoles[key]
@@ -692,19 +794,16 @@ export default function SupervisorGoals({
         if (model) entry.model = model
         roleOverrides[key] = entry
       }
+      if (Object.keys(roleOverrides).length > 0) {
+        payload.role_overrides = roleOverrides
+      }
       setCreating(true)
       setCreateError('')
       setCreateErrorCode('')
       try {
         await apiCall<Goal>('/api/supervisor/goals', {
           method: 'POST',
-          body: JSON.stringify({
-            outcome: text,
-            max_iterations: clampRounds(maxRounds),
-            repo_id: repo.id,
-            worktree_id: worktree.id,
-            ...(Object.keys(roleOverrides).length > 0 ? { role_overrides: roleOverrides } : {}),
-          }),
+          body: JSON.stringify(payload),
         })
         setOutcome('')
         setFormRequested(false)
@@ -717,7 +816,22 @@ export default function SupervisorGoals({
         setCreating(false)
       }
     },
-    [apiCall, creating, effectiveRoles, locked, maxRounds, outcome, readOnly, refresh, repo.id, worktree.id],
+    [
+      apiCall,
+      budgetKind,
+      continuousMode,
+      creating,
+      customMinutes,
+      durationPreset,
+      effectiveRoles,
+      locked,
+      maxRounds,
+      outcome,
+      readOnly,
+      refresh,
+      repo.id,
+      worktree.id,
+    ],
   )
 
   const handleStop = useCallback(async () => {
@@ -829,9 +943,28 @@ export default function SupervisorGoals({
     && worktree.managed
     && !locked
     && !hasActiveGoal
-  // 「再试几轮」：已用完轮数或失败的目标可以增加 1–10 轮（默认 3 轮）继续跑。
+  const isTimeboxed = Boolean(shownGoal?.deadline_at)
+  const roundsExecutedCount =
+    shownGoal?.rounds_total
+    ?? iterations.filter(round => Boolean(round.task_id || round.decision || round.task_final_state)).length
+  const roundsPassedCount =
+    shownGoal?.rounds_passed
+    ?? iterations.filter(round => Boolean(round.passed) || round.decision === 'achieved').length
+  const passedIterations = iterations.filter(round => Boolean(round.passed) || round.decision === 'achieved')
+  const countdownAnchor = countdownAnchorRef.current
+  const displayRemainingSeconds =
+    shownServerRemaining == null
+      ? null
+      : countdownAnchor && countdownAnchor.key.startsWith(`${shownGoal?.id || ''}:`)
+        ? Math.max(
+            0,
+            countdownAnchor.baseSeconds - Math.floor(Math.max(0, countdownNowMs - countdownAnchor.anchoredAtMs) / 1000),
+          )
+        : shownServerRemaining
+  // 「再试几轮」：已用完轮数或失败的目标（按轮数）可以增加 1–10 轮（默认 3 轮）继续跑。
   const canOfferExtend = Boolean(resultCopy)
     && (shownGoal?.state === 'exhausted' || shownGoal?.state === 'failed')
+    && !shownGoal?.deadline_at
     && !readOnly
   const [extendOpen, setExtendOpen] = useState(false)
   const [extendRounds, setExtendRounds] = useState('3')
@@ -917,7 +1050,9 @@ export default function SupervisorGoals({
               </div>
               <div className="sup-goal-header-side">
                 <span className="sup-goal-rounds">
-                  第 {roundsUsed} / {roundsTotal} 轮
+                  {isTimeboxed
+                    ? `已跑 ${roundsExecutedCount} 轮 · 通过 ${roundsPassedCount} 轮`
+                    : `第 ${roundsUsed} / ${roundsTotal} 轮`}
                 </span>
                 {canStop && !confirmStop && (
                   <button
@@ -930,6 +1065,46 @@ export default function SupervisorGoals({
                 )}
               </div>
             </header>
+
+            {isTimeboxed && !goalFinished && (
+              <div className="sup-goal-timebox-bar">
+                {displayRemainingSeconds != null && (
+                  <strong className="sup-goal-countdown" aria-live="polite">
+                    {formatRemainingDuration(displayRemainingSeconds)}
+                  </strong>
+                )}
+                <span className="sup-goal-mode-note">
+                  {shownGoal.mode === 'continuous'
+                    ? '持续改进模式 · 到点自动停止'
+                    : '达标即停 · 到点自动停止'}
+                </span>
+              </div>
+            )}
+
+            {shownGoal.state === 'waiting_quota' && (
+              <div className="sup-banner sup-banner--waiting-quota" role="status">
+                <div className="sup-banner-text">
+                  <strong>模型额度暂时用完，先停下来等恢复</strong>
+                  <span>{formatQuotaResumeClock(shownGoal.resume_at)}</span>
+                </div>
+              </div>
+            )}
+
+            {isTimeboxed && passedIterations.length > 0 && (
+              <div className="sup-goal-passed-list" aria-label="已完成的改进">
+                <strong>已完成的改进（{passedIterations.length}）</strong>
+                <ul>
+                  {passedIterations.map(round => (
+                    <li key={round.n}>
+                      <span className="sup-goal-passed-round">第 {round.n} 轮</span>
+                      <span className="sup-goal-passed-title">
+                        {round.round_title?.trim() || round.decision_reason?.trim() || '已完成本轮改进'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {showRoundProgress && currentRound && (
               <GoalRoundProgress
@@ -1210,21 +1385,100 @@ export default function SupervisorGoals({
                 <p className="sup-draft-hint" role="status">草稿已自动保存，刷新页面也不会丢；点「开始」后清除。</p>
               )}
               <div className="sup-goal-form-row">
-                <div className="sup-form-field sup-goal-rounds-field">
-                  <label htmlFor="sup-goal-max-rounds">最多尝试几轮</label>
-                  <input
-                    id="sup-goal-max-rounds"
-                    aria-label="最多尝试几轮"
-                    type="number"
-                    min={MIN_MAX_ROUNDS}
-                    max={MAX_MAX_ROUNDS}
-                    step={1}
-                    value={maxRounds}
-                    disabled={readOnly || locked || creating}
-                    onChange={e => setMaxRounds(e.target.value)}
-                  />
+                <div className="sup-goal-budget-row" role="group" aria-label="运行方式">
+                  <div className="sup-goal-budget-tabs" role="radiogroup" aria-label="按轮数或按时间">
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={budgetKind === 'rounds'}
+                      className={`sup-goal-segment-btn ${budgetKind === 'rounds' ? 'is-active' : ''}`}
+                      disabled={readOnly || locked || creating}
+                      onClick={() => setBudgetKind('rounds')}
+                    >
+                      按轮数
+                    </button>
+                    <button
+                      type="button"
+                      role="radio"
+                      aria-checked={budgetKind === 'duration'}
+                      className={`sup-goal-segment-btn ${budgetKind === 'duration' ? 'is-active' : ''}`}
+                      disabled={readOnly || locked || creating}
+                      onClick={() => setBudgetKind('duration')}
+                    >
+                      按时间
+                    </button>
+                  </div>
+
+                  {budgetKind === 'rounds' ? (
+                    <div className="sup-form-field sup-goal-rounds-field">
+                      <label htmlFor="sup-goal-max-rounds">最多尝试几轮</label>
+                      <input
+                        id="sup-goal-max-rounds"
+                        aria-label="最多尝试几轮"
+                        type="number"
+                        min={MIN_MAX_ROUNDS}
+                        max={MAX_MAX_ROUNDS}
+                        step={1}
+                        value={maxRounds}
+                        disabled={readOnly || locked || creating}
+                        onChange={e => setMaxRounds(e.target.value)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="sup-goal-duration-picker">
+                      <div className="sup-goal-duration-presets" role="group" aria-label="运行时长">
+                        {DURATION_PRESETS.map(preset => (
+                          <button
+                            key={preset.minutes}
+                            type="button"
+                            aria-pressed={durationPreset === preset.minutes}
+                            className={`sup-goal-preset-btn ${durationPreset === preset.minutes ? 'is-active' : ''}`}
+                            disabled={readOnly || locked || creating}
+                            onClick={() => setDurationPreset(preset.minutes)}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                        <button
+                          type="button"
+                          aria-pressed={durationPreset === 'custom'}
+                          className={`sup-goal-preset-btn ${durationPreset === 'custom' ? 'is-active' : ''}`}
+                          disabled={readOnly || locked || creating}
+                          onClick={() => setDurationPreset('custom')}
+                        >
+                          自定义（分钟）
+                        </button>
+                      </div>
+                      {durationPreset === 'custom' && (
+                        <div className="sup-form-field sup-goal-custom-minutes">
+                          <label htmlFor="sup-goal-duration-minutes">自定义时长（分钟）</label>
+                          <input
+                            id="sup-goal-duration-minutes"
+                            aria-label="自定义时长（分钟）"
+                            type="number"
+                            min={MIN_DURATION_MINUTES}
+                            max={MAX_DURATION_MINUTES}
+                            step={1}
+                            value={customMinutes}
+                            disabled={readOnly || locked || creating}
+                            onChange={e => setCustomMinutes(e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
+
+              <label className="sup-goal-continuous-check">
+                <input
+                  type="checkbox"
+                  checked={continuousMode}
+                  disabled={readOnly || locked || creating}
+                  onChange={e => setContinuousMode(e.target.checked)}
+                />
+                <span>达成后继续找下一个改进（持续改进）</span>
+              </label>
 
               <SupervisorRoleBar
                 capabilities={capabilities}

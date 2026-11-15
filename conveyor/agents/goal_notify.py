@@ -146,8 +146,16 @@ def notification_text(settings: Any, goal: dict, new_state: str, channel: str = 
         rounds = _rounds(settings, goal)
         body = f"目标「{title}」已达成（第 {rounds} 轮）。" if rounds else f"目标「{title}」已达成。"
     elif state == "exhausted":
-        budget = _goal_int(settings, goal, "max_iterations")
-        body = f"目标「{title}」用完了 {budget} 轮还没达成。" if budget else f"目标「{title}」的迭代次数用完了，还没达成。"
+        stop_reason = str(goal.get("stop_reason") or "").strip().lower()
+        if stop_reason == "deadline":
+            detail = _clip(goal.get("summary"))
+            body = detail or f"目标「{title}」的时间到了，已自动停止。"
+        elif stop_reason == "quota":
+            detail = _clip(goal.get("summary"))
+            body = detail or f"目标「{title}」的模型额度用完了，先停在这里。"
+        else:
+            budget = _goal_int(settings, goal, "max_iterations")
+            body = f"目标「{title}」用完了 {budget} 轮还没达成。" if budget else f"目标「{title}」的迭代次数用完了，还没达成。"
     else:  # failed
         reason = _clip(goal.get("stop_reason")) or "具体原因没有记录下来。"
         body = f"目标「{title}」没能完成：{reason}"

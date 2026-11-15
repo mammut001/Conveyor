@@ -2482,6 +2482,169 @@
   flex: 0 1 180px;
 }
 
+.sup-goal-budget-row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.sup-goal-budget-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f9fafb;
+}
+
+.sup-goal-segment-btn {
+  padding: 6px 14px;
+  border: 0;
+  background: transparent;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.sup-goal-segment-btn + .sup-goal-segment-btn {
+  border-left: 1px solid #d0d5dd;
+}
+
+.sup-goal-segment-btn.is-active {
+  background: #bd5c40;
+  color: #fff;
+}
+
+.sup-goal-duration-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sup-goal-duration-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sup-goal-preset-btn {
+  padding: 6px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #344054;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sup-goal-preset-btn:hover {
+  border-color: #bd5c40;
+  color: #a94c34;
+}
+
+.sup-goal-preset-btn.is-active {
+  border-color: #bd5c40;
+  background: #fff4ef;
+  color: #a94c34;
+  font-weight: 600;
+}
+
+.sup-goal-custom-minutes {
+  max-width: 220px;
+}
+
+.sup-goal-continuous-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #344054;
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sup-goal-continuous-check input {
+  width: 16px;
+  height: 16px;
+  accent-color: #bd5c40;
+}
+
+.sup-goal-timebox-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #ebd0c5;
+  background: #fff9f6;
+}
+
+.sup-goal-countdown {
+  color: #a94c34;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.sup-goal-mode-note {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.sup-banner--waiting-quota {
+  border-color: #fed7aa;
+  background: #fffbeb;
+  color: #9a3412;
+}
+
+.sup-goal-passed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d1fae5;
+  background: #f0fdf4;
+}
+
+.sup-goal-passed-list > strong {
+  color: #166534;
+  font-size: 13px;
+}
+
+.sup-goal-passed-list ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sup-goal-passed-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: #1f2937;
+}
+
+.sup-goal-passed-round {
+  flex: none;
+  color: #15803d;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.sup-goal-passed-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .sup-goal-form-hint {
   margin: 0;
   color: #6b7280;
@@ -2624,6 +2787,8 @@
   /* Touch targets: every button in the 目标 tab stays at least 40px tall. */
   .sup-goals-scroll .shell-button,
   .sup-goals-scroll .sup-goal-link-button,
+  .sup-goals-scroll .sup-goal-segment-btn,
+  .sup-goals-scroll .sup-goal-preset-btn,
   .sup-goals-scroll .sup-goal-history-row {
     min-height: 40px;
   }
