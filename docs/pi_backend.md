@@ -22,10 +22,31 @@ OpenAI-compatible provider such as StepFun:
   "apiKey": "STEPFUN_API_KEY", "models": [{"id": "step-5-preview", "reasoning": true, "contextWindow": 1024000}]}}}
 ```
 
+### The chat model as Pi's provider (配好模型就能用)
+
+A fresh install has no Pi configuration at all, so the promise 「内置 Pi 只要配好模型就能用」 needs a provider from
+somewhere. When 模型设置 holds a chat model — an OpenAI-compatible endpoint plus a model name and a key
+(`CONVEYOR_CHAT_BASE_URL` / 模型设置 › 自定义, e.g. `http://127.0.0.1:18795/v1` with `fake-model`) — and nothing
+`CONVEYOR_PI_*` is set, Pi takes that chat model **as a whole**: endpoint, model name, wire api and key all come
+from the same source and land in `models.json` as one provider named `conveyor-chat`.
+
+```json
+{"providers": {"conveyor-chat": {"baseUrl": "http://127.0.0.1:18795/v1", "api": "openai-completions",
+  "apiKey": "$CONVEYOR_CHAT_API_KEY", "models": [{"id": "fake-model", "name": "fake-model"}]}}}
+```
+
+Precedence (worker and Supervisor alike): explicit `CONVEYOR_PI_*` / `settings.pi_*` > the provider saved in
+模型设置 > this chat-model bridge > Pi's own DeepSeek default. `CONVEYOR_PI_WIRE_API` still overrides the wire api
+(`chat` → `openai-completions`, `responses` → `openai-responses`). Setting only `CONVEYOR_PI_MODEL` overrides the
+model name alone and it then travels with the bridged endpoint — a model name from one source is never sent to
+another provider's endpoint, which is what used to answer 401. Without a usable chat endpoint (or chat model)
+nothing is invented and Pi keeps its own default.
+
 Conveyor hands pi **only the selected provider's key** (`deepseek` → `DEEPSEEK_API_KEY`, `stepfun` →
-`STEPFUN_API_KEY`, `openai` → `OPENAI_API_KEY`, …; unknown provider `x-y` → `X_Y_API_KEY`), from the
-environment or the Web Console secret store. This works with credential isolation on. `scripts/doctor.py`
-checks the pi binary, `models.json` (provider and model declared) and that the key is set.
+`STEPFUN_API_KEY`, `openai` → `OPENAI_API_KEY`, …; unknown provider `x-y` → `X_Y_API_KEY`; the chat bridge →
+`CONVEYOR_CHAT_API_KEY`), from the environment or the Web Console secret store. This works with credential
+isolation on. `scripts/doctor.py` checks the pi binary, `models.json` (provider and model declared) and that the
+key is set.
 
 Node ignores `SSL_CERT_FILE`; behind a TLS-intercepting proxy set `NODE_EXTRA_CA_CERTS`, which is passed
 through to pi.

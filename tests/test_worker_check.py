@@ -32,6 +32,11 @@ from handlers.job_queue import JobQueue
 
 TOKEN = "test-token-0123456789-abcdefghijklmnopqrstuvwxyz"
 
+# 模型设置 › 自定义 chat endpoint: the whole chat model becomes Pi's provider.
+CHAT_BASE_URL = "http://127.0.0.1:18795/v1"
+CHAT_MODEL = "fake-model"
+CHAT_SECRET = "sk-worker-check-chat-secret-1234567890"
+
 
 def _clean_pi_env(fake: Path) -> dict[str, str]:
     """Minimal environment with the Pi bin pointed at the fake executable."""
@@ -204,6 +209,53 @@ class CheckWorkerTests(unittest.TestCase):
         self.assertNotIn("DEEPSEEK_API_KEY", result["message"])
         self.assertIn("401", result["detail"])
         self.assertLessEqual(len(result["detail"]), 600)
+
+    def test_bridged_chat_model_is_recorded_in_the_result(self) -> None:
+        fake = _write_fake_pi(self.root, "pi", [_assistant_event("好的")])
+        env = _clean_pi_env(fake)
+        env.update({
+            "CONVEYOR_CHAT_BASE_URL": CHAT_BASE_URL,
+            "CONVEYOR_CHAT_MODEL": CHAT_MODEL,
+            "CONVEYOR_CHAT_API_KEY": CHAT_SECRET,
+        })
+        with patch.dict(os.environ, env, clear=True):
+            result = asyncio.run(worker_check.check_worker(self.settings, "pi"))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["kind"], "ok")
+        self.assertEqual(result["provider"], "conveyor-chat")
+        self.assertEqual(result["model"], CHAT_MODEL)
+        self.assertNotEqual(result["provider"], "deepseek")
+        self.assertNotIn(CHAT_SECRET, json.dumps(result))
+
+        saved = workers.load_workers_state(self.settings)["last_check"]["pi"]
+        self.assertEqual(saved["provider"], "conveyor-chat")
+        self.assertEqual(saved["model"], CHAT_MODEL)
+        self.assertEqual(saved["ok"], True)
+
+        # The bridged models.json was written for the probe run: chat endpoint
+        # and chat model together, the key only as $ENV_NAME.
+        root = Path(self.settings.codex_task_root) / "pi-agent"
+        blobs = [path.read_text(encoding="utf-8") for path in root.rglob("models.json")]
+        self.assertTrue(blobs)
+        self.assertTrue(any(CHAT_BASE_URL in blob for blob in blobs))
+        self.assertFalse(any(CHAT_SECRET in blob for blob in blobs))
+        self.assertFalse(any("deepseek" in blob for blob in blobs))
+
+    def test_bridged_chat_model_without_key_is_not_ready(self) -> None:
+        fake = _write_fake_pi(self.root, "pi", [_assistant_event("好的")])
+        env = _clean_pi_env(fake)
+        env.update({
+            "CONVEYOR_CHAT_BASE_URL": CHAT_BASE_URL,
+            "CONVEYOR_CHAT_MODEL": CHAT_MODEL,
+        })
+        with patch.dict(os.environ, env, clear=True):
+            result = asyncio.run(worker_check.check_worker(self.settings, "pi"))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "config")
+        self.assertEqual(result["provider"], "conveyor-chat")
+        self.assertEqual(result["model"], CHAT_MODEL)
+        self.assertIn("模型设置", result["detail"])
+        self.assertNotIn(CHAT_SECRET, json.dumps(result))
 
     def test_timeout_kills_the_process(self) -> None:
         pid_file = self.root / "pi.pid"

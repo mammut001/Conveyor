@@ -170,6 +170,19 @@ _CANONICAL_PROVIDER_DOMAINS = {
     "stepfun": ("stepfun.com", "stepfun.ai"),
 }
 
+# Pi has no provider of its own on a fresh install, and the first-run promise is
+# 「内置 Pi 只要配好模型就能用」. When 模型设置 holds a chat model (an
+# OpenAI-compatible endpoint + model name + key) and Pi has no configuration of
+# its own, Pi runs that chat model as a WHOLE: one generated provider whose
+# endpoint, model name, wire api and key all come from that same chat source.
+# A model name from one source is never combined with an endpoint from another
+# (that mixing sent the chat model name to DeepSeek and came back 401).
+PI_CHAT_BRIDGE_PROVIDER = "conveyor-chat"
+# Env var name Pi resolves for the bridged key: the very variable the chat tier
+# already reads, so no new credential name appears in models.json and
+# ``prepare_pi_child_env`` hands the child exactly this one key.
+PI_CHAT_BRIDGE_KEY_ENV = "CONVEYOR_CHAT_API_KEY"
+
 # Conveyor wire_api tokens this bridge can put in models.json ``api``.
 _PI_WIRE_API_ALIASES = {
     "responses": "openai-responses",
@@ -246,8 +259,9 @@ class PiProviderSelection:
 
     Follows Conveyor's precedence: explicit ``CONVEYOR_PI_*`` (or
     ``settings.pi_*``) wins; otherwise the saved 模型设置 provider is bridged
-    (``models_json`` is set); otherwise Pi's own default. Exactly one provider
-    key is named in ``api_key_env``; the caller must hand only that key to the
+    (``models_json`` is set); otherwise the chat model is bridged as a whole
+    (``chat_bridge``); otherwise Pi's own default. Exactly one provider key is
+    named in ``api_key_env``; the caller must hand only that key to the
     child and strip every other name in ``PI_PROVIDER_KEY_ENV``.
     """
     provider: str                  # --provider value (always non-empty)
@@ -257,6 +271,7 @@ class PiProviderSelection:
     models_json: str | None        # models.json content to bridge, or None
     bridge_required: bool = False  # custom/explicit endpoint must be written
     config_error: str = ""         # actionable local error; empty when launchable
+    chat_bridge: bool = False      # endpoint+model+key all from the chat tier
 
 
 def pi_provider_id(settings: Any) -> str:
@@ -273,8 +288,11 @@ def pi_model_raw(settings: Any, *, default_model: str = "deepseek-v4-flash",
     """Raw (un-normalized) Pi model name from CONVEYOR_PI_MODEL / settings.
 
     ``chat_model=False`` drops the chat-tier fallback (used by the Supervisor,
-    whose precedence is explicit CONVEYOR_PI_* > saved 模型设置 > Pi default and
-    must not silently adopt the chat model). ``default_model`` is the terminal
+    whose precedence is explicit CONVEYOR_PI_* > saved 模型设置 > chat-model
+    bridge > Pi default). The chat model still reaches the Supervisor through
+    the chat-model bridge (``pi_chat_bridge``), which takes endpoint, model
+    name and key together; this fallback alone never pairs a chat model name
+    with another provider's endpoint. ``default_model`` is the terminal
     fallback; pass "" so ``--model`` is omitted and Pi picks its own default.
     """
     raw = os.getenv("CONVEYOR_PI_MODEL") or getattr(settings, "pi_model", "")
@@ -407,6 +425,71 @@ def _host_is_canonical_provider(provider: str, hostname: str) -> bool:
     return any(host == domain or host.endswith("." + domain) for domain in domains)
 
 
+def _chat_endpoint(settings: Any) -> str:
+    """模型设置 chat base URL (``CONVEYOR_CHAT_BASE_URL`` / ``settings.chat_base_url``)."""
+    return str(
+        os.getenv("CONVEYOR_CHAT_BASE_URL")
+        or getattr(settings, "chat_base_url", "")
+        or getattr(settings, "conveyor_chat_base_url", "")
+        or os.getenv("MINIMAX_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+
+
+def _chat_model_name(settings: Any) -> str:
+    """模型设置 chat model name (``CONVEYOR_CHAT_MODEL`` / ``settings.chat_model``)."""
+    return str(
+        os.getenv("CONVEYOR_CHAT_MODEL")
+        or getattr(settings, "chat_model", "")
+        or getattr(settings, "conveyor_chat_model", "")
+        or os.getenv("MINIMAX_CHAT_MODEL")
+        or ""
+    ).strip()
+
+
+def _chat_api_key(settings: Any) -> str:
+    """模型设置 chat key. Never logged; only ever handed to a child process."""
+    return str(
+        os.getenv("CONVEYOR_CHAT_API_KEY")
+        or getattr(settings, "chat_api_key", "")
+        or getattr(settings, "conveyor_chat_api_key", "")
+        or os.getenv("MINIMAX_API_KEY")
+        or ""
+    ).strip()
+
+
+def chat_bridge_provider_name(model: str) -> str:
+    """Chinese label for the UI: Pi runs the very model the chat uses."""
+    name = str(model or "").strip()
+    return f"和对话用同一个模型（{name}）" if name else "和对话用同一个模型"
+
+
+def pi_chat_bridge(settings: Any) -> dict[str, str] | None:
+    """模型设置 chat tier as one whole Pi provider, or None when unusable.
+
+    Endpoint, model name, wire api and key are read from the same chat source,
+    so a chat model name is never sent to another provider's endpoint (the
+    live failure: chat model ``fake-model`` on a custom endpoint was sent to
+    DeepSeek and came back 401). Returns None when the endpoint is missing or
+    not a valid http(s) URL, or when no chat model is configured: no endpoint
+    and no model name is invented, and Pi keeps its own default instead.
+    """
+    base_url = _chat_endpoint(settings)
+    if not base_url or not _valid_base_url(base_url):
+        return None
+    model = _chat_model_name(settings)
+    if not model:
+        return None
+    return {
+        "provider_id": PI_CHAT_BRIDGE_PROVIDER,
+        "base_url": base_url,
+        "model": model,
+        "wire_api": "chat",
+        "env_key": PI_CHAT_BRIDGE_KEY_ENV,
+        "api_key": _chat_api_key(settings),
+    }
+
+
 def _matching_chat_endpoint(settings: Any, provider: str) -> tuple[str, str] | None:
     """Chat base URL only when its host is that provider's canonical domain.
 
@@ -418,22 +501,12 @@ def _matching_chat_endpoint(settings: Any, provider: str) -> tuple[str, str] | N
     endpoint is invented. Wire API for this chat bridge stays openai-completions
     unless the operator set an explicit wire override.
     """
-    raw = str(
-        os.getenv("CONVEYOR_CHAT_BASE_URL")
-        or getattr(settings, "chat_base_url", "")
-        or getattr(settings, "conveyor_chat_base_url", "")
-        or ""
-    ).strip().rstrip("/")
+    raw = _chat_endpoint(settings)
     if not raw or not _valid_base_url(raw):
         return None
     if not _host_is_canonical_provider(provider, urlparse(raw).hostname or ""):
         return None
-    key = str(
-        os.getenv("CONVEYOR_CHAT_API_KEY")
-        or getattr(settings, "chat_api_key", "")
-        or ""
-    ).strip()
-    return raw, key
+    return raw, _chat_api_key(settings)
 
 
 def _dump_models_json(provider_id: str, base_url: str, model: str, wire_api: str, env_key: str) -> str:
@@ -476,6 +549,64 @@ def _selection_from_saved(saved: dict[str, str], settings: Any) -> PiProviderSel
     )
 
 
+def _selection_from_chat_bridge(
+    bridge: dict[str, str], settings: Any, explicit_model: str,
+) -> PiProviderSelection:
+    """One selection whose endpoint, wire api and key come from the chat tier.
+
+    The model name is the chat model, unless the operator named a Pi model
+    explicitly (``CONVEYOR_PI_MODEL`` / ``settings.pi_model``): that name then
+    travels with the chat endpoint. Either way the pair is consistent — a
+    custom model name is never sent to DeepSeek's endpoint, which is the
+    mixing that produced the 401 in the first place.
+    """
+    provider = sanitize_pi_provider_id(bridge["provider_id"])
+    model = normalize_pi_model(provider, explicit_model or bridge["model"])
+    wire = _explicit_wire_override(settings) or bridge["wire_api"]
+    key = bridge["api_key"] or read_pi_console_secret(settings, bridge["env_key"])
+    config_error = ""
+    models_json: str | None = None
+    if not provider:
+        config_error = _unrepresentable_provider_error(bridge["provider_id"])
+    elif not model:
+        config_error = (
+            "内置 Pi 复用了对话模型，但拿不到模型名。"
+            "请到 设置 › 模型设置 填写模型，或设置 CONVEYOR_PI_MODEL。"
+            "未填写时不会改用别的服务商。"
+        )
+    else:
+        try:
+            models_json = _dump_models_json(
+                provider, bridge["base_url"], model, wire, bridge["env_key"],
+            )
+        except PiProviderConfigError as exc:
+            config_error = str(exc)
+    if not config_error and not key:
+        config_error = (
+            f"内置 Pi 复用了对话模型（{model}），但没有 API Key。"
+            "请到 设置 › 模型设置 填写密钥。此检查只看本地配置，没有验证远程登录。"
+        )
+    return PiProviderSelection(
+        provider=provider,
+        model=model,
+        api_key_env=bridge["env_key"],
+        api_key=key,
+        models_json=models_json,
+        bridge_required=True,
+        config_error=config_error,
+        chat_bridge=True,
+    )
+
+
+def _explicit_pi_provider_name(settings: Any) -> str:
+    """Explicit Pi provider id, or "" when the operator named none."""
+    return str(
+        os.getenv("CONVEYOR_PI_PROVIDER")
+        or getattr(settings, "pi_provider", "")
+        or ""
+    ).strip()
+
+
 def resolve_pi_provider(
     settings: Any,
     *,
@@ -487,14 +618,16 @@ def resolve_pi_provider(
     """Resolve provider/model/credential for a Pi child run.
 
     Precedence: explicit CONVEYOR_PI_* / settings.pi_* > saved 模型设置 provider
-    > Pi default. An explicit provider still gets a generated models.json when
-    its endpoint is known (``CONVEYOR_PI_BASE_URL``, then the saved provider
-    with the same id, then an explicit chat base URL whose host is that
-    provider's canonical domain). A different saved provider is never used.
-    Built-in providers keep Pi's own endpoint when no endpoint is configured.
-    The Supervisor passes
-    ``model_fallback=""`` and ``chat_model=False`` so the chat model is not
-    adopted. Only the chosen provider key is resolved. No network call.
+    > chat-model bridge > Pi default. An explicit provider still gets a
+    generated models.json when its endpoint is known (``CONVEYOR_PI_BASE_URL``,
+    then the saved provider with the same id, then an explicit chat base URL
+    whose host is that provider's canonical domain). A different saved provider
+    is never used. Built-in providers keep Pi's own endpoint when no endpoint is
+    configured. The Supervisor passes ``model_fallback=""`` and
+    ``chat_model=False``; the chat-model bridge still applies there (the 项目
+    roles default to Pi, so 「配好模型就能用」 must hold for them too), it just
+    never leaks in through the chat-tier model fallback. Only the chosen
+    provider key is resolved. No network call.
     """
     env = os.environ if base_env is None else base_env
     explicit = pi_explicit_provider_config(settings)
@@ -525,6 +658,19 @@ def resolve_pi_provider(
             matched = record
 
     explicit_model = str(os.getenv("CONVEYOR_PI_MODEL") or getattr(settings, "pi_model", "") or "").strip()
+
+    # 对话模型桥接（优先级低于显式 CONVEYOR_PI_* 和已保存服务商）：Pi 自己没有
+    # 提供商、没有接口地址时，整个采用「模型设置」里的对话模型——接口、模型名、
+    # wire api 和密钥都来自同一处，绝不把别处的模型名配别处的接口。
+    bridge = pi_chat_bridge(settings) if allow_saved else None
+    if (
+        bridge is not None
+        and matched is None
+        and not _explicit_pi_provider_name(settings)
+        and not _explicit_pi_base_url(settings)
+    ):
+        return _selection_from_chat_bridge(bridge, settings, explicit_model)
+
     if explicit_model:
         model = normalize_pi_model(provider, explicit_model)
     elif matched and matched.get("model"):
@@ -746,7 +892,11 @@ def describe_pi_provider(
     record = _saved_provider_record(settings)
     provider_name = None
     model: str | None = None
-    if record is not None and _provider_ids_match(record["provider_id"], selection.provider):
+    if selection.chat_bridge:
+        # Pi 复用了「模型设置」里的对话模型：接口和模型名同一处，UI 直接说明。
+        provider_name = chat_bridge_provider_name(selection.model)
+        model = selection.model or None
+    elif record is not None and _provider_ids_match(record["provider_id"], selection.provider):
         provider_name = record.get("provider_name") or None
         model = selection.model or record.get("model") or None
     elif not explicit and selection.bridge_required and selection.models_json:
@@ -1142,7 +1292,9 @@ class PiBackend(CodexRunner):
                             final_text = truncate(redact_text(parsed.result), 16_000)
                         if parsed.error and not job.error:
                             job.error = truncate(
-                                redact_text(self._explain_provider_error(parsed.error)), 3_000)
+                                redact_text(self._explain_provider_error(
+                                    parsed.error, provider=selection.provider, model=selection.model,
+                                )), 3_000)
                         if parsed.kind == "tool.started":
                             streamed_text = ""
                         if parsed.kind == "assistant.delta" and parsed.progress:
@@ -1227,23 +1379,28 @@ class PiBackend(CodexRunner):
         elif job.return_code is not None and job.return_code < 0 and not job.error:
             job.error = "Pi process terminated unexpectedly."
 
-    def _explain_provider_error(self, error: str) -> str:
+    def _explain_provider_error(
+        self, error: str, *, provider: str | None = None, model: str | None = None,
+    ) -> str:
         """Prefix a short Chinese explanation to common provider failures.
 
         The raw provider text is kept after it: the owner needs it for the
         provider's console, and rate-limit retry detection matches on it.
+        ``provider``/``model`` come from the resolved selection when the caller
+        has one, so a bridged run never names a provider it did not use.
         """
         text = str(error or "")
         low = text.lower()
-        provider = self.pi_provider or "provider"
+        provider_name = str(provider or self.pi_provider or "provider")
+        model_name = self.pi_model if model is None else model
         if "402" in low or "quota" in low or "insufficient balance" in low or "余额不足" in text:
-            hint = f"模型服务额度已用完（{provider}）：请到服务商控制台充值或检查套餐后重试。"
+            hint = f"模型服务额度已用完（{provider_name}）：请到服务商控制台充值或检查套餐后重试。"
         elif "401" in low or "invalid api key" in low or "unauthorized" in low or "authentication" in low:
-            hint = f"模型服务拒绝了密钥（{provider}）：请到 设置 › 模型设置 重新填写 API Key。"
+            hint = f"模型服务拒绝了密钥（{provider_name}）：请到 设置 › 模型设置 重新填写 API Key。"
         elif ("404" in low or "does not exist" in low) and "model" in low:
-            hint = f"模型 {self.pi_model or '(未设置)'} 不存在或没有权限（{provider}）：请到 设置 › 模型设置 换一个模型。"
+            hint = f"模型 {model_name or '(未设置)'} 不存在或没有权限（{provider_name}）：请到 设置 › 模型设置 换一个模型。"
         elif "429" in low or "rate limit" in low or "too many requests" in low:
-            hint = f"模型服务限流（{provider}）：稍后会自动重试。"
+            hint = f"模型服务限流（{provider_name}）：稍后会自动重试。"
         else:
             return text
         return f"{hint}\n原始信息：{text}"

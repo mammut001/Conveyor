@@ -3961,8 +3961,10 @@ class PiExecutor:
     implementer uses ``read,bash,edit,write,grep,find,ls``. Isolation flags
     keep the run away from the operator's global Pi setup, and
     provider/model/credential follow the same precedence as the Pi worker
-    (explicit CONVEYOR_PI_* > saved 模型设置 > Pi default); only the one chosen
-    provider key reaches the child, and ``--api-key`` is never on the argv.
+    (explicit CONVEYOR_PI_* > saved 模型设置 > chat-model bridge > Pi default,
+    so a configured chat model also works for the 项目 roles); only the one
+    chosen provider key reaches the child, and ``--api-key`` is never on the
+    argv.
     """
     name = "pi"
 
