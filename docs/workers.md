@@ -227,4 +227,5 @@ Pi 随 Conveyor 附带（`vendor/pi`，固定版本 1.5.0），是一个通用�
 - **安装**：在「执行者」页面点 Pi 的安装（固定命令 `bash scripts/install_pi.sh`，在仓库根目录运行，需要 Node.js >= 22.19）。它在 `vendor/pi` 内执行 `npm ci --omit=dev --ignore-scripts`，不装全局，可重复运行。`scripts/deploy_vps.sh` 部署时也会自动运行一次，失败只记日志，不影响部署。
 - **可执行文件查找顺序**：`CONVEYOR_PI_BIN` > 设置里的 `pi_bin` > `vendor/pi/node_modules/.bin/pi` > PATH 上的 `pi`。
 - **服务商桥接**：每次运行前，如果没有显式设置 `CONVEYOR_PI_PROVIDER` / `CONVEYOR_PI_MODEL`，Conveyor 会按「模型设置」里保存的服务商生成 `<CODEX_TASK_ROOT>/pi-agent/models.json`（权限 0600，`wire_api` 为 `responses` 时用 `openai-responses`，否则 `openai-completions`）。文件里的 `apiKey` 只写 `$环境变量名`，真正的密钥只通过子进程环境变量传给 Pi，不落盘、不进日志。设置了显式环境变量时保持原来的 DeepSeek 路径。
+- **配好模型就能用（对话模型桥接）**：「模型设置」里只填了自定义接口（`CONVEYOR_CHAT_BASE_URL`，例如 `http://127.0.0.1:18795/v1`）加模型名和密钥、没有填任何 Pi 自己的配置时，Pi 会整个采用这个对话模型：生成一个 `conveyor-chat` 提供商写进 `models.json`（接口、模型名、wire api、密钥全部来自同一处，`apiKey` 为 `$CONVEYOR_CHAT_API_KEY`），执行者页面显示「和对话用同一个模型（fake-model）」。优先级：显式 `CONVEYOR_PI_*` > 「模型设置」里保存的服务商 > 对话模型桥接 > Pi 自己的默认（DeepSeek）。只改了 `CONVEYOR_PI_MODEL` 时，这个模型名跟着桥接的接口一起走，不会再发给 DeepSeek。
 - **状态**：已保存服务商（或设置了 `CONVEYOR_PI_*`）显示可用；否则显示「未配置服务商」，页面上有「去模型设置」按钮。Pi 没有自己的登录命令。
