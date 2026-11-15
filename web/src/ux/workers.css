@@ -212,6 +212,41 @@
   border-top: 1px solid #f0f1f3;
 }
 
+.worker-check-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.worker-check-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.worker-check-ok {
+  color: #15803d;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.worker-check-failed {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.worker-check-failed-msg {
+  color: #b42318;
+  font-size: 12px;
+}
+
+.worker-check-none {
+  margin-top: 0;
+}
+
 .worker-command-box,
 .worker-login-box,
 .worker-cooling-box {

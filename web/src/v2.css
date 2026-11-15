@@ -260,6 +260,35 @@ body { color: var(--text); background: var(--bg); }
   flex-direction: column;
   gap: 2px;
 }
+/* Step ① inline 测试: a small action button plus, when the last test failed, its message. */
+.setup-checklist-check {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 2px;
+}
+.setup-checklist-test-btn {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #1d4ed8;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.setup-checklist-test-btn:disabled {
+  color: #94a3b8;
+  cursor: default;
+}
+.setup-checklist-check-error {
+  color: #b42318;
+  font-size: 11px;
+  line-height: 1.4;
+}
 /* Every step done: the card says so once before it goes away (N2). */
 .setup-checklist-done {
   margin: 8px 0 0;
@@ -694,6 +723,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
   cursor: pointer;
 }
 .transcript-error-card .transcript-error-retry:hover { background: #fdeeee; border-color: #e79a9a; }
+
+/* Raw provider text behind a collapsed 技术细节; 打开模型设置 jumps to the 模型设置 dialog. */
+.transcript-error-card .transcript-error-tech { margin-top: 6px; }
+.transcript-error-card .transcript-error-tech summary { width: fit-content; color: #981b1e; font-size: 12px; cursor: pointer; }
+.transcript-error-card .transcript-error-tech code { display: block; color: #6b7280; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.transcript-error-card .transcript-error-settings {
+  margin-top: 8px;
+  min-height: 40px;
+  padding: 8px 18px;
+  border: 1px solid #f1b6b6;
+  border-radius: 8px;
+  background: #fff;
+  color: #a43842;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.transcript-error-card .transcript-error-settings:hover { background: #fdeeee; border-color: #e79a9a; }
 
 /* Formatted Text Flow */
 .formatted-text-flow {

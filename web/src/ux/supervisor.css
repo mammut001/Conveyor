@@ -864,6 +864,47 @@
   color: #b42318;
 }
 
+/* 已就绪 badge with an inline 测试一下 link: keep them on one line. */
+.sup-role-badge-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.sup-role-test-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #a94c34;
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.sup-role-test-link:hover {
+  color: #7a3a28;
+}
+
+.sup-role-test-link:disabled {
+  color: #9ca3af;
+  cursor: default;
+}
+
+/* Link-style action inside an error banner (e.g. 去执行者页面测试). */
+.sup-banner--error .sup-role-guidance-link {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .sup-role-Static {
   display: flex;
   flex-direction: column;

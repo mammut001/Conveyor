@@ -593,6 +593,24 @@ class RunSupervisorFlowValidationTests(unittest.TestCase):
         self.assertFalse(acceptance["passed"])
         self.assertTrue(any("boom" in issue for issue in acceptance["issues"]))
 
+    def test_unittest_discovering_zero_tests_cannot_complete(self) -> None:
+        tests = self.repo_dir / "tests"
+        tests.mkdir()
+        # A pytest-style function looks like a test to the detector but is not
+        # collected by unittest, which otherwise exits successfully with zero.
+        (tests / "test_example.py").write_text("def test_example():\n    assert True\n")
+        _git("add", "tests", cwd=self.repo_dir)
+        _git("commit", "-qm", "add pytest-style test", cwd=self.repo_dir)
+        result = self._run_flow(
+            repo_specs=[("unittest", (sys.executable, "-m", "unittest", "discover", "-s", "tests"))],
+            max_repairs=0,
+        )
+        self.assertEqual(result["state"], "failed", result)
+        checks = ags.latest_acceptance(self.settings, result["id"])["executed_checks"]
+        self.assertEqual(checks[0]["exit_code"], 0)
+        self.assertFalse(checks[0]["passed"])
+        self.assertIn("未发现任何 unittest 测试", checks[0]["output"])
+
 
 # ---------------------------------------------------------------------------
 # HTTP GET/POST

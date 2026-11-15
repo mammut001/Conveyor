@@ -4358,7 +4358,7 @@ def _parse_pi_stream(stdout: str) -> tuple[str, dict[str, Any]]:
         return "", {"is_error": True, "subtype": "missing_result", "error": "missing pi output"}
     final_text = ""
     error_text = ""
-    has_result = False
+    final_events = 0
     usage_totals: dict[str, int] = {}
     for line in stdout.splitlines():
         line = line.strip()
@@ -4377,13 +4377,16 @@ def _parse_pi_stream(stdout: str) -> tuple[str, dict[str, Any]]:
         parsed = PiBackend._parse_pi_event(event)
         if parsed.error and not error_text:
             error_text = parsed.error
-        if parsed.result:
-            final_text = parsed.result
-            has_result = True
+        if event.get("type") == "agent_end":
+            final_events += 1
+            # Only the last assistant message in the terminal event is final.
+            # Intermediate message_end text can precede further tool calls.
+            if parsed.result:
+                final_text = parsed.result
     if error_text:
         return "", {"is_error": True, "subtype": "agent_error", "error": error_text}
-    if not has_result:
-        return "", {"is_error": True, "subtype": "missing_result", "error": "missing final pi result"}
+    if final_events != 1 or not final_text.strip():
+        return "", {"is_error": True, "subtype": "missing_result", "error": "missing unambiguous final pi result"}
     meta: dict[str, Any] = {"is_error": False, "subtype": "success", "error": ""}
     if usage_totals:
         meta["usage"] = usage_totals
@@ -5506,12 +5509,21 @@ async def run_operator_validations(
         ]
         combined_output = truncate("\n".join(out_parts), 4000)
         rc = res.evidence.get("return_code")
+        # Python's unittest exits 0 even when discovery found no tests. Treat
+        # an empty suite as a failed check, not evidence that code was tested.
+        no_unittest_tests = (
+            len(check_argv) >= 4
+            and tuple(check_argv[1:4]) == ("-m", "unittest", "discover")
+            and re.search(r"(?m)^Ran 0 tests?\b", combined_output) is not None
+        )
+        if no_unittest_tests:
+            combined_output = truncate(combined_output + "\n未发现任何 unittest 测试，检查未通过。", 4000)
         results.append({
             "name": check_name,
             "argv": list(check_argv),
             "command": " ".join(check_argv),
             "exit_code": int(rc) if isinstance(rc, int) else -1,
-            "passed": bool(res.success and rc == 0),
+            "passed": bool(res.success and rc == 0 and not no_unittest_tests),
             "output": combined_output,
             "execution_id": res.execution_id,
             "evidence_path": str(res.evidence.get("evidence_path") or ""),

@@ -521,6 +521,97 @@ def _update_goal(settings: Any, goal_id: str, **fields: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Executor preflight (saved 测试 result only; never a live check here)
+# ---------------------------------------------------------------------------
+
+EXECUTOR_CHECK_REASON = "执行者上次测试没通过：{message}。请先到 执行者 页面点「测试」，通过后再开始。"
+
+
+def _goal_roles(settings: Any, role_overrides: dict[str, Any]) -> dict[str, Any]:
+    """Roles of this goal: the server defaults with the operator overrides applied.
+
+    Same merge rule `ags.queue_task` uses, so what we check here is what runs.
+    """
+    roles = ags.load_roles(settings)
+    for role_name, spec in (role_overrides or {}).items():
+        base = roles.get(role_name)
+        if base is None:
+            continue
+        if isinstance(spec, str):
+            exec_name = spec.strip()
+            model = None
+        elif isinstance(spec, dict):
+            exec_name = str(spec.get("executor") or base.executor).strip()
+            model = spec.get("model", base.model if exec_name.lower() == base.executor.lower() else None)
+        else:
+            continue
+        if not exec_name:
+            continue
+        roles[role_name] = ags.RoleConfig(
+            name=role_name,
+            executor=exec_name,
+            model=model,
+            tools=list(base.tools),
+            location=base.location,
+        )
+    return roles
+
+
+def _pool_first_pick_is_pi(settings: Any, role: Any) -> bool:
+    """True when the pool would hand this role to Pi first."""
+    try:
+        from conveyor.agents.agent_supervisor_pool import PoolExecutor
+
+        candidates = PoolExecutor(settings).candidates(role)
+    except Exception:
+        log.debug("pool first pick lookup failed", exc_info=True)
+        return False
+    return bool(candidates) and str(candidates[0].get("id") or "") == "pi"
+
+
+def _goal_uses_pi(settings: Any, role_overrides: dict[str, Any]) -> bool:
+    try:
+        roles = _goal_roles(settings, role_overrides)
+    except Exception:
+        log.debug("goal role lookup failed", exc_info=True)
+        return False
+    for role in roles.values():
+        name = str(getattr(role, "executor", "") or "").strip().lower()
+        if name == "pi":
+            return True
+        if name == "pool" and _pool_first_pick_is_pi(settings, role):
+            return True
+    return False
+
+
+def _require_executor_check(settings: Any, role_overrides: dict[str, Any]) -> None:
+    """Refuse to start a goal whose Pi executor last failed its 测试.
+
+    Only the SAVED result is read: a live check would block the owner's click
+    for up to a minute. No saved result means nothing is known yet → allow.
+    """
+    from conveyor.agents import workers as workers_mod
+
+    try:
+        state = workers_mod.load_workers_state(settings)
+    except Exception:
+        log.debug("workers state lookup failed", exc_info=True)
+        return
+    last = (state.get("last_check") or {}).get("pi")
+    if not isinstance(last, dict) or last.get("ok") is not False:
+        return
+    if not _goal_uses_pi(settings, role_overrides):
+        return
+    raise _service_error(
+        HTTPStatus.CONFLICT,
+        EXECUTOR_CHECK_REASON.format(
+            message=str(last.get("message") or "").strip().rstrip("。")
+        ),
+        code="executor_check_failed",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API: create / list / get / stop / reply
 # ---------------------------------------------------------------------------
 
@@ -555,6 +646,7 @@ def create_goal(server: Any, settings: Any, body: dict[str, Any]) -> dict[str, A
             f"worktree 校验失败: {reason_wt}",
             code="invalid_worktree",
         )
+    _require_executor_check(settings, role_overrides)
 
     goal_id = f"{GOAL_ID_PREFIX}{os.urandom(8).hex()}"
     now = _utc_now()
@@ -937,6 +1029,7 @@ def extend_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) 
             "当前工作目录还有正在执行的任务，等它结束后再试",
             code="worktree_busy",
         )
+    _require_executor_check(settings, goal.get("role_overrides") or {})
 
     iterations = _iterations(settings, goal["id"])
     next_n = len(iterations) + 1
@@ -1410,7 +1503,8 @@ def _task_evidence_excerpt(settings: Any, task_id: str) -> str:
         pass
     try:
         acc = ags.effective_acceptance(settings, task_id)
-        if acc is None:
+        stale = acc is None
+        if stale:
             acc = ags.latest_acceptance(settings, task_id)
         if isinstance(acc, dict):
             issues = acc.get("issues")
@@ -1424,7 +1518,7 @@ def _task_evidence_excerpt(settings: Any, task_id: str) -> str:
                 issues = []
             passed = bool(acc.get("passed"))
             parts.append(
-                "验收: "
+                ("验收已失效，历史结果: " if stale else "验收: ")
                 + ("通过" if passed else "未通过")
                 + (f"；问题: {'; '.join(str(i) for i in issues)}" if issues else "")
             )
@@ -1714,6 +1808,37 @@ def _stage_eval_fields(
     _update_goal(settings, goal_id, **updates)
 
 
+def _completion_is_current(settings: Any, task_id: str) -> bool:
+    """A finished task can certify a goal only while its accepted snapshot matches."""
+    if not task_id:
+        return False
+    try:
+        task = ags.get_task(settings, task_id)
+        if not task or task.get("state") != "completed":
+            return False
+        acceptance = ags.effective_acceptance(settings, task_id)
+        if not acceptance or acceptance.get("passed") is not True:
+            return False
+        if (acceptance.get("evidence_source") != "operator_validation+independent_review"
+                or acceptance.get("provenance_verified") is not True):
+            return False
+        checks = acceptance.get("executed_checks")
+        return bool(isinstance(checks, list) and checks and all(
+            isinstance(check, dict) and check.get("passed") is True
+            and bool(check.get("execution_id"))
+            and check.get("target_sha") == acceptance.get("sha")
+            and check.get("target_fingerprint") == acceptance.get("fingerprint")
+            for check in checks
+        ))
+    except Exception:
+        log.exception("goal completion acceptance check failed for task %s", task_id)
+        return False
+
+
+_STALE_ACCEPTANCE_REASON = "本轮验收已失效或无法确认，当前代码需要重新验证。"
+_STALE_ACCEPTANCE_NEXT = "上一次验收后代码可能发生变化。检查当前工作目录和目标，保留有效改动，重新运行必要验证并完成独立审阅。"
+
+
 def _reapply_decision(
     server: Any,
     settings: Any,
@@ -1758,6 +1883,19 @@ def _reapply_decision(
         return
 
     if stored_decision == DECISION_ACHIEVED:
+        task_id = str(iteration.get("task_id") or "")
+        task = ags.get_task(settings, task_id) if task_id else None
+        if task is None:
+            _fail_goal(settings, goal, f"第 {n} 轮的任务记录缺失，无法确认目标结果")
+            return
+        if not _completion_is_current(settings, task_id):
+            _stage_eval_fields(settings, goal_id, summary=_STALE_ACCEPTANCE_REASON,
+                               last_next_prompt=_STALE_ACCEPTANCE_NEXT)
+            _record_decision(settings, goal_id, n, decision=DECISION_CONTINUE,
+                             reason=_STALE_ACCEPTANCE_REASON, task_state=state)
+            updated = dict(iteration, decision=DECISION_CONTINUE, decision_reason=_STALE_ACCEPTANCE_REASON)
+            _reapply_decision(server, settings, _get_goal_row(settings, goal_id), updated, iterations)
+            return
         _finish_goal(
             settings,
             goal,
@@ -1899,6 +2037,14 @@ def _apply_evaluation_decision(
         decision["decision"] = DECISION_CONTINUE
         decision["reason"] = downgrade_reason
 
+    if decision["decision"] == DECISION_ACHIEVED and not _completion_is_current(settings, task_id):
+        decision = dict(decision)
+        decision["decision"] = DECISION_CONTINUE
+        decision["reason"] = _STALE_ACCEPTANCE_REASON
+        decision["summary"] = _STALE_ACCEPTANCE_REASON
+        decision["next_prompt"] = _STALE_ACCEPTANCE_NEXT
+        summary = _STALE_ACCEPTANCE_REASON
+
     if decision["decision"] == DECISION_GIVE_UP:
         reason = decision["reason"] or "评估器判断目标无法达成"
         _stage_eval_fields(settings, goal_id, summary=summary)
@@ -1922,12 +2068,13 @@ def _apply_evaluation_decision(
             settings, goal_id, n,
             decision=DECISION_ACHIEVED, reason=reason, task_state=state,
         )
-        _store_goal_lessons(settings, goal, decision.get("lessons"))
-        _finish_goal(
-            settings, goal, GOAL_ACHIEVED,
-            summary=summary,
-            stop_reason=reason,
-        )
+        # Recheck the snapshot after persisting the decision as well.  A crash
+        # or concurrent edit in this window uses the same recovery path.
+        recorded = dict(iteration, decision=DECISION_ACHIEVED, decision_reason=reason,
+                        task_final_state=state)
+        _reapply_decision(server, settings, goal, recorded, iterations)
+        if _get_goal_row(settings, goal_id)["state"] == GOAL_ACHIEVED:
+            _store_goal_lessons(settings, goal, decision.get("lessons"))
         return
 
     if decision["decision"] == DECISION_ASK_USER:
@@ -2044,6 +2191,41 @@ async def _evaluate_iteration(
     )
 
 
+def _recover_interrupted_iteration(
+    server: Any, settings: Any, goal: dict[str, Any], iteration: dict[str, Any],
+    iterations: list[dict[str, Any]], task: dict[str, Any],
+) -> None:
+    """Continue after a verified stopped writer, without replaying its task."""
+    goal_id, task_id, n = str(goal["id"]), str(iteration["task_id"]), int(iteration["n"])
+    if not _claim_iteration(settings, goal_id, n):
+        return
+    try:
+        _, worktree_path, managed = _scope_paths(settings, goal)
+        task_path = str(task.get("worktree_path") or "")
+        safe = bool(managed and task_path and os.path.realpath(task_path) == os.path.realpath(worktree_path))
+        safe = safe and ags.lock_release_safe(settings, worktree_path, task_id)
+        if safe:
+            safe = ags.release_worktree_lock(settings, worktree_path, task_id)
+    except (OSError, svc.SupervisorServiceError, ags.SupervisorStateError):
+        safe = False
+
+    if safe:
+        decision = _normalize_decision({
+            "decision": DECISION_CONTINUE,
+            "reason": "上一轮执行中断，已确认写入进程停止；保留现有改动并继续。",
+            "summary": f"第 {n} 轮执行中断，已保留工作目录中的改动。",
+            "next_prompt": "上一轮执行中断。先检查工作目录中的现有改动和任务目标，保留已有有效成果；继续完成尚未完成的工作并运行验证。",
+        })
+    else:
+        decision = _normalize_decision({
+            "decision": DECISION_ASK_USER,
+            "reason": "上一轮执行中断，暂时无法确认原进程已停止或工作目录可安全使用。",
+            "summary": f"第 {n} 轮执行中断，现有改动已保留。",
+            "question": "无法确认上一轮的写入进程已停止，已暂停继续执行。请检查原进程和工作目录后再继续。",
+        })
+    _apply_evaluation_decision(server, settings, goal, iteration, iterations, task, decision)
+
+
 async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) -> None:
     goal_id = goal["id"]
     goal = await asyncio.to_thread(_get_goal_row, settings, goal_id)
@@ -2089,6 +2271,10 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
 
     if task_state in _GOAL_INFLIGHT_STATES:
         return  # still active: nothing to do this tick
+
+    if task_state == "interrupted":
+        await asyncio.to_thread(_recover_interrupted_iteration, server, settings, goal, current, iterations, task)
+        return
 
     await _evaluate_iteration(server, settings, goal, current, iterations, task)
 

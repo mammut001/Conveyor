@@ -157,6 +157,8 @@ async function install(page: Page, options: Options = {}) {
           auth: workerReady ? 'ok' : 'needs_login', login_command: '', install_command: null,
           install_supported: false, runnable: true, enabled: true, priority: 0,
           quota: { state: 'available', reset_at: null, reason: null },
+          // A ready Pi has passed its executor check, so checklist step ① is honestly done.
+          last_check: workerReady ? { ok: true, worker_id: 'pi', provider: 'local', model: 'fake-model', latency_ms: 120, kind: 'chat', message: '可以用', checked_at: new Date().toISOString() } : null,
         }],
       })
     }

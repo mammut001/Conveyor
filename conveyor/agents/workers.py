@@ -340,6 +340,7 @@ def load_workers_state(settings: Any) -> dict[str, Any]:
         "thresholds": {},
         "switch_log": [],
         "last_picked": None,
+        "last_check": {},
     }
     if state_path.is_file():
         try:
@@ -401,6 +402,14 @@ def load_workers_state(settings: Any) -> dict[str, Any]:
                 last = data.get("last_picked")
                 if isinstance(last, str) and last in _CATALOG_BY_ID:
                     state["last_picked"] = last
+
+                raw_checks = data.get("last_check")
+                if isinstance(raw_checks, dict):
+                    state["last_check"] = {
+                        str(k): v
+                        for k, v in raw_checks.items()
+                        if k in _CATALOG_BY_ID and isinstance(v, dict)
+                    }
         except Exception as exc:
             logger.warning("Failed loading workers state from %s: %s", state_path, exc)
 
@@ -449,6 +458,19 @@ def reset_quota(settings: Any, worker_id: str) -> None:
         save_workers_state(settings, state)
 
 
+def clear_worker_checks(settings: Any) -> None:
+    """模型设置换了：Pi 上次「可以用」不再描述新设置，作废重测。
+
+    只有 Pi 的测试结果依赖 模型设置（别的执行者用自己的登录态），
+    所以只清掉 "pi" 那一条。
+    """
+    state = load_workers_state(settings)
+    if "pi" not in (state.get("last_check") or {}):
+        return
+    state["last_check"].pop("pi", None)
+    save_workers_state(settings, state)
+
+
 def _pi_provider_info(settings: Any) -> dict[str, Any]:
     """Local Pi readiness (no secrets, no provider network call)."""
     try:
@@ -482,6 +504,7 @@ def _assemble_workers_payload(
     cooling = state.get("cooling", {})
     models_state = state.get("models", {})
     thresholds = state.get("thresholds", {})
+    last_checks = state.get("last_check", {})
 
     now = time.time()
     order_index = {wid: idx for idx, wid in enumerate(order)}
@@ -541,6 +564,7 @@ def _assemble_workers_payload(
             "usage": usage,
             "threshold_percent": threshold,
             "over_threshold": usage_over_threshold(usage, threshold, now),
+            "last_check": last_checks.get(wid),
         })
 
     workers_list.sort(key=lambda w: w["priority"])

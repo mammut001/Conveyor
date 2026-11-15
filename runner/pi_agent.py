@@ -28,6 +28,7 @@ from runner.types import DESTRUCTIVE_CONFIRM_TAG, Job, JobMode, ProgressCallback
 MAX_PI_STREAM_LINE = 1_000_000
 MAX_PI_LOG_BYTES = 2_000_000
 MAX_PI_STDERR_BYTES = 32_000
+MAX_PI_PROGRESS_CHARS = 3_000
 # Time pi gets after SIGTERM to kill the process groups of its running tools.
 PI_TERMINATE_GRACE_SECONDS = 5.0
 
@@ -967,11 +968,11 @@ class PiBackend(CodexRunner):
         assert job.final_message_path is not None
 
         final_text = ""
-        stderr_chunks: list[str] = []
-        stderr_bytes = 0
+        terminal_events = 0
+        stderr_buffer = bytearray()
 
         async def read_stdout() -> None:
-            nonlocal final_text
+            nonlocal final_text, terminal_events
             logged_bytes = 0
             streamed_text = ""
             last_delta_emit = 0.0
@@ -1133,7 +1134,11 @@ class PiBackend(CodexRunner):
                             for key, value in event_usage.items():
                                 usage_totals[key] = usage_totals.get(key, 0) + value
                             job.usage = dict(usage_totals)
-                        if parsed.result:
+                        if event.get("type") == "agent_end":
+                            terminal_events += 1
+                            if terminal_events > 1 and not job.error:
+                                job.error = "Pi 返回了多个结束事件，无法确认最终结果。"
+                        if event.get("type") == "agent_end" and parsed.result:
                             final_text = truncate(redact_text(parsed.result), 16_000)
                         if parsed.error and not job.error:
                             job.error = truncate(
@@ -1141,12 +1146,12 @@ class PiBackend(CodexRunner):
                         if parsed.kind == "tool.started":
                             streamed_text = ""
                         if parsed.kind == "assistant.delta" and parsed.progress:
-                            streamed_text += parsed.progress
-                            job.last_event = truncate(redact_text(streamed_text), 1200)
+                            streamed_text = (streamed_text + parsed.progress)[-MAX_PI_PROGRESS_CHARS:]
+                            job.last_event = redact_text(streamed_text)[-1200:]
                             now_mono = time.monotonic()
                             if now_mono - last_delta_emit >= 0.12:
                                 last_delta_emit = now_mono
-                                await on_progress(f"{redact_text(streamed_text)[-3000:]} ▍")
+                                await on_progress(f"{redact_text(streamed_text)} ▍")
                         elif parsed.progress:
                             job.last_event = truncate(redact_text(parsed.progress), 1200)
                             await on_progress(job.last_event)
@@ -1185,17 +1190,12 @@ class PiBackend(CodexRunner):
                         read_task = None
 
         async def read_stderr() -> None:
-            nonlocal stderr_bytes
             while True:
-                line = await process.stderr.readline()
-                if not line:
+                chunk_bytes = await process.stderr.read(65_536)
+                if not chunk_bytes:
                     return
-                if stderr_bytes < MAX_PI_STDERR_BYTES:
-                    decoded = line.decode("utf-8", errors="replace")
-                    remaining = MAX_PI_STDERR_BYTES - stderr_bytes
-                    chunk = decoded.encode("utf-8")[:remaining].decode("utf-8", errors="ignore")
-                    stderr_chunks.append(chunk)
-                    stderr_bytes += len(chunk.encode("utf-8"))
+                if len(stderr_buffer) < MAX_PI_STDERR_BYTES:
+                    stderr_buffer.extend(chunk_bytes[:MAX_PI_STDERR_BYTES - len(stderr_buffer)])
 
         stdout_task = asyncio.create_task(read_stdout())
         stderr_task = asyncio.create_task(read_stderr())
@@ -1206,23 +1206,22 @@ class PiBackend(CodexRunner):
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
             job.return_code = await self._stop_pi(process)
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        stream_results = await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
         job.process = None
 
-        if final_text:
+        if not job.error:
+            stream_failure = next((result for result in stream_results if isinstance(result, BaseException)), None)
+            if stream_failure is not None:
+                job.error = f"Pi 输出读取失败：{type(stream_failure).__name__}"
+        if job.return_code == 0 and not job.error and (terminal_events != 1 or not final_text):
+            job.error = "Pi 未返回完整的最终结果，请检查执行记录后重试。"
+        if final_text and not job.error and job.return_code == 0 and not job.cancel_requested:
             job.final_message_path.write_text(
                 truncate(redact_text(final_text), 16_000), encoding="utf-8"
             )
-        elif job.return_code == 0 and not job.error and job.last_event != "starting":
-            # pi exits 0 even when the provider rejected the request (e.g. an
-            # unknown model); never record the "starting" placeholder or a
-            # half-streamed line as the final answer of a failed job.
-            job.final_message_path.write_text(
-                truncate(redact_text(job.last_event or ""), 16_000), encoding="utf-8"
-            )
 
-        if stderr_chunks and job.return_code not in (None, 0) and not job.error:
-            job.error = truncate(redact_text("".join(stderr_chunks)), 3000)
+        if stderr_buffer and job.return_code not in (None, 0) and not job.error:
+            job.error = truncate(redact_text(stderr_buffer.decode("utf-8", errors="replace")), 3000)
         if job.return_code is not None and job.return_code < 0 and job.cancel_requested:
             job.error = "cancelled"
         elif job.return_code is not None and job.return_code < 0 and not job.error:
@@ -1240,9 +1239,9 @@ class PiBackend(CodexRunner):
         if "402" in low or "quota" in low or "insufficient balance" in low or "余额不足" in text:
             hint = f"模型服务额度已用完（{provider}）：请到服务商控制台充值或检查套餐后重试。"
         elif "401" in low or "invalid api key" in low or "unauthorized" in low or "authentication" in low:
-            hint = f"模型服务鉴权失败（{provider}）：请检查 {self.pi_api_key_env} 是否正确。"
+            hint = f"模型服务拒绝了密钥（{provider}）：请到 设置 › 模型设置 重新填写 API Key。"
         elif ("404" in low or "does not exist" in low) and "model" in low:
-            hint = f"模型 {self.pi_model or '(未设置)'} 不存在或无权访问（{provider}）：请检查 CONVEYOR_PI_MODEL。"
+            hint = f"模型 {self.pi_model or '(未设置)'} 不存在或没有权限（{provider}）：请到 设置 › 模型设置 换一个模型。"
         elif "429" in low or "rate limit" in low or "too many requests" in low:
             hint = f"模型服务限流（{provider}）：稍后会自动重试。"
         else:
@@ -1398,23 +1397,21 @@ class PiBackend(CodexRunner):
 
         if event_type == "agent_end":
             messages = event.get("messages") if isinstance(event.get("messages"), list) else []
-            for message in reversed(messages):
-                if not isinstance(message, dict) or message.get("role") != "assistant":
-                    continue
-                stop_reason = str(message.get("stopReason") or "")
-                err_msg = message.get("errorMessage")
-                if stop_reason == "error" or err_msg:
-                    error = truncate(redact_text(str(err_msg or "Pi execution failed")), 3_000)
-                    return _PiEvent(error=error, kind="agent.error", payload={"text": error})
-                text = cls._extract_assistant_text(message)
-                if text:
-                    clean = truncate(redact_text(text), 16_000)
-                    return _PiEvent(
-                        result=clean,
-                        kind="assistant.completed",
-                        payload={"text": clean},
-                    )
-            return _PiEvent()
+            message = messages[-1] if messages else None
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                error = "Pi 未返回最终助手消息。"
+                return _PiEvent(error=error, kind="agent.error", payload={"text": error})
+            stop_reason = str(message.get("stopReason") or "")
+            err_msg = message.get("errorMessage")
+            if err_msg or (stop_reason and stop_reason != "stop"):
+                error = truncate(redact_text(str(err_msg or f"Pi 响应未完整结束（{stop_reason}）")), 3_000)
+                return _PiEvent(error=error, kind="agent.error", payload={"text": error})
+            text = cls._extract_assistant_text(message)
+            if not text:
+                error = "Pi 最终消息没有文本结果。"
+                return _PiEvent(error=error, kind="agent.error", payload={"text": error})
+            clean = truncate(redact_text(text), 16_000)
+            return _PiEvent(result=clean, kind="assistant.completed", payload={"text": clean})
 
         if event_type == "error":
             message = event.get("message") or event.get("error")

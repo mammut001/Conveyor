@@ -7,6 +7,7 @@ import type {
   SupervisorRoleKey,
   SupervisorTaskDetail,
   SupervisorWorktree,
+  SupervisorWorkersData,
 } from './SupervisorWorkspace'
 import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChecks'
 import { SupervisorRoleBar, supExecutorLabel, supStageLabel, supStateLabel } from './SupervisorWorkspace'
@@ -492,6 +493,8 @@ export default function SupervisorGoals({
   onRefreshRepositories,
   draftOutcome,
   onDraftOutcomeUsed,
+  onOpenWorkers,
+  workersData,
 }: {
   apiCall: <T>(path: string, init?: RequestInit) => Promise<T>
   repo: SupervisorRepo
@@ -508,6 +511,10 @@ export default function SupervisorGoals({
   /** 从「讨论」里点「设为目标」带来的草稿：只填进输入框，绝不自动开始。 */
   draftOutcome?: string | null
   onDraftOutcomeUsed?: () => void
+  /** Jump to the 执行者 page (used when a start is rejected for a failed executor check). */
+  onOpenWorkers?: () => void
+  /** Live workers payload from App.tsx: the Pi/pool role badges read Pi's last 测试. */
+  workersData?: SupervisorWorkersData
 }) {
   // 自动检查状态（来自 SupervisorChecks 的汇报）：用来在「开始」上方提醒还没有检查命令。
   const [checksSummary, setChecksSummary] = useState<SupervisorChecksSummary | null>(null)
@@ -535,6 +542,9 @@ export default function SupervisorGoals({
   const [maxRounds, setMaxRounds] = useState(String(DEFAULT_MAX_ROUNDS))
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
+  // When the start is rejected because the executor failed its pre-flight check, remember the
+  // code so the error area can offer a shortcut to the 执行者 page.
+  const [createErrorCode, setCreateErrorCode] = useState('')
   const [replyMessage, setReplyMessage] = useState('')
   const [replying, setReplying] = useState(false)
   const [replyError, setReplyError] = useState('')
@@ -684,6 +694,7 @@ export default function SupervisorGoals({
       }
       setCreating(true)
       setCreateError('')
+      setCreateErrorCode('')
       try {
         await apiCall<Goal>('/api/supervisor/goals', {
           method: 'POST',
@@ -699,6 +710,8 @@ export default function SupervisorGoals({
         setFormRequested(false)
         await refresh()
       } catch (err) {
+        const code = (err as { code?: string } | null)?.code || ''
+        setCreateErrorCode(code === 'executor_check_failed' ? code : '')
         setCreateError(goalChineseError(err))
       } finally {
         setCreating(false)
@@ -1218,6 +1231,8 @@ export default function SupervisorGoals({
                 effectiveRoles={effectiveRoles}
                 onChangeRole={onChangeRole}
                 disabled={readOnly || locked || creating}
+                apiCall={apiCall}
+                workersData={workersData}
               />
 
               <SupervisorChecks
@@ -1237,6 +1252,11 @@ export default function SupervisorGoals({
                 <div className="sup-banner sup-banner--error" role="alert">
                   <strong>没有开始成功</strong>
                   <span>{createError}</span>
+                  {createErrorCode === 'executor_check_failed' && onOpenWorkers && (
+                    <button type="button" className="sup-role-guidance-link" onClick={onOpenWorkers}>
+                      去执行者页面测试
+                    </button>
+                  )}
                 </div>
               )}
 

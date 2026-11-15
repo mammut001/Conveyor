@@ -7,7 +7,7 @@ import { prepareButtonLabel, type TaskSuggestion } from './taskDraftHandoff';
 import { useMediaQuery } from '../ux/shellNav';
 import {
   CHANNEL_LABELS, ChatRequestError, STREAM_INTERRUPTED, describeApproval, describeChatError, formatChatTime, formatFullTime,
-  looksLikeRawError, stripDeepHint,
+  looksLikeRawError, splitFailureText, stripDeepHint,
 } from './chatFormat';
 
 export type SubagentProgress = {
@@ -78,6 +78,8 @@ export type ChatPanelProps = {
   openSessionRequest?: { id: string; nonce: number } | null;
   /** Called when the owner sends a message from this panel (used by the first-run checklist). */
   onMessageSent?: () => void;
+  /** Opens the 模型设置 dialog (used by a failed turn whose explanation points at 模型设置). */
+  onOpenModelSettings?: () => void;
   /** When true, this conversation is a worktree-scoped planning/discussion surface
    *  that prepares task goals rather than directly running commands or nightly jobs. */
   discussionOnly?: boolean;
@@ -187,7 +189,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '' }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, onOpenModelSettings, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '' }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Reading a restored conversation must not flash the welcome state first.
@@ -900,17 +902,27 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           }
 
           if (message.failure) {
+            // The stored text is `<Chinese explanation>` + newline + `原始信息：<raw>`. Show only the
+            // explanation here; the raw provider text stays behind a collapsed 技术细节.
+            const { explanation, raw } = splitFailureText(message.failure.text);
+            const techRaw = raw || message.failure.detail || '';
+            const wantsModelSettings = explanation.includes('模型设置');
             return (
               <article key={message.id} className="transcript-message role-assistant chat-turn">
                 {avatar}
                 <div className="transcript-body">
                   <div className="transcript-content chat-failed-reply" role="alert">
-                    <p className="formatted-paragraph">{message.failure.text}</p>
-                    {message.failure.detail && (
+                    <p className="formatted-paragraph">{explanation}</p>
+                    {techRaw && (
                       <details>
-                        <summary>详情</summary>
-                        <code>{message.failure.detail}</code>
+                        <summary>技术细节</summary>
+                        <code>{techRaw}</code>
                       </details>
+                    )}
+                    {wantsModelSettings && onOpenModelSettings && (
+                      <button type="button" className="chat-open-settings-button" onClick={onOpenModelSettings}>
+                        打开模型设置
+                      </button>
                     )}
                   </div>
                 </div>

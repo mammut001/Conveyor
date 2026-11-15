@@ -247,7 +247,7 @@ test.describe('r4 onboarding QA fixes (e2e/r4-onboard-fix.spec.ts)', () => {
     // With an installed, logged-in executor every step is done, so the checklist goes away.
     await page.route('**/api/workers', async route => route.fulfill({
       status: 200, contentType: 'application/json',
-      body: JSON.stringify({ enabled: true, install_enabled: true, active: 'pi', workers: [{ ...piWorker, installed: true, auth: 'ok' }] }),
+      body: JSON.stringify({ enabled: true, install_enabled: true, active: 'pi', workers: [{ ...piWorker, installed: true, auth: 'ok', last_check: { ok: true, worker_id: 'pi', provider: 'local', model: 'fake-model', latency_ms: 90, kind: 'chat', message: '可以用', checked_at: new Date().toISOString() } }] }),
     }))
     await page.reload()
     await expect(page.locator('.setup-checklist-card')).toHaveCount(0)

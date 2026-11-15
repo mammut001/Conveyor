@@ -194,6 +194,14 @@ Conveyor 执行者池（Worker Pool）允许系统将任务动态分配给多个
 
 `POST /api/workers/order` 不变（拖拽排序使用它）。以上接口在功能未开启时同样返回 404。
 
+### 11. 一键测试执行者（能不能真的回答）
+`POST /api/workers/<id>/check`
+- 只有内置 Pi 支持一键测试；其他执行者返回 `{"ok": null, "kind": "unsupported", "message": "这个执行者暂不支持一键测试"}`，不会运行任何命令。未知 ID 返回 400 `unknown_worker`。
+- 用与真实任务完全相同的服务商与环境拼法跑一次最小请求（`pi --mode json -p --no-session --no-tools ...`，stdin 为「只回复两个字：好的」），超时默认 45 秒，超时必杀进程。
+- 成功判定与 `PiBackend` 一致：退出码 0、没有错误事件、恰好一个 `agent_end`、且最终助手消息有文字。
+- 返回 `{"check": {...}, ...执行者 GET 载荷}`；`check` 含 `ok` / `kind`（`ok`/`auth`/`quota`/`model_missing`/`rate_limit`/`timeout`/`network`/`config`/`other`）/ `message`（一句中文，指向「设置 › 模型设置」，绝不出现环境变量名）/ `detail`（原始错误，已脱敏并截到 600 字）/ `latency_ms` / `checked_at`。
+- 结果按执行者存在 `<codex_memory_root>/state/workers.json` 的 `last_check`，执行者条目里以 `last_check` 返回；保存「模型设置」后会清掉 Pi 的上一次结果。目标开始前若 Pi 的上一次测试没通过，会拒绝开始（409 `executor_check_failed`）。
+
 ## 可运行的 CLI 执行者（agy / grok / cmd）
 
 `runner/cli_backend.py` 提供通用 `CliBackend`，在任务 worktree 内以非交互模式运行外部 CLI，沿用现有 diff/apply/discard 生命周期：

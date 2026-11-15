@@ -269,6 +269,7 @@ export default function App() {
   const [screenError, setScreenError] = useState<{ text: string; detail?: string } | null>(null)
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
   const [workersData, setWorkersData] = useState<any>(null)
+  const [checkingExecutor, setCheckingExecutor] = useState(false)
   const [checklistDismissed, setChecklistDismissed] = useState(() => {
     try { return localStorage.getItem('conveyor-onboarding-dismissed') === 'true' } catch { return false }
   })
@@ -1293,6 +1294,20 @@ export default function App() {
       w.id === 'pi' && w.installed && w.enabled !== false
     )
   )
+  // The executor checklist step ① tests: prefer the built-in Pi, else the active worker, else
+  // the first installed one. Its last 测试 decides whether ① is honestly done.
+  const chosenWorker: any = (() => {
+    const list = Array.isArray(workersData?.workers) ? workersData.workers.filter((w: any) => w.installed) : []
+    return list.find((w: any) => w.id === 'pi')
+      || list.find((w: any) => w.id === workersData?.active)
+      || list[0]
+      || null
+  })()
+  const chosenExecutorCheck: any = chosenWorker?.last_check ?? null
+  const executorInstalled = Boolean(chosenWorker)
+  const executorTestPassed = chosenExecutorCheck
+    ? chosenExecutorCheck.kind === 'unsupported' || chosenExecutorCheck.ok === true
+    : false
   // Step ③ ticks from data that survives a reload (any session with messages, or a
   // job) plus the message being sent right now, so it never depends on one poll.
   const hasSentFirstMessage = Boolean(
@@ -1303,9 +1318,25 @@ export default function App() {
     (transcript && transcript.length > 0)
   )
   const hasNoUsableWay = Boolean(initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
-  // ① only asks for work when the 执行者 feature is on; otherwise the owner cannot act on it.
-  const executorStepDone = !workersEnabled || hasEligibleWorker
+  // ① is honest: the chosen executor must be installed AND actually work (or be untestable).
+  // With the 执行者 feature off the owner cannot act, so ① never blocks (today's behaviour).
+  const executorStepDone = !workersEnabled || (executorInstalled && executorTestPassed)
   const onboardingStepsOpen = Boolean(hasNoUsableWay || !executorStepDone || !modelConfigured || !hasSentFirstMessage)
+
+  // Checklist step ① inline 测试: really call the chosen executor once (up to ~45s) and adopt the
+  // fresh workers payload so the badge / step ticks without a reload.
+  async function runExecutorCheck() {
+    const id = chosenWorker?.id || 'pi'
+    setCheckingExecutor(true)
+    try {
+      const res = await api<any>(`/api/workers/${encodeURIComponent(id)}/check`, { method: 'POST', body: JSON.stringify({}) })
+      if (res && Array.isArray(res.workers)) setWorkersData(res)
+    } catch {
+      // Leave the previous state; the owner can tap 测试 again.
+    } finally {
+      setCheckingExecutor(false)
+    }
+  }
 
   const ONBOARDING_DISMISSED_KEY = 'conveyor-onboarding-dismissed'
   const ONBOARDING_HEALTHY_KEY = 'conveyor-onboarding-healthy'
@@ -1373,7 +1404,9 @@ export default function App() {
     <SetupChecklist
       workersEnabled={workersEnabled}
       builtinPiInstalled={builtinPiInstalled}
-      hasEligibleWorker={hasEligibleWorker}
+      executorInstalled={executorInstalled}
+      executorCheck={chosenExecutorCheck}
+      checkingExecutor={checkingExecutor}
       modelConfigured={modelConfigured}
       hasSentFirstMessage={hasSentFirstMessage}
       allDone={checklistFinished}
@@ -1382,6 +1415,7 @@ export default function App() {
         setView('workers')
       }}
       onOpenSettings={() => void openSettings()}
+      onRunExecutorCheck={() => void runExecutorCheck()}
       onDismiss={handleDismissChecklist}
     />
   ) : null
@@ -1404,6 +1438,8 @@ export default function App() {
     // Sending from 对话 counts as the first message immediately (step ③ of the checklist).
     onMessageSent: () => setChatMessageSent(true),
     setupChecklist: view === 'chat' ? checklistNode : undefined,
+    // A failed turn whose explanation points at 模型设置 can open that dialog in one tap.
+    onOpenModelSettings: () => void openSettings(),
   }
 
   // Shell values for this render: right panel, connection, navigation groups and header text.
@@ -1628,6 +1664,7 @@ export default function App() {
                 active={view === 'code'}
                 coordinatorFallbackName={providerConfig ? `${providerConfig.provider_name} · ${providerConfig.model}` : selectedAgent?.name}
                 onOpenWorkers={workersEnabled ? () => { historyModeRef.current = 'push'; setView('workers') } : undefined}
+                workersData={workersData}
               />
             </Suspense>
           )
@@ -1651,8 +1688,8 @@ export default function App() {
 
               {transcriptError && <div className="job-notice task-notice" role="status"><strong>暂时无法更新会话记录</strong><span>已收到的内容会保留。</span><button type="button" onClick={() => void refreshTranscript()}>重试读取</button></div>}
 
-              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} onRetry={question => void sendPrompt(question, false)} />}
-              {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} />}
+              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} onRetry={question => void sendPrompt(question, false)} onOpenModelSettings={() => void openSettings()} />}
+              {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} onOpenModelSettings={() => void openSettings()} />}
 
               {selectedJob && selectedJob.prompt_preview && selectedJob.state !== 'completed' && !staleTerminalRun && !promptAlreadyInTranscript && (
                 <article className="transcript-message role-user pending-turn">
