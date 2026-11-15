@@ -10,8 +10,10 @@ from dataclasses import replace
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
+from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import chat_intents
 from conveyor.agents import supervisor_goals as goals_mod
 from conveyor.agents import supervisor_service as svc
@@ -19,6 +21,63 @@ from conveyor.core.transcript_store import get_transcript_store
 from conveyor.web.web_chat import WebChatPort, build_history
 from channel.types import InboundMessage
 from tests.test_supervisor_api import TOKEN, _HttpHarness, _make_settings
+
+_GOAL_ROLES = ("analyst", "implementer", "reviewer")
+
+
+class _AlwaysAvailableExecutor:
+    """Stand-in supervisor executor: behaves as if a coding CLI were installed."""
+
+    name = "pool"
+
+    def available(self) -> tuple[bool, str]:
+        return True, "ok"
+
+    async def run(self, **_kwargs: Any) -> Any:
+        return ags.ExecutionResult(success=False, output="", error="test stub executor")
+
+
+def _start_available_executor_patches(test: unittest.TestCase) -> None:
+    """Report every supervisor executor as available for the whole test.
+
+    Chat intent flows refuse to start a goal when no executor reports available
+    (「目前没有可用的执行者…」), so without these stubs the goal-starting tests
+    only pass on machines that happen to have a coding CLI installed. Tests that
+    assert the refusal patch their own unavailable state inside the test body;
+    those patches start afterwards and therefore still win.
+    """
+    caps_patch = patch.object(
+        chat_intents.svc,
+        "get_capabilities",
+        return_value={
+            "roles": {
+                role: {
+                    "executor": "pool",
+                    "model": None,
+                    "location": "local",
+                    "available": True,
+                    "reason": "",
+                    "auto_selected": True,
+                }
+                for role in _GOAL_ROLES
+            },
+            "executors": [
+                {"name": name, "label": label, "available": True, "reason": ""}
+                for name, label in chat_intents.svc._UI_EXPOSED_EXECUTORS
+            ],
+            "coordinator": {"executor": "pool", "model": None, "available": True},
+        },
+    )
+    caps_patch.start()
+    test.addCleanup(caps_patch.stop)
+
+    executor_patch = patch.object(
+        chat_intents.ags,
+        "get_executor",
+        lambda _settings, _name: _AlwaysAvailableExecutor(),
+    )
+    executor_patch.start()
+    test.addCleanup(executor_patch.stop)
 
 
 class _MemoryPort:
@@ -174,6 +233,7 @@ class ChatIntentsFlowTests(unittest.TestCase):
         self.root = Path(self._tmp.name)
         self.settings = _make_settings(self.root / "env")
         self.session_id = "web:web-console:test-intent-session"
+        _start_available_executor_patches(self)
 
     def tearDown(self) -> None:
         self._tmp.cleanup()
@@ -449,6 +509,9 @@ class ChatIntentsFlowTests(unittest.TestCase):
 
 
 class ChatActionsHttpTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _start_available_executor_patches(self)
+
     def test_http_chat_actions_executes_server_payload_only_and_rejects_replay(self) -> None:
         with tempfile.TemporaryDirectory(prefix="conveyor-ci-http-") as tmp:
             settings = _make_settings(Path(tmp) / "env")
