@@ -1,12 +1,14 @@
 import type { TranscriptMessage } from '../runtime';
 import { FormattedText } from './FormattedText';
-import { formatChatTime, formatFullTime } from './chatFormat';
+import { splitFailureText, formatChatTime, formatFullTime } from './chatFormat';
 
 type Props = {
   messages: TranscriptMessage[];
   agent?: { name: string; color?: string };
   /** 重试 on a failure line: resend the question that was asked just before it. */
   onRetry?: (question: string) => void;
+  /** Opens the 模型设置 dialog (used by a failure whose explanation points at 模型设置). */
+  onOpenModelSettings?: () => void;
 };
 
 /** A provider failure is stored with kind="error" (web_console WebOutbound.note_provider_failure). */
@@ -14,11 +16,7 @@ function isFailureMessage(message: TranscriptMessage): boolean {
   return message.kind === 'error' || message.content.startsWith('[error]');
 }
 
-function failureText(message: TranscriptMessage): string {
-  return message.content.replace(/^\[error\]\s*/i, '').trim();
-}
-
-export function TranscriptPanel({ messages, agent, onRetry }: Props) {
+export function TranscriptPanel({ messages, agent, onRetry, onOpenModelSettings }: Props) {
   const agentName = agent?.name?.trim() || 'Conveyor';
   if (!messages.length) return <div className="empty-state">还没有对话记录。</div>;
 
@@ -27,8 +25,9 @@ export function TranscriptPanel({ messages, agent, onRetry }: Props) {
       {messages.map((message, index) => {
         const isError = isFailureMessage(message);
         const cleanContent = isError
-          ? failureText(message)
+          ? splitFailureText(message.content).explanation
           : message.content;
+        const failureRaw = isError ? splitFailureText(message.content).raw : '';
 
         if (isError) {
           // The question that failed: the closest user message above this line. 重试 sends it again.
@@ -42,6 +41,17 @@ export function TranscriptPanel({ messages, agent, onRetry }: Props) {
               <div className="error-body">
                 <span className="error-title">发送没有成功</span>
                 <p className="error-message">{cleanContent}</p>
+                {failureRaw && (
+                  <details className="transcript-error-tech">
+                    <summary>技术细节</summary>
+                    <code>{failureRaw}</code>
+                  </details>
+                )}
+                {cleanContent.includes('模型设置') && onOpenModelSettings && (
+                  <button type="button" className="transcript-error-settings" onClick={onOpenModelSettings}>
+                    打开模型设置
+                  </button>
+                )}
                 {onRetry && question && (
                   <button type="button" className="transcript-error-retry" onClick={() => onRetry(question)}>
                     重试

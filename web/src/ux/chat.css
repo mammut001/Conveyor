@@ -456,7 +456,41 @@
 .primary-interface .chat-panel-container .action-row .danger { border: 1px solid #f3c7c2; background: #fff; color: #b42318; }
 .primary-interface .chat-panel-container .action-row .danger:hover:not(:disabled) { background: #fef3f2; }
 .primary-interface .chat-panel-container .action-row .primary { border: 1px solid #bd5c40; background: #bd5c40; color: #fff; font-weight: 600; }
+.primary-interface .chat-panel-container .action-row .secondary { border: 1px solid #d0d7de; background: #fff; color: #1f2328; }
+.primary-interface .chat-panel-container .action-row .secondary:hover:not(:disabled) { background: #f6f8fa; }
+.primary-interface .chat-panel-container .action-row button:disabled { opacity: .55; cursor: not-allowed; }
 .primary-interface .chat-panel-container .chat-approval-record { color: #4b5563; font-size: 13px; }
+
+.primary-interface .chat-panel-container .chat-action-card {
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+}
+.primary-interface .chat-panel-container .chat-action-card-title {
+  margin: 0 0 6px;
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 600;
+}
+.primary-interface .chat-panel-container .chat-action-card-text {
+  margin: 0 0 8px;
+  color: #4b5563;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.primary-interface .chat-panel-container .chat-action-card .action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+.primary-interface .chat-panel-container .chat-action-card-outcome {
+  margin-top: 8px;
+  color: #4b5563;
+  font-size: 12px;
+}
 
 /* Inline error with 重试 / 关闭 */
 .primary-interface .chat-inline-error {
@@ -883,6 +917,20 @@
 .primary-interface .chat-approval-card .chat-approval-detail p { color: #6b7280; font-size: 12px; }
 .primary-interface .chat-failed-reply summary { width: fit-content; color: #6b7280; font-size: 12px; cursor: pointer; }
 .primary-interface .chat-failed-reply code { display: block; color: #6b7280; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.primary-interface .chat-failed-reply .chat-open-settings-button {
+  align-self: flex-start;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: 1px solid #bd5c40;
+  border-radius: 7px;
+  background: #fff;
+  color: #a94c34;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primary-interface .chat-failed-reply .chat-open-settings-button:hover { border-color: #a94c34; background: #fdf3f0; }
 
 /* Phones and touch screens: the small chat controls get a 40px tap target, and the composer folds into one compact row when there is no keyboard hint. */
 @media (max-width: 600px), (pointer: coarse) {

@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import re
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -833,6 +834,74 @@ class PiSystemPromptTests(unittest.TestCase):
 class PiProviderErrorTests(unittest.TestCase):
     _thinking_job = PiBackendTests._thinking_job
 
+    def test_large_stderr_without_newline_does_not_block_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = dataclasses.replace(_make_settings(tmp), codex_timeout_seconds=5)
+            backend = PiBackend(settings)
+            fake = tmp / "fake-pi-large-stderr"
+            fake.write_text(f'''#!{sys.executable}
+import json, sys
+sys.stdin.read()
+sys.stderr.write("x" * 1_200_000)
+sys.stderr.flush()
+print(json.dumps({{"type":"agent_end", "messages":[{{"role":"assistant", "stopReason":"stop",
+      "content":[{{"type":"text", "text":"done"}}]}}]}}), flush=True)
+''')
+            fake.chmod(0o755)
+            backend.pi_bin = str(fake)
+            job = self._thinking_job(tmp, settings)
+            async def on_progress(_text: str) -> None:
+                pass
+            asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertEqual(job.return_code, 0, job.error)
+            self.assertFalse(job.error)
+            self.assertEqual(job.final_message_path.read_text(encoding="utf-8"), "done")
+
+    def test_incomplete_stream_never_becomes_final_answer(self) -> None:
+        for reason in (None, "length", "aborted", "toolUse", "pending", "deferred"):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as raw:
+                tmp = Path(raw)
+                settings = _make_settings(tmp)
+                backend = PiBackend(settings)
+                events = [{"type": "message_end", "message": {"role": "assistant",
+                    "stopReason": "toolUse", "content": [{"type": "text", "text": "中间进度"}]}}]
+                if reason is not None:
+                    events.append({"type": "agent_end", "messages": [{"role": "assistant",
+                        "stopReason": reason, "content": [{"type": "text", "text": "未完成"}]}]})
+                backend.pi_bin = str(_write_fake_pi_events(tmp, "fake-pi-incomplete", events))
+                job = self._thinking_job(tmp, settings)
+                async def on_progress(_text: str) -> None:
+                    pass
+                asyncio.run(backend._run_codex_attempt(job, on_progress))
+                self.assertEqual(job.return_code, 0)
+                self.assertTrue(job.error)
+                self.assertFalse(job.final_message_path.exists())
+
+    def test_terminal_event_cannot_reuse_earlier_assistant_message(self) -> None:
+        event = {"type": "agent_end", "messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": "旧回复"}]},
+            {"role": "toolResult", "content": [{"type": "text", "text": "结果"}]},
+        ]}
+        parsed = PiBackend._parse_pi_event(event)
+        self.assertFalse(parsed.result)
+        self.assertTrue(parsed.error)
+
+    def test_duplicate_terminal_events_are_not_success(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            backend = PiBackend(settings)
+            event = {"type": "agent_end", "messages": [{"role": "assistant", "stopReason": "stop",
+                       "content": [{"type": "text", "text": "完成"}]}]}
+            backend.pi_bin = str(_write_fake_pi_events(tmp, "fake-pi-duplicate", [event, event]))
+            job = self._thinking_job(tmp, settings)
+            async def on_progress(_text: str) -> None:
+                pass
+            asyncio.run(backend._run_codex_attempt(job, on_progress))
+            self.assertTrue(job.error)
+            self.assertFalse(job.final_message_path.exists())
+
     def test_provider_error_with_exit_zero_writes_no_placeholder_final(self) -> None:
         # Real pi 0.73 exits 0 when the provider answers 404 for an unknown model.
         with tempfile.TemporaryDirectory() as raw:
@@ -905,8 +974,11 @@ class PiProviderErrorTextTests(unittest.TestCase):
             quota = backend._explain_provider_error("402 You exceeded your current quota")
             self.assertTrue(quota.startswith("模型服务额度已用完（stepfun）"))
             self.assertIn("402 You exceeded your current quota", quota)
-            self.assertIn("STEPFUN_API_KEY", backend._explain_provider_error("401 Invalid API key"))
+            # Owner-facing wording: no env var names, points at 设置 › 模型设置.
+            self.assertIn("设置 › 模型设置", backend._explain_provider_error("401 Invalid API key"))
+            self.assertNotIn("STEPFUN_API_KEY", backend._explain_provider_error("401 Invalid API key"))
             self.assertIn("step-5-preview", backend._explain_provider_error('404 The model "x" does not exist'))
+            self.assertNotIn("CONVEYOR_PI_MODEL", backend._explain_provider_error('404 The model "x" does not exist'))
             limited = backend._explain_provider_error("429 Too Many Requests")
             job = Job("j", JobMode.RUN, "p", "x", error=limited)
             self.assertTrue(_is_rate_limited(backend, job))  # retry detection still sees 429

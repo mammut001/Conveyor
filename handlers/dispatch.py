@@ -98,6 +98,9 @@ async def dispatch(
     if await try_resolve_confirmation(msg, port, settings):
         return
 
+    # TODO(chat-intents): hook owner-only Telegram/Feishu create_project / start_timed_goal
+    # intents here when channel interactive action buttons are supported outside web chat.
+
     parsed = parse_command(msg.text)
     if parsed is None and msg.reply_to is None and not msg.attachments:
         parsed = parse_conversation_control(msg.text)

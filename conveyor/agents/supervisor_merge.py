@@ -446,13 +446,14 @@ def _goals_db_rows(settings: Any, sql: str, params: tuple[Any, ...]) -> list[sql
 
 
 def _running_goal_ids(settings: Any, worktree_id: str) -> list[str]:
-    """Goal ids still `running` on this worktree (the goals DB may not exist yet)."""
+    """Goal ids still `running` or `waiting_quota` on this worktree (the goals DB may not exist yet)."""
     rows = _goals_db_rows(
         settings,
         "SELECT id, state FROM supervisor_goals WHERE worktree_id = ?",
         (worktree_id,),
     )
-    return [str(row["id"]) for row in rows if str(row["state"] or "") == _goal_running_state()]
+    active_states = (_goal_running_state(), "waiting_quota")
+    return [str(row["id"]) for row in rows if str(row["state"] or "") in active_states]
 
 
 def _busy_message(settings: Any, scope: dict[str, Any]) -> str:

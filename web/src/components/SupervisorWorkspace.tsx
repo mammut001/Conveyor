@@ -1,4 +1,4 @@
-import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ChatPanel, type TaskSuggestion } from './ChatPanel'
 import {
   NARROW_DISCUSSION_HINT,
@@ -19,6 +19,13 @@ import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 import { goalRoundTaskTitle, parseGoalRoundTask, goalRoundKey } from '../taskText'
 import { useMediaQuery } from '../ux/shellNav'
 import { readDispatchDraft, writeDispatchDraft } from './supDrafts'
+import type { WorkerCheck } from './WorkersPanel'
+
+/** The subset of GET /api/workers the role badges need: does Pi actually work right now. */
+export type SupervisorWorkersData = {
+  workers?: Array<{ id: string; installed: boolean; last_check?: WorkerCheck | null }>
+  active?: string | null
+} | null
 
 export type SupervisorExecutorModel = { id: string; name: string }
 
@@ -984,12 +991,18 @@ export function SupervisorRoleBar({
   onChangeRole,
   onOpenWorkers,
   disabled,
+  apiCall,
+  workersData,
 }: {
   capabilities: SupervisorCapabilities | null
   effectiveRoles: RoleOverrides
   onChangeRole: (role: SupervisorRoleKey, patch: Partial<RoleOverrideEntry>) => void
   onOpenWorkers?: () => void
   disabled?: boolean
+  /** Runs POST /api/workers/pi/check for the inline 测试一下 link (optional). */
+  apiCall?: <T>(path: string, init?: RequestInit) => Promise<T>
+  /** Live workers payload from App.tsx; when present the Pi/pool badge reflects Pi's last 测试. */
+  workersData?: SupervisorWorkersData
 }) {
   const executors = capabilities?.executors || []
   // Pi (built-in) only serves 对话 and 任务, so it never appears here; say what the Supervisor needs instead.
@@ -1000,6 +1013,29 @@ export function SupervisorRoleBar({
   // technical detail (QA N29).
   const coordinatorLabel = supCoordinatorLabel(coordinatorExec)
   const coordinatorTech = [coordinatorExec, coordinatorModel].filter(Boolean).join(' · ')
+
+  // Inline 测试一下: run it once and remember the result so the badge updates without a reload.
+  // `undefined` = not overridden yet (read from workersData); `null`/value = the fresh result.
+  const [piCheckOverride, setPiCheckOverride] = useState<WorkerCheck | null | undefined>(undefined)
+  const [checkingPi, setCheckingPi] = useState(false)
+  const piWorker = workersData?.workers?.find(w => w.id === 'pi') || null
+  const piCheck = piCheckOverride !== undefined ? piCheckOverride : (piWorker?.last_check ?? null)
+  const runPiCheck = useCallback(async () => {
+    if (!apiCall) return
+    setCheckingPi(true)
+    try {
+      const res = await apiCall<{ check?: WorkerCheck; workers?: Array<{ id: string; last_check?: WorkerCheck | null }> }>(
+        '/api/workers/pi/check',
+        { method: 'POST', body: JSON.stringify({}) },
+      )
+      const next = res?.check ?? res?.workers?.find(w => w.id === 'pi')?.last_check ?? null
+      setPiCheckOverride(next ?? null)
+    } catch {
+      // Keep the previous badge; the owner can tap 测试一下 again.
+    } finally {
+      setCheckingPi(false)
+    }
+  }, [apiCall])
 
   const getExecutorInfo = (execName: string): SupervisorExecutorInfo | undefined =>
     executors.find(item => item.name === execName)
@@ -1053,13 +1089,45 @@ export function SupervisorRoleBar({
           const status = getRoleAvailability(key, current.executor)
           const optionNames = new Set(executors.map(e => e.name))
           const extraOption = current.executor && !optionNames.has(current.executor) ? current.executor : null
+          // When this role runs on Pi or the pool, the badge must be honest: 「已就绪」 only means
+          // "installed", so derive it from Pi's last 测试 (once live workers data is available).
+          const isPiOrPool = current.executor === 'pi' || current.executor === 'pool'
+          const deriveFromCheck = Boolean(workersData) && isPiOrPool && status.available
+          const checkOk = piCheck !== null && piCheck.ok === true
+          const checkFailed = piCheck !== null && piCheck.ok === false
+          let badgeNode: ReactNode
+          if (deriveFromCheck && checkOk) {
+            badgeNode = <span className="sup-role-badge is-ok">已测试可用</span>
+          } else if (deriveFromCheck && checkFailed) {
+            badgeNode = <span className="sup-role-badge is-err" title={piCheck!.message || '上次测试没有通过'}>上次测试失败</span>
+          } else if (deriveFromCheck) {
+            badgeNode = (
+              <span className="sup-role-badge-wrap">
+                <span className="sup-role-badge is-ok">已就绪</span>
+                {apiCall && (
+                  <button
+                    type="button"
+                    className="sup-role-test-link"
+                    disabled={checkingPi || disabled}
+                    onClick={() => { void runPiCheck() }}
+                  >
+                    {checkingPi ? '测试中…' : '测试一下'}
+                  </button>
+                )}
+              </span>
+            )
+          } else {
+            badgeNode = (
+              <span className={`sup-role-badge ${status.available ? 'is-ok' : 'is-err'}`}>
+                {status.available ? '已就绪' : '不可用'}
+              </span>
+            )
+          }
           return (
             <div key={key} className={`sup-role-card ${!status.available ? 'is-unavailable' : ''}`}>
               <div className="sup-role-head">
                 <label htmlFor={`sup-role-exec-${key}`} className="sup-role-title">{label}</label>
-                <span className={`sup-role-badge ${status.available ? 'is-ok' : 'is-err'}`}>
-                  {status.available ? '已就绪' : '不可用'}
-                </span>
+                {badgeNode}
               </div>
               <small className="sup-role-hint">{hint}</small>
               <select
@@ -1100,9 +1168,6 @@ export function SupervisorRoleBar({
       <details className="sup-role-advanced">
         <summary>高级设置</summary>
         <div className="sup-role-advanced-body">
-          <p className="sup-quota-disclaimer">
-            说明：执行器显示「已就绪」仅代表本地适配器或命令已配置，不承诺远程模型配额一定可用；执行失败时不会静默回退到其他服务商。
-          </p>
           <div className="sup-model-overrides-grid">
             {ROLE_META.map(({ key, label }) => {
               const current = effectiveRoles[key]
@@ -1755,16 +1820,29 @@ function SupervisorDeployView({
   )
 }
 
+export type SupervisorNavigationRequest = {
+  nonce: number
+  repoId: string
+  worktreeId?: string
+  tab?: 'goals' | 'workspace'
+  goalOutcome?: string
+}
+
 export function SupervisorWorkspace({
   token,
   active,
   coordinatorFallbackName,
   onOpenWorkers,
+  workersData,
+  navigationRequest,
 }: {
   token: string
   active: boolean
   coordinatorFallbackName?: string
   onOpenWorkers?: () => void
+  /** Live workers payload from App.tsx (no new poll): the Pi/pool role badges read Pi's last 测试. */
+  workersData?: SupervisorWorkersData
+  navigationRequest?: SupervisorNavigationRequest | null
 }) {
   const narrowViewport = useMediaQuery('(max-width: 900px)')
   const [capabilities, setCapabilities] = useState<SupervisorCapabilities | null>(null)
@@ -1810,6 +1888,9 @@ export function SupervisorWorkspace({
   // Action busy/error states scoped to current context
   const [dispatchBusy, setDispatchBusy] = useState(false)
   const [dispatchError, setDispatchError] = useState('')
+  // When the executor itself fails its pre-flight check the start is rejected with this code;
+  // the error area then offers a shortcut to the 执行者 page instead of a bare sentence.
+  const [dispatchErrorCode, setDispatchErrorCode] = useState('')
   const [cancelBusyTaskId, setCancelBusyTaskId] = useState('')
   const [deployBusy, setDeployBusy] = useState(false)
   const [deployError, setDeployError] = useState('')
@@ -2071,6 +2152,47 @@ export function SupervisorWorkspace({
     saveContext(repoId, worktreeId)
     setMobileRepoDrawerOpen(false)
   }, [])
+
+  const handledNavNonceRef = useRef(0)
+  useEffect(() => {
+    if (!navigationRequest || navigationRequest.nonce <= handledNavNonceRef.current) return
+    if (!navigationRequest.repoId) {
+      handledNavNonceRef.current = navigationRequest.nonce
+      if (navigationRequest.tab) {
+        subTabTouchedRef.current = true
+        setSubTab(navigationRequest.tab)
+      }
+      if (navigationRequest.goalOutcome) {
+        setGoalDraft(navigationRequest.goalOutcome)
+      }
+      return
+    }
+    const repo = repositories.find(r => r.id === navigationRequest.repoId)
+    if (!repo) return
+    handledNavNonceRef.current = navigationRequest.nonce
+    const targetWt = (
+      (navigationRequest.worktreeId
+        ? (repo.worktrees || []).find(w => w.id === navigationRequest.worktreeId)
+        : null)
+      || (repo.worktrees || []).find(w => w.managed && !w.is_main)
+      || repo.worktrees?.[0]
+    )
+    if (targetWt) {
+      selectWorktreeContext(repo.id, targetWt.id)
+    } else {
+      setSelectedRepoId(repo.id)
+      setSelectedWorktreeId('')
+      setExpandedRepos(prev => ({ ...prev, [repo.id]: true }))
+      saveContext(repo.id, '')
+    }
+    if (navigationRequest.tab) {
+      subTabTouchedRef.current = true
+      setSubTab(navigationRequest.tab)
+    }
+    if (navigationRequest.goalOutcome) {
+      setGoalDraft(navigationRequest.goalOutcome)
+    }
+  }, [navigationRequest, repositories, selectWorktreeContext])
 
   const toggleRepo = useCallback((repoId: string) => {
     setExpandedRepos(prev => {
@@ -2420,6 +2542,7 @@ export function SupervisorWorkspace({
 
     setDispatchBusy(true)
     setDispatchError('')
+    setDispatchErrorCode('')
     try {
       let taskId = pending.taskId
       if (!taskId) {
@@ -2476,6 +2599,8 @@ export function SupervisorWorkspace({
 
       void loadContextData(selectedRepo, selectedWorktree, false)
     } catch (err) {
+      const code = (err as { code?: string } | null)?.code || ''
+      setDispatchErrorCode(code === 'executor_check_failed' ? code : '')
       setDispatchError(err instanceof Error ? err.message : '任务派发失败，请点击重试')
     } finally {
       setDispatchBusy(false)
@@ -2502,6 +2627,7 @@ export function SupervisorWorkspace({
     if (!contextKey || cancelBusyTaskId) return
     setCancelBusyTaskId(task.id)
     setDispatchError('')
+    setDispatchErrorCode('')
     try {
       // Show backend-returned actual state (e.g. cancelling or cancelled), NEVER optimistic done
       const updated = await apiCall<SupervisorTask>(
@@ -2552,6 +2678,7 @@ export function SupervisorWorkspace({
 
     setDispatchBusy(true)
     setDispatchError('')
+    setDispatchErrorCode('')
     try {
       const criteria = typeof selectedTask.metadata?.acceptance_criteria === 'string'
         ? selectedTask.metadata.acceptance_criteria.trim()
@@ -2952,6 +3079,8 @@ export function SupervisorWorkspace({
             onRefreshRepositories={() => void refreshRepositories()}
             draftOutcome={goalDraft}
             onDraftOutcomeUsed={handleGoalDraftUsed}
+            onOpenWorkers={onOpenWorkers}
+            workersData={workersData}
           />
         ) : (
           <div className="sup-workbench-split">
@@ -3043,6 +3172,8 @@ export function SupervisorWorkspace({
                     onChangeRole={handleRoleChange}
                     onOpenWorkers={onOpenWorkers}
                     disabled={isReadOnlyWorktree || dispatchBusy}
+                    apiCall={apiCall}
+                    workersData={workersData}
                   />
 
                   {unavailableRoleReasons.length > 0 && (
@@ -3056,6 +3187,11 @@ export function SupervisorWorkspace({
                     <div className="sup-banner sup-banner--error" role="alert">
                       <strong>派发未完成</strong>
                       <span>{dispatchError}</span>
+                      {dispatchErrorCode === 'executor_check_failed' && onOpenWorkers && (
+                        <button type="button" className="sup-role-guidance-link" onClick={onOpenWorkers}>
+                          去执行者页面测试
+                        </button>
+                      )}
                       {currentPending && (
                         <small>已保留请求标识（{currentPending.taskId ? `任务 ${currentPending.taskId}` : `请求 ${currentPending.requestId.slice(0, 8)}`}），重试不会重复创建任务。</small>
                       )}

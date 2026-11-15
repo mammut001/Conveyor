@@ -24,7 +24,7 @@ import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from '.
 import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
 import { mergeJobEvents, streamedText, type JobEvent as EventItem } from './jobEvents'
-import { CONNECTION_LABELS, LockConfirmDialog, SHORTCUT_PREFIX, ShellIcon, VIEW_LABELS, VIEW_SUBTITLES, findVisibleComposer, isTypingTarget, shellErrorText, urlForView, useMediaQuery, viewFromLocation, type ConnectionState, type ShellView } from './ux/shellNav'
+import { CONNECTION_LABELS, LockConfirmDialog, SHORTCUT_PREFIX, ShellIcon, VIEW_DESCRIPTIONS, VIEW_LABELS, VIEW_SUBTITLES, findVisibleComposer, isTypingTarget, shellErrorText, urlForView, useMediaQuery, viewFromLocation, type ConnectionState, type ShellView } from './ux/shellNav'
 import { ChangedFileList, ClampedText, DiffBody, DiffStat, ToolCallCard } from './components/TaskParts'
 import { SetupChecklist } from './components/SetupChecklist'
 import { changesDiffFrom, changesOutcome, describeJobError, durationText, emptyChangesDiff, eventKindLabel, expiryText, groupToolCalls, jobErrorSummary, modeLabel, nodeStatusLabel, nodeTypeLabel, toolDisplayName, type ChangesDiff, type ChangesOutcome, type DiffResponse } from './taskText'
@@ -269,6 +269,7 @@ export default function App() {
   const [screenError, setScreenError] = useState<{ text: string; detail?: string } | null>(null)
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
   const [workersData, setWorkersData] = useState<any>(null)
+  const [checkingExecutor, setCheckingExecutor] = useState(false)
   const [checklistDismissed, setChecklistDismissed] = useState(() => {
     try { return localStorage.getItem('conveyor-onboarding-dismissed') === 'true' } catch { return false }
   })
@@ -287,6 +288,13 @@ export default function App() {
   // 对话: which conversation the panel shows, and the one a sidebar row asked it to open.
   const [chatSessionId, setChatSessionId] = useState('')
   const [chatOpenRequest, setChatOpenRequest] = useState<{ id: string; nonce: number } | null>(null)
+  const [supervisorNavRequest, setSupervisorNavRequest] = useState<{
+    nonce: number
+    repoId: string
+    worktreeId?: string
+    tab?: 'goals' | 'workspace'
+    goalOutcome?: string
+  } | null>(null)
   // A message sent from 对话 right now: checklist step ③ ticks before the next poll.
   const [chatMessageSent, setChatMessageSent] = useState(false)
   const [realtimeState, setRealtimeState] = useState<'connecting' | 'live' | 'reconnecting'>('connecting')
@@ -296,6 +304,10 @@ export default function App() {
   transcriptSessionRef.current = selectedSessionId
   const lastSequence = useRef(0)
   const refreshGen = useRef(0)
+  // The one group of slow extras (/api/nodes, /api/system/status, /api/computer/status,
+  // /api/config/provider, /api/workers) currently in flight: a new poll joins it instead of
+  // firing a second round of the same cold-server requests.
+  const extrasInFlightRef = useRef<Promise<[{ nodes: NodeInfo[] }, SystemStatus, ComputerStatus, any, any] | null> | null>(null)
   const approvalInboxFetchGen = useRef(0)
   const streamRef = useRef<HTMLDivElement>(null)
 
@@ -309,11 +321,16 @@ export default function App() {
   const [contextPref, setContextPref] = useState<'open' | 'closed' | null>(() => {
     try { const stored = localStorage.getItem('conveyor-context-panel'); return stored === 'open' || stored === 'closed' ? stored : null } catch { return null }
   })
+  const [chatContextPref, setChatContextPref] = useState<'open' | 'closed' | null>(() => {
+    try { const stored = localStorage.getItem('conveyor-chat-context-panel'); return stored === 'open' || stored === 'closed' ? stored : null } catch { return null }
+  })
   const [navMenuOpen, setNavMenuOpen] = useState(false)
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false)
   const [syncStale, setSyncStale] = useState(false)
   const [isOnline, setIsOnline] = useState(() => typeof navigator !== 'undefined' ? navigator.onLine : true)
   const [initialLoaded, setInitialLoaded] = useState(false)
+  // 首览清单要看的额外数据（模型配置、执行者）单独加载：没到之前一律算「未知」，不闪错状态。
+  const [extrasLoaded, setExtrasLoaded] = useState(false)
   const [pollFailed, setPollFailed] = useState(false)
   const [notice, setNotice] = useState('')
   const pollAbortRef = useRef<AbortController>(new AbortController())
@@ -360,17 +377,17 @@ export default function App() {
   const navItems = useMemo(() => {
     const items: { view: ShellView; group: 'main' | 'more'; badge?: number; badgeLabel?: string }[] = [
       { view: 'chat', group: 'main' },
-      { view: 'tasks', group: 'main' },
     ]
     if (features?.agent_supervisor) {
       items.push({ view: 'code', group: 'main', badge: goalsWaiting, badgeLabel: goalsWaiting > 0 ? `有 ${goalsWaiting} 个目标在等你回复` : undefined })
     }
     items.push({ view: 'inbox', group: 'main', badge: inboxUnread })
-    if (features?.approval_inbox) items.push({ view: 'approvals', group: 'main', badge: approvalInboxCount })
-    if (features?.long_term_memory || view === 'memory') items.push({ view: 'memory', group: 'main' })
-    if ((features?.teammate ?? true) || view === 'teammate') items.push({ view: 'teammate', group: 'main' })
+    items.push({ view: 'tasks', group: 'more' })
+    if (features?.long_term_memory || view === 'memory') items.push({ view: 'memory', group: 'more' })
+    if ((features?.teammate ?? true) || view === 'teammate') items.push({ view: 'teammate', group: 'more' })
     items.push({ view: 'browser', group: 'more' }, { view: 'secrets', group: 'more' })
     if (features?.workers) items.push({ view: 'workers', group: 'more' })
+    if (features?.approval_inbox) items.push({ view: 'approvals', group: 'more', badge: approvalInboxCount })
     if (features?.skills || view === 'skills') items.push({ view: 'skills', group: 'more' })
     if (features?.workflows || view === 'workflows') items.push({ view: 'workflows', group: 'more' })
     if (features?.mcp || view === 'connectors') items.push({ view: 'connectors', group: 'more' })
@@ -705,14 +722,44 @@ export default function App() {
   const refresh = useCallback(async () => {
     if (!token || isLockedRef.current) return
     const gen = ++refreshGen.current
-    try {
-      const [sessionData, jobData, approvalData, nodeData, systemData, computerData, agentData, providerData, workersPayload] = await Promise.all([
-        api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
-        api<{ approvals: Approval[] }>('/api/approvals'), api<{ nodes: NodeInfo[] }>('/api/nodes'),
-        api<SystemStatus>('/api/system/status'), api<ComputerStatus>('/api/computer/status'),
-        api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
+    // 慢的那五个请求（冷服务器上 /api/workers 会去探安装好的 CLI）绝不拖住解锁和下一次轮询：
+    // 它们和必需品并行发出，各自落自己的状态；失败就默默保持原值。同一个在飞的分组
+    // 不会被第二个轮询重复发起。
+    const startExtras = () => {
+      const inFlight = extrasInFlightRef.current
+      if (inFlight) return inFlight
+      const request = Promise.all([
+        api<{ nodes: NodeInfo[] }>('/api/nodes'),
+        api<SystemStatus>('/api/system/status'),
+        api<ComputerStatus>('/api/computer/status'),
         api<any>('/api/config/provider').catch(() => null),
         api<any>('/api/workers').catch(() => null),
+      ]).catch(() => null)
+      extrasInFlightRef.current = request
+      void request.then(() => { if (extrasInFlightRef.current === request) extrasInFlightRef.current = null })
+      return request
+    }
+    void startExtras().then(payload => {
+      // A newer refresh (or a decision that bumped the generation) started while this one was
+      // in flight. Drop it so a late answer cannot paint over newer data.
+      if (isStale(gen, refreshGen.current) || isLockedRef.current) return
+      if (payload) {
+        const [nodeData, systemData, computerData, providerData, workersPayload] = payload
+        setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData)
+        if (providerData) setProviderConfig(providerData.config || providerData)
+        if (workersPayload) setWorkersData(workersPayload)
+      }
+      // 清单的数据到齐了（或确认拿不到）：在此之前缺失一律算「未知」。
+      setExtrasLoaded(true)
+    }).catch(() => {
+      // Extras never fail the app: the previous value simply stays.
+      if (!isStale(gen, refreshGen.current) && !isLockedRef.current) setExtrasLoaded(true)
+    })
+    try {
+      const [sessionData, jobData, approvalData, agentData] = await Promise.all([
+        api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
+        api<{ approvals: Approval[] }>('/api/approvals'),
+        api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
       ])
       // A newer refresh (or a decision that bumped the generation) started
       // while this one was in flight. Drop it so a late poll cannot restore
@@ -727,14 +774,8 @@ export default function App() {
       setAnySessionHasMessages(sessionData.sessions.some(s => (s.message_count || 0) > 0 || (s.job_count || 0) > 0))
       setChatSessions(chatSessionsOnly(sessionData.sessions))
       setSessions(taskSessions); setJobs(jobData.jobs); setApprovals(approvalData.approvals)
-      setNodes(nodeData.nodes); setSystem(systemData); setComputer(computerData); setAuthenticated(true); setTokenDraft(''); setError('')
+      setAuthenticated(true); setTokenDraft(''); setError('')
       setAgentState(agentData)
-      if (providerData) {
-        setProviderConfig(providerData.config || providerData)
-      }
-      if (workersPayload) {
-        setWorkersData(workersPayload)
-      }
       const pinned = agentData.enabled
         ? (agentData.agents.find(agent => agent.id === (localStorage.getItem('conveyor-agent') || '')) || agentData.agents[0])?.session_id
         : ''
@@ -1293,6 +1334,20 @@ export default function App() {
       w.id === 'pi' && w.installed && w.enabled !== false
     )
   )
+  // The executor checklist step ① tests: prefer the built-in Pi, else the active worker, else
+  // the first installed one. Its last 测试 decides whether ① is honestly done.
+  const chosenWorker: any = (() => {
+    const list = Array.isArray(workersData?.workers) ? workersData.workers.filter((w: any) => w.installed) : []
+    return list.find((w: any) => w.id === 'pi')
+      || list.find((w: any) => w.id === workersData?.active)
+      || list[0]
+      || null
+  })()
+  const chosenExecutorCheck: any = chosenWorker?.last_check ?? null
+  const executorInstalled = Boolean(chosenWorker)
+  const executorTestPassed = chosenExecutorCheck
+    ? chosenExecutorCheck.kind === 'unsupported' || chosenExecutorCheck.ok === true
+    : false
   // Step ③ ticks from data that survives a reload (any session with messages, or a
   // job) plus the message being sent right now, so it never depends on one poll.
   const hasSentFirstMessage = Boolean(
@@ -1302,16 +1357,32 @@ export default function App() {
     (jobs && jobs.length > 0) ||
     (transcript && transcript.length > 0)
   )
-  const hasNoUsableWay = Boolean(initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
-  // ① only asks for work when the 执行者 feature is on; otherwise the owner cannot act on it.
-  const executorStepDone = !workersEnabled || hasEligibleWorker
-  const onboardingStepsOpen = Boolean(hasNoUsableWay || !executorStepDone || !modelConfigured || !hasSentFirstMessage)
+  const hasNoUsableWay = Boolean(extrasLoaded && initialLoaded && !modelConfigured && (!workersEnabled || !hasEligibleWorker))
+  // ① is honest: the chosen executor must be installed AND actually work (or be untestable).
+  // With the 执行者 feature off the owner cannot act, so ① never blocks (today's behaviour).
+  const executorStepDone = !workersEnabled || (executorInstalled && executorTestPassed)
+  const onboardingStepsOpen = Boolean(extrasLoaded && (hasNoUsableWay || !executorStepDone || !modelConfigured || !hasSentFirstMessage))
+
+  // Checklist step ① inline 测试: really call the chosen executor once (up to ~45s) and adopt the
+  // fresh workers payload so the badge / step ticks without a reload.
+  async function runExecutorCheck() {
+    const id = chosenWorker?.id || 'pi'
+    setCheckingExecutor(true)
+    try {
+      const res = await api<any>(`/api/workers/${encodeURIComponent(id)}/check`, { method: 'POST', body: JSON.stringify({}) })
+      if (res && Array.isArray(res.workers)) setWorkersData(res)
+    } catch {
+      // Leave the previous state; the owner can tap 测试 again.
+    } finally {
+      setCheckingExecutor(false)
+    }
+  }
 
   const ONBOARDING_DISMISSED_KEY = 'conveyor-onboarding-dismissed'
   const ONBOARDING_HEALTHY_KEY = 'conveyor-onboarding-healthy'
 
   useEffect(() => {
-    if (!initialLoaded) return
+    if (!initialLoaded || !extrasLoaded) return
     if (hasNoUsableWay) {
       try {
         if (localStorage.getItem(ONBOARDING_HEALTHY_KEY) === 'true') {
@@ -1325,7 +1396,7 @@ export default function App() {
         localStorage.setItem(ONBOARDING_HEALTHY_KEY, 'true')
       } catch { /* ignore */ }
     }
-  }, [hasNoUsableWay, initialLoaded])
+  }, [hasNoUsableWay, initialLoaded, extrasLoaded])
 
   const handleDismissChecklist = useCallback(() => {
     setChecklistDismissed(true)
@@ -1340,7 +1411,9 @@ export default function App() {
   const stepsOpenAtLoadRef = useRef<boolean | null>(null)
   const [checklistFinished, setChecklistFinished] = useState(false)
   useEffect(() => {
-    if (!initialLoaded || checklistDismissed) return
+    // The extras (model config, workers) load after the essentials: wait for them, otherwise
+    // "were the steps open?" would be answered from data that has not arrived yet.
+    if (!initialLoaded || !extrasLoaded || checklistDismissed) return
     // Whether the steps were still open when this page opened: only then is there a
     // completed state worth showing once. A page that opens already finished shows nothing.
     if (stepsOpenAtLoadRef.current === null) stepsOpenAtLoadRef.current = onboardingStepsOpen
@@ -1373,7 +1446,9 @@ export default function App() {
     <SetupChecklist
       workersEnabled={workersEnabled}
       builtinPiInstalled={builtinPiInstalled}
-      hasEligibleWorker={hasEligibleWorker}
+      executorInstalled={executorInstalled}
+      executorCheck={chosenExecutorCheck}
+      checkingExecutor={checkingExecutor}
       modelConfigured={modelConfigured}
       hasSentFirstMessage={hasSentFirstMessage}
       allDone={checklistFinished}
@@ -1382,6 +1457,7 @@ export default function App() {
         setView('workers')
       }}
       onOpenSettings={() => void openSettings()}
+      onRunExecutorCheck={() => void runExecutorCheck()}
       onDismiss={handleDismissChecklist}
     />
   ) : null
@@ -1404,15 +1480,49 @@ export default function App() {
     // Sending from 对话 counts as the first message immediately (step ③ of the checklist).
     onMessageSent: () => setChatMessageSent(true),
     setupChecklist: view === 'chat' ? checklistNode : undefined,
+    // A failed turn whose explanation points at 模型设置 can open that dialog in one tap.
+    onOpenModelSettings: () => void openSettings(),
+    onOpenSupervisorProject: (req) => {
+      if (req.repoId) {
+        try {
+          localStorage.setItem('conveyor-supervisor-context-v1', JSON.stringify({
+            repoId: req.repoId,
+            worktreeId: req.worktreeId || '',
+          }))
+        } catch {
+          // ignore storage unavailability
+        }
+      }
+      setSupervisorNavRequest(prev => ({
+        nonce: Math.max(Date.now(), (prev?.nonce ?? 0) + 1),
+        repoId: req.repoId,
+        worktreeId: req.worktreeId,
+        tab: req.tab,
+        goalOutcome: req.goalOutcome,
+      }))
+      historyModeRef.current = 'push'
+      setView('code')
+    },
+    onOpenWorkers: () => {
+      historyModeRef.current = 'push'
+      setView('workers')
+    },
   }
 
   // Shell values for this render: right panel, connection, navigation groups and header text.
   const contextAvailable = view === 'chat' || view === 'tasks'
-  const contextPanelOpen = contextPref ? contextPref === 'open' : wideViewport
+  const contextPanelOpen = view === 'chat'
+    ? chatContextPref === 'open'
+    : (contextPref ? contextPref === 'open' : wideViewport)
   const contextShown = contextAvailable && contextPanelOpen
   const toggleContextPanel = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (narrowViewport) { drawerOpenerRef.current = event.currentTarget; setSessionsDrawerOpen(false); setContextDrawerOpen(true); return }
     const next = contextPanelOpen ? 'closed' : 'open'
+    if (view === 'chat') {
+      setChatContextPref(next)
+      try { localStorage.setItem('conveyor-chat-context-panel', next) } catch { /* storage unavailable */ }
+      return
+    }
     setContextPref(next)
     try { localStorage.setItem('conveyor-context-panel', next) } catch { /* storage unavailable */ }
   }
@@ -1436,22 +1546,45 @@ export default function App() {
   const errorMessage = error ? shellErrorText(error) : null
   const mainNav = navItems.filter(item => item.group === 'main')
   const moreNav = navItems.filter(item => item.group === 'more')
-  const bottomNav = mainNav.slice(0, 4)
-  const sheetNav = navItems.filter(item => !bottomNav.includes(item))
+  const bottomNav = mainNav
+  const sheetNav = moreNav
+  const activeMoreItem = moreNav.find(item => item.view === view)
+  const moreBadge = moreNav.reduce((sum, item) => sum + (item.badge || 0), 0)
+  const moreBadgeText = moreBadge > 99 ? '99+' : String(moreBadge)
+  const moreButtonLabel = activeMoreItem ? `更多 · ${VIEW_LABELS[activeMoreItem.view]}` : '更多'
   const shortcutLabel = (target: ShellView) => {
     const index = shortcutViewsRef.current.indexOf(target)
     return index >= 0 ? `${SHORTCUT_PREFIX}${index + 1}` : ''
   }
   const navButton = (item: (typeof navItems)[number], inMenu = false) => {
     const shortcut = shortcutLabel(item.view)
-    return <button key={item.view} type="button" className={`shell-nav-item ${view === item.view ? 'active' : ''}`}
+    const titleId = inMenu ? `shell-nav-item-${item.view}-title` : undefined
+    const descId = inMenu ? `shell-nav-item-${item.view}-desc` : undefined
+    return <button key={item.view} type="button"
+      className={`shell-nav-item ${inMenu ? 'shell-nav-item--menu' : ''} ${view === item.view ? 'active' : ''}`}
       aria-current={view === item.view ? 'page' : undefined}
+      aria-labelledby={titleId}
+      aria-describedby={descId}
       title={shortcut ? `${VIEW_LABELS[item.view]}（${shortcut}）` : VIEW_LABELS[item.view]}
       onClick={() => { setView(item.view); setNavMenuOpen(false) }}>
-      {inMenu && <ShellIcon name={item.view} size={16} />}
-      <span>{VIEW_LABELS[item.view]}</span>
-      {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
-      {inMenu && shortcut && <kbd aria-hidden="true">{shortcut}</kbd>}
+      {inMenu ? (
+        <>
+          <span className="shell-nav-menu-icon"><ShellIcon name={item.view} size={16} /></span>
+          <span className="shell-nav-menu-copy">
+            <span className="shell-nav-menu-head">
+              <span id={titleId} className="shell-nav-menu-title">{VIEW_LABELS[item.view]}</span>
+              {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
+              {shortcut && <kbd aria-hidden="true">{shortcut}</kbd>}
+            </span>
+            <span id={descId} className="shell-nav-menu-desc">{VIEW_DESCRIPTIONS[item.view]}</span>
+          </span>
+        </>
+      ) : (
+        <>
+          <span>{VIEW_LABELS[item.view]}</span>
+          {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
+        </>
+      )}
     </button>
   }
   const agentRole = selectedAgent ? [selectedAgent.is_default ? '默认助手' : '助手', agentTag(selectedAgent)].filter(Boolean).join(' · ') : ''
@@ -1471,17 +1604,21 @@ export default function App() {
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>控制台</small></div></div>
       <nav className="shell-nav" aria-label="主导航">
         <div className="shell-nav-group">{mainNav.map(item => navButton(item))}</div>
-        <span className="shell-nav-divider" aria-hidden="true" />
-        <div className="shell-nav-group shell-nav-group--more">{moreNav.map(item => navButton(item))}</div>
-        <div className="shell-nav-more" ref={navMoreRef}>
-          <button type="button" className={`shell-nav-item ${moreNav.some(item => item.view === view) ? 'active' : ''}`}
-            aria-expanded={navMenuOpen} aria-controls="shell-nav-menu" onClick={() => setNavMenuOpen(open => !open)}>
-            <span>更多</span><ShellIcon name="chevron" size={14} />
-          </button>
-          {navMenuOpen && <div className="shell-nav-menu" id="shell-nav-menu" role="group" aria-label="更多页面">
-            {moreNav.map(item => navButton(item, true))}
-          </div>}
-        </div>
+        {moreNav.length > 0 && (
+          <div className="shell-nav-more" ref={navMoreRef}>
+            <button type="button"
+              className={`shell-nav-item ${activeMoreItem ? 'active' : ''}`}
+              aria-current={activeMoreItem ? 'page' : undefined}
+              aria-expanded={navMenuOpen} aria-controls="shell-nav-menu" onClick={() => setNavMenuOpen(open => !open)}>
+              <span>{moreButtonLabel}</span>
+              {moreBadge > 0 && <span className="shell-nav-badge">{moreBadgeText}</span>}
+              <ShellIcon name="chevron" size={14} />
+            </button>
+            {navMenuOpen && <div className="shell-nav-menu" id="shell-nav-menu" role="group" aria-label="更多页面">
+              {moreNav.map(item => navButton(item, true))}
+            </div>}
+          </div>
+        )}
       </nav>
       <div className="top-actions">
         {system?.features?.pwa && <PwaNotifications token={token} />}
@@ -1628,6 +1765,8 @@ export default function App() {
                 active={view === 'code'}
                 coordinatorFallbackName={providerConfig ? `${providerConfig.provider_name} · ${providerConfig.model}` : selectedAgent?.name}
                 onOpenWorkers={workersEnabled ? () => { historyModeRef.current = 'push'; setView('workers') } : undefined}
+                workersData={workersData}
+                navigationRequest={supervisorNavRequest}
               />
             </Suspense>
           )
@@ -1651,8 +1790,8 @@ export default function App() {
 
               {transcriptError && <div className="job-notice task-notice" role="status"><strong>暂时无法更新会话记录</strong><span>已收到的内容会保留。</span><button type="button" onClick={() => void refreshTranscript()}>重试读取</button></div>}
 
-              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} onRetry={question => void sendPrompt(question, false)} />}
-              {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} />}
+              {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} onRetry={question => void sendPrompt(question, false)} onOpenModelSettings={() => void openSettings()} />}
+              {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} onOpenModelSettings={() => void openSettings()} />}
 
               {selectedJob && selectedJob.prompt_preview && selectedJob.state !== 'completed' && !staleTerminalRun && !promptAlreadyInTranscript && (
                 <article className="transcript-message role-user pending-turn">
@@ -2007,19 +2146,6 @@ export default function App() {
           {!nodes.length && <Empty text="没有可用的执行节点" />}
         </ContextSection>
         </>}
-        {(!selectedAgent || agentTab === 'details') && <>
-        <ContextSection title="系统" className="context-section--system">
-          <div className="system-stats">
-            <div title={system?.load_average?.map(n => n.toFixed(2)).join(' / ')}><span>负载</span><strong>{system?.load_average?.[0]?.toFixed(2) ?? '—'}</strong></div>
-            <div><span>可用内存</span><strong>{bytes(system?.memory?.available ?? null)}</strong></div>
-            <div><span>可用磁盘</span><strong>{bytes(system?.disk?.free ?? null)}</strong></div>
-          </div>
-          <div className="system-channels">
-            <span className={system?.channels?.telegram?.configured ? 'on' : ''}>Telegram {system?.channels?.telegram?.configured ? '已配置' : '未配置'}</span>
-            <span className={system?.channels?.feishu?.configured ? 'on' : ''}>飞书 {system?.channels?.feishu?.configured ? '已配置' : '未配置'}</span>
-          </div>
-        </ContextSection>
-        </>}
       </aside>
     </section>
     {mobileUiOn && sessionsDrawerOpen && (
@@ -2036,14 +2162,26 @@ export default function App() {
             <button type="button" className="drawer-close-btn" aria-label="关闭" onClick={() => setMoreSheetOpen(false)}>×</button>
           </div>
           <div className="mobile-sheet-items">
-            {sheetNav.map(item => (
-              <button key={item.view} type="button" className={`mobile-sheet-item ${view === item.view ? 'active' : ''}`}
-                aria-current={view === item.view ? 'page' : undefined}
-                onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
-                <span className="mobile-sheet-label"><ShellIcon name={item.view} size={20} />{VIEW_LABELS[item.view]}</span>
-                {item.badge ? <span className="mobile-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge}</span> : null}
-              </button>
-            ))}
+            {sheetNav.map(item => {
+              const titleId = `mobile-sheet-item-${item.view}-title`
+              const descId = `mobile-sheet-item-${item.view}-desc`
+              return (
+                <button key={item.view} type="button" className={`mobile-sheet-item ${view === item.view ? 'active' : ''}`}
+                  aria-current={view === item.view ? 'page' : undefined}
+                  aria-labelledby={titleId}
+                  aria-describedby={descId}
+                  onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
+                  <span className="mobile-sheet-label">
+                    <ShellIcon name={item.view} size={20} />
+                    <span className="mobile-sheet-copy">
+                      <span id={titleId} className="mobile-sheet-title">{VIEW_LABELS[item.view]}</span>
+                      <span id={descId} className="mobile-sheet-desc">{VIEW_DESCRIPTIONS[item.view]}</span>
+                    </span>
+                  </span>
+                  {item.badge ? <span className="mobile-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge}</span> : null}
+                </button>
+              )
+            })}
           </div>
           <div className="mobile-sheet-items mobile-sheet-system">
             <button type="button" className="mobile-sheet-item" onClick={() => { setMoreSheetOpen(false); void openSettings() }}>
@@ -2071,10 +2209,13 @@ export default function App() {
           </button>
         ))}
         <button type="button" ref={moreButtonRef}
-          className={`mobile-nav-item ${moreSheetOpen || sheetNav.some(item => item.view === view) ? 'active' : ''}`}
+          className={`mobile-nav-item ${moreSheetOpen || activeMoreItem ? 'active' : ''}`}
           aria-haspopup="dialog" aria-expanded={moreSheetOpen}
           onClick={() => setMoreSheetOpen(prev => !prev)}>
-          <span className="mobile-nav-icon"><ShellIcon name="more" size={22} /></span>
+          <span className="mobile-nav-icon" style={{ position: 'relative' }}>
+            <ShellIcon name="more" size={22} />
+            {moreBadge > 0 && <span className="mobile-badge-pill">{moreBadgeText}</span>}
+          </span>
           <span>更多</span>
         </button>
       </nav>
@@ -2089,6 +2230,7 @@ export default function App() {
     />}
     {settingsOpen && <ProviderSettings
       config={providerConfig} loadError={providerConfig ? '' : error}
+      system={system}
       onRetry={() => void openSettings()} onClose={() => setSettingsOpen(false)}
       onSave={async payload => {
         const result = await api<{ config: ProviderConfig }>('/api/config/provider', { method: 'POST', body: JSON.stringify(payload) })
@@ -2354,8 +2496,8 @@ const PROVIDER_PRESETS = [
   },
 ] as const
 
-function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
-  config: ProviderConfig | null; loadError: string; onClose: () => void; onRetry: () => void
+function ProviderSettings({ config, loadError, system, onClose, onRetry, onSave }: {
+  config: ProviderConfig | null; loadError: string; system: SystemStatus | null; onClose: () => void; onRetry: () => void
   onSave: (payload: Record<string, string>) => Promise<void>
 }) {
   const [draft, setDraft] = useState<ProviderDraft>(() => providerDraft(config))
@@ -2707,6 +2849,20 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
             <span>浏览器拿不到完整密钥。保存后，从下一个新任务开始生效。</span>
             <small>设置保存在服务器上。</small>
           </div>
+          {system && (
+            <section className="server-status-section" aria-labelledby="provider-server-title">
+              <h3 id="provider-server-title">这台服务器</h3>
+              <div className="system-stats">
+                <div title={system.load_average?.map(n => n.toFixed(2)).join(' / ')}><span>负载</span><strong>{system.load_average?.[0]?.toFixed(2) ?? '—'}</strong></div>
+                <div><span>可用内存</span><strong>{bytes(system.memory?.available ?? null)}</strong></div>
+                <div><span>可用磁盘</span><strong>{bytes(system.disk?.free ?? null)}</strong></div>
+              </div>
+              <div className="system-channels">
+                <span className={system.channels?.telegram?.configured ? 'on' : ''}>Telegram {system.channels?.telegram?.configured ? '已配置' : '未配置'}</span>
+                <span className={system.channels?.feishu?.configured ? 'on' : ''}>飞书 {system.channels?.feishu?.configured ? '已配置' : '未配置'}</span>
+              </div>
+            </section>
+          )}
         </div>
         {confirmDiscard ? (
           <footer className="settings-discard-confirm" role="group" aria-label="确认放弃修改">

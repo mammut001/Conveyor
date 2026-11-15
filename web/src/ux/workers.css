@@ -29,8 +29,8 @@
 .worker-card {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 18px 20px;
+  gap: 10px;
+  padding: 14px 18px;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   background: #fff;
@@ -51,7 +51,7 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: 8px 12px;
   min-width: 0;
 }
 
@@ -61,7 +61,7 @@
   flex-wrap: wrap;
   gap: 8px 10px;
   min-width: 0;
-  flex: 1 1 320px;
+  flex: 1 1 220px;
 }
 
 .worker-priority {
@@ -120,7 +120,7 @@
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px;
+  gap: 8px;
   margin-left: auto;
 }
 
@@ -210,6 +210,41 @@
   gap: 10px;
   padding-top: 10px;
   border-top: 1px solid #f0f1f3;
+}
+
+.worker-check-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.worker-check-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.worker-check-ok {
+  color: #15803d;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.worker-check-failed {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.worker-check-failed-msg {
+  color: #b42318;
+  font-size: 12px;
+}
+
+.worker-check-none {
+  margin-top: 0;
 }
 
 .worker-command-box,

@@ -11,6 +11,7 @@ import dataclasses
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -234,21 +235,15 @@ class SupervisorGoalTests(unittest.TestCase):
 
     def _set_task_state(self, task_id: str, state: str, stage: str = "") -> None:
         if state == "completed":
-            # `transition()` demands a passing acceptance whose sha/fingerprint match
-            # the live worktree target, so feed it the real identity.
             identity = ags.target_identity(self.wt_path)
-            with patch.object(
-                ags,
-                "effective_acceptance",
-                return_value={
-                    "passed": True,
-                    "sha": identity["sha"],
-                    "fingerprint": identity["fingerprint"],
-                    "evidence_source": "manual_or_direct",
-                    "issues": [],
-                },
-            ):
-                ags.transition(self.settings, task_id, "completed", stage=stage or "completed")
+            ags.record_acceptance(self.settings, task_id, sha=identity["sha"], passed=True,
+                                  fingerprint=identity["fingerprint"],
+                                  evidence_source="operator_validation+independent_review",
+                                  executed_checks=[{"passed": True, "execution_id": "test-check",
+                                                    "target_sha": identity["sha"],
+                                                    "target_fingerprint": identity["fingerprint"]}],
+                                  provenance_verified=True)
+            ags.transition(self.settings, task_id, "completed", stage=stage or "completed")
             return
         ags.transition(self.settings, task_id, state, stage=stage or state)
 
@@ -657,6 +652,174 @@ class SupervisorGoalTests(unittest.TestCase):
         self.assertEqual(detail["state"], "stopped")
         self.assertIn("取消", detail["stop_reason"])
 
+    def test_changed_workspace_cannot_be_marked_achieved(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "completed")
+
+        def mutate_during_evaluation(_prompt: str) -> str:
+            (Path(self.wt_path) / "new_change.txt").write_text("unvalidated")
+            return json.dumps({"decision": "achieved", "reason": "done", "summary": "done"})
+
+        self.responder = mutate_during_evaluation
+        self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertIn("验收已失效", detail["iterations"][0]["decision_reason"])
+        self.assertTrue(detail["iterations"][1]["task_id"])
+        self.assertIn("重新运行", detail["iterations"][1]["prompt"])
+        self.assertIn("验收已失效", goals._task_evidence_excerpt(self.settings, task_id))
+
+    def test_unverified_historical_acceptance_cannot_achieve_goal(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        identity = ags.target_identity(self.wt_path)
+        ags.record_acceptance(self.settings, task_id, sha=identity["sha"], passed=True,
+                              fingerprint=identity["fingerprint"])
+        ags.transition(self.settings, task_id, "completed")
+        self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertTrue(detail["iterations"][1]["task_id"])
+
+    def test_replayed_achieved_decision_rechecks_workspace(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "completed")
+        record = goals._record_decision
+
+        def record_then_crash(*args: Any, **kwargs: Any) -> None:
+            record(*args, **kwargs)
+            raise RuntimeError("simulated crash after decision")
+
+        with patch.object(goals, "_record_decision", side_effect=record_then_crash):
+            self._advance()
+        self.assertEqual(self._goal(goal["id"])["iterations"][0]["decision"], "achieved")
+        (Path(self.wt_path) / "new_change.txt").write_text("unvalidated")
+        self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertTrue(detail["iterations"][1]["task_id"])
+
+    def test_workspace_change_after_recording_decision_triggers_revalidation(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "completed")
+        record = goals._record_decision
+
+        def record_then_change(*args: Any, **kwargs: Any) -> None:
+            record(*args, **kwargs)
+            if kwargs.get("decision") == "achieved":
+                (Path(self.wt_path) / "late_change.txt").write_text("not validated")
+
+        with patch.object(goals, "_record_decision", side_effect=record_then_change):
+            self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertTrue(detail["iterations"][1]["task_id"])
+
+    def test_replaying_achieved_decision_with_missing_task_fails_closed(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "completed")
+        goals._record_decision(self.settings, goal["id"], 1, decision="achieved",
+                               reason="done", task_state="completed")
+        conn = ags._connect(self.settings)
+        try:
+            conn.execute("DELETE FROM supervisor_tasks WHERE id = ?", (task_id,))
+            conn.commit()
+        finally:
+            conn.close()
+        self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "failed")
+        self.assertIn("缺失", detail["stop_reason"])
+        self.assertEqual(len(detail["iterations"]), 1)
+
+    def test_interrupted_task_continues_without_evaluator_and_preserves_work(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        partial = Path(self.wt_path) / "partial.txt"
+        partial.write_text("unfinished work")
+        self._set_task_state(task_id, "interrupted")
+        with patch.object(self.fake, "run", side_effect=AssertionError("evaluator must not run")):
+            self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(len(detail["iterations"]), 2)
+        self.assertEqual(detail["iterations"][0]["task_final_state"], "interrupted")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertTrue(detail["iterations"][1]["task_id"])
+        self.assertNotEqual(detail["iterations"][1]["task_id"], task_id)
+        self.assertIn("现有改动", detail["iterations"][1]["prompt"])
+        self.assertEqual(partial.read_text(), "unfinished work")
+
+    def test_interrupted_task_with_uncertain_writer_waits_for_user(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        writer = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+        def cleanup_writer() -> None:
+            if writer.poll() is None:
+                writer.kill()
+            writer.wait(timeout=5)
+        self.addCleanup(cleanup_writer)
+        ags.acquire_worktree_lock(self.settings, self.wt_path, task_id)
+        ags.record_lock_writer_pgid(self.settings, task_id, writer.pid, pid=writer.pid)
+        self._set_task_state(task_id, "interrupted")
+        self.assertFalse(ags.lock_release_safe(self.settings, self.wt_path, task_id))
+        with patch.object(self.fake, "run", side_effect=AssertionError("evaluator must not run")):
+            self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "waiting_user")
+        self.assertEqual(len(detail["iterations"]), 1)
+        self.assertIn("无法确认", detail["question"])
+        self.assertIsNone(writer.poll(), "recovery must not kill an unverified writer")
+
+    def test_interrupted_task_respects_iteration_limit(self) -> None:
+        goal = self._create_goal(max_iterations=1)
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "interrupted")
+        self._advance()
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "exhausted")
+        self.assertEqual(len(detail["iterations"]), 1)
+
+    def test_interrupted_recovery_replays_recorded_decision_after_crash(self) -> None:
+        goal = self._create_goal()
+        self._advance()
+        task_id = self._current_task_id(goal["id"])
+        self._set_task_state(task_id, "interrupted")
+        record = goals._record_decision
+
+        def record_then_crash(*args: Any, **kwargs: Any) -> None:
+            record(*args, **kwargs)
+            raise RuntimeError("simulated crash after recording recovery decision")
+
+        with patch.object(goals, "_record_decision", side_effect=record_then_crash):
+            self._advance()
+        after_crash = self._goal(goal["id"])
+        self.assertEqual(after_crash["iterations"][0]["decision"], "continue")
+        self.assertEqual(len(after_crash["iterations"]), 1)
+        self._advance()
+        recovered = self._goal(goal["id"])
+        self.assertEqual(recovered["state"], "running")
+        self.assertEqual(len(recovered["iterations"]), 2)
+        self.assertTrue(recovered["iterations"][1]["task_id"])
+        self._advance()
+        self.assertEqual(len(self._goal(goal["id"])["iterations"]), 2)
+
     def test_evaluation_is_idempotent(self) -> None:
         goal = self._create_goal()
         self._advance()
@@ -715,7 +878,7 @@ class SupervisorGoalTests(unittest.TestCase):
 
     def test_worker_loop_keeps_claiming_while_goal_evaluator_is_blocked(self) -> None:
         entered = threading.Event()
-        release = asyncio.Event()
+        release: asyncio.Event
 
         async def _blocking_run(
             *,
@@ -749,6 +912,13 @@ class SupervisorGoalTests(unittest.TestCase):
         loop = asyncio.new_event_loop()
         loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
         loop_thread.start()
+
+        async def _new_release_event() -> asyncio.Event:
+            return asyncio.Event()
+
+        # Bind the event to the worker loop, including on Python 3.9 where
+        # constructing Event on the main thread requires a current loop.
+        release = asyncio.run_coroutine_threadsafe(_new_release_event(), loop).result(timeout=5)
 
         worker = svc.SupervisorWorkerManager(loop)
         claim_calls: list[float] = []

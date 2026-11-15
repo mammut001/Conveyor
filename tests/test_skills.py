@@ -880,17 +880,40 @@ class TestSkillsUiReachable(unittest.TestCase):
                 self.assertIs(status["features"]["skills"], flag)
 
     def test_skills_tab_in_app_tsx(self) -> None:
-        app = (Path(__file__).resolve().parents[1] / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
-        # One ordered primary navigation (top bar, phone bottom bar and Alt+number share it):
-        # 对话, 任务, 收件箱 first; skills only while its feature flag is on.
+        root = Path(__file__).resolve().parents[1]
+        app = (root / "web" / "src" / "App.tsx").read_text(encoding="utf-8")
+        shell_nav = (root / "web" / "src" / "ux" / "shellNav.tsx").read_text(encoding="utf-8")
+        # One ordered navigation list: main bar holds 对话, 项目, 收件箱;
+        # moved pages (including skills, behind its feature flag) live in 更多;
+        # desktop (mainNav/moreNav) and phone (bottomNav/sheetNav) render from it.
         nav = app[app.index("const navItems = useMemo"):]
         nav = nav[: nav.index("return items")]
-        self.assertLess(nav.index("view: 'chat'"), nav.index("view: 'tasks'"))
-        self.assertLess(nav.index("view: 'tasks'"), nav.index("view: 'inbox'"))
-        self.assertLess(nav.index("view: 'inbox'"), nav.index("view: 'skills'"))
-        self.assertIn("if (features?.skills || view === 'skills') items.push({ view: 'skills'", nav)
+        self.assertLess(nav.index("view: 'chat', group: 'main'"), nav.index("view: 'code', group: 'main'"))
+        self.assertLess(nav.index("view: 'code', group: 'main'"), nav.index("view: 'inbox', group: 'main'"))
+        for view_name, label in (
+            ("chat", "对话"),
+            ("code", "项目"),
+            ("inbox", "收件箱"),
+            ("tasks", "任务"),
+            ("memory", "记忆"),
+            ("teammate", "值守"),
+            ("browser", "网站授权"),
+            ("secrets", "密钥"),
+            ("workers", "执行者"),
+            ("skills", "技能"),
+        ):
+            self.assertIn(f"{view_name}: '{label}'", shell_nav)
+        for moved in ("tasks", "memory", "teammate", "browser", "secrets", "workers", "skills"):
+            self.assertIn(f"view: '{moved}', group: 'more'", nav)
+        self.assertIn("if (features?.skills || view === 'skills') items.push({ view: 'skills', group: 'more' })", nav)
+        self.assertIn("const mainNav = navItems.filter(item => item.group === 'main')", app)
+        self.assertIn("const moreNav = navItems.filter(item => item.group === 'more')", app)
+        self.assertIn("const bottomNav = mainNav", app)
+        self.assertIn("const sheetNav = moreNav", app)
         self.assertIn("mainNav.map(item => navButton(item))", app)
+        self.assertIn("moreNav.map(item => navButton(item, true))", app)
         self.assertIn("bottomNav.map(item =>", app)
+        self.assertIn("sheetNav.map(item =>", app)
 
 
 if __name__ == "__main__":

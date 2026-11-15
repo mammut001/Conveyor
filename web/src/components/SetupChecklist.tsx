@@ -1,31 +1,54 @@
+/** The subset of the chosen executor's last 测试 the checklist needs. */
+export type SetupExecutorCheck = {
+  ok: boolean | null
+  kind?: string
+  message?: string
+} | null
+
 export interface SetupChecklistProps {
   workersEnabled: boolean
   /** The built-in Pi is installed: it needs a model in 模型设置, never a login (QA N28). */
   builtinPiInstalled?: boolean
-  hasEligibleWorker: boolean
+  /** The chosen executor is installed (so a 测试 can be run against it). */
+  executorInstalled?: boolean
+  /** The chosen executor's last 测试 result (null = never tested). */
+  executorCheck?: SetupExecutorCheck
+  /** A 测试 is running right now. */
+  checkingExecutor?: boolean
   modelConfigured: boolean
   hasSentFirstMessage: boolean
   /** Every step just finished in this page: the card says so once before it goes away. */
   allDone?: boolean
   onNavigateWorkers: () => void
   onOpenSettings: () => void
+  onRunExecutorCheck?: () => void
   onDismiss: () => void
 }
 
 export function SetupChecklist({
   workersEnabled,
   builtinPiInstalled = false,
-  hasEligibleWorker,
+  executorInstalled = false,
+  executorCheck = null,
+  checkingExecutor = false,
   modelConfigured,
   hasSentFirstMessage,
   allDone = false,
   onNavigateWorkers,
   onOpenSettings,
+  onRunExecutorCheck,
   onDismiss,
 }: SetupChecklistProps) {
-  // ① asks for an executor only when the 执行者 feature is on; with it off the owner
-  // cannot act on the step, so it does not keep the checklist open.
-  const step1Done = !workersEnabled || Boolean(hasEligibleWorker)
+  // ① is honest: the chosen executor must be installed AND actually work. "Installed" alone is
+  // not enough (the executor may have a bad API key). An executor that cannot be tested at all
+  // (kind: unsupported) counts as done. With the 执行者 feature off the owner cannot act, so it
+  // does not keep the checklist open (today's behaviour).
+  const executorTestPassed = executorCheck
+    ? executorCheck.kind === 'unsupported' || executorCheck.ok === true
+    : false
+  const step1Done = !workersEnabled || (Boolean(executorInstalled) && executorTestPassed)
+  const step1Testable = workersEnabled && Boolean(executorInstalled) && !step1Done
+  const step1Failed = Boolean(executorCheck) && executorCheck!.ok === false
   const step2Done = Boolean(modelConfigured)
   const step3Done = Boolean(hasSentFirstMessage)
   const finished = allDone || (step1Done && step2Done && step3Done)
@@ -72,6 +95,21 @@ export function SetupChecklist({
                 {step1Label}
               </a>
               <span className="setup-checklist-muted">提问不需要执行者；改代码需要</span>
+              {step1Testable && onRunExecutorCheck && (
+                <span className="setup-checklist-check">
+                  <button
+                    type="button"
+                    className="setup-checklist-test-btn"
+                    disabled={checkingExecutor}
+                    onClick={onRunExecutorCheck}
+                  >
+                    {checkingExecutor ? '正在测试…' : '测试'}
+                  </button>
+                  {step1Failed && executorCheck?.message && (
+                    <span className="setup-checklist-check-error" role="alert">{executorCheck.message}</span>
+                  )}
+                </span>
+              )}
               </div>
             ) : (
               <div className="setup-checklist-text-wrap">

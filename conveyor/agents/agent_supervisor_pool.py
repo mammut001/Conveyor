@@ -43,8 +43,9 @@ def _worker_model(worker: dict[str, Any]) -> str | None:
     """The worker's own saved model only; Supervisor role models never reach pool workers.
 
     Pi chooses its provider and model via resolve_pi_provider (CONVEYOR_PI_* >
-    saved 模型设置 > Pi default), whose bridged models.json only registers the
-    saved 模型设置 model, so a pool worker model is never passed to Pi.
+    saved 模型设置 > chat-model bridge > Pi default), whose bridged models.json
+    only registers the resolved model, so a pool worker model is never passed
+    to Pi.
     """
     if worker.get("id") == "pi":
         return None

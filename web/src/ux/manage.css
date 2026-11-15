@@ -619,6 +619,60 @@
   font-size: 12px;
   font-weight: 500;
 }
+.primary-interface .provider-settings .server-status-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid #eaecf0;
+}
+.primary-interface .provider-settings .server-status-section h3 {
+  margin: 0;
+  color: #475467;
+  font-size: 13px;
+  font-weight: 600;
+}
+.primary-interface .provider-settings .system-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.primary-interface .provider-settings .system-stats > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+.primary-interface .provider-settings .system-stats span { color: #6b7280; font-size: 12px; white-space: nowrap; }
+.primary-interface .provider-settings .system-stats strong {
+  overflow: hidden;
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.primary-interface .provider-settings .system-channels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  color: #6b7280;
+  font-size: 12px;
+}
+.primary-interface .provider-settings .system-channels span::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #d0d5dd;
+  vertical-align: 1px;
+}
+.primary-interface .provider-settings .system-channels span.on { color: #1f2328; }
+.primary-interface .provider-settings .system-channels span.on::before { background: #15803d; }
 
 /* Phones: dialogs become full-screen sheets with a fixed header and footer. */
 @media (max-width: 620px) {

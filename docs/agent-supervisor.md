@@ -125,7 +125,7 @@ AGY read roles use a session-scoped permission deny profile; these tool permissi
 - Rotation happens only after a quota failure (quota wording, or a "resets in" reset time). The failed worker is cooled until the reported reset, or for 45 minutes when none is parsed. Any other failure ends the call without rotating.
 - An implementer that has already changed its worktree is not re-run on another worker.
 - Each attempt is a separate execution record with its own executor and model. The web console shows a switch note between a failed attempt and the next one.
-- CLI workers (`claude-code`, `agy`, `cmd`) run with their own saved model (`/api/workers/<id>/model`). Pi resolves its provider and model via `resolve_pi_provider` (`CONVEYOR_PI_*` > saved 模型设置 > Pi default), so a pool worker model is never passed to Pi. The Supervisor role model is never passed to pool workers.
+- CLI workers (`claude-code`, `agy`, `cmd`) run with their own saved model (`/api/workers/<id>/model`). Pi resolves its provider and model via `resolve_pi_provider` (`CONVEYOR_PI_*` > saved 模型设置 > chat-model bridge > Pi default), so a pool worker model is never passed to Pi. The Supervisor role model is never passed to pool workers.
 - Cooling is shared with the chat pool (`runner/pooled.py`). If every candidate hits a quota, the error starts with "执行者池里的执行者额度都用完了：".
 - Usage readers live in `conveyor/agents/worker_usage.py`. Antigravity usage needs a running local Antigravity language server; without one, the pool relies on quota errors alone. See also the [worker pool notes](workers.md).
 - `scripts/supervisor_pool_smoke.py` runs the real flow with fake `claude`, `agy` and `pi` binaries and stubbed detection.

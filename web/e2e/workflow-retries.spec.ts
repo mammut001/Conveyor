@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openPage } from './helpers'
 
 type Step = { ordinal: number; kind: string; label: string; state: string; attempts: number }
 type Workflow = { id: string; title: string; state: string; revision: number; updated_at: number; steps: Step[] }
@@ -94,7 +95,7 @@ async function openWorkflows(page: Page) {
   await page.goto('/')
   await page.getByLabel('访问令牌').fill('pr107-browser-test-token-not-a-secret-001')
   await page.getByRole('button', { name: '解锁', exact: true }).click()
-  await page.getByRole('button', { name: '工作流', exact: true }).click()
+  await openPage(page, '工作流')
   await expect(page.getByText('Durable Workflows · checkpoint preview')).toBeVisible()
 }
 
@@ -127,7 +128,7 @@ test('lost action response persists pending ID across reload and never advances 
   expect(fixture.workflows[0].revision).toBe(1)
 
   await page.reload()
-  await page.getByRole('button', { name: '工作流', exact: true }).click()
+  await openPage(page, '工作流')
   await expect(page.getByRole('button', { name: 'Retry exactly the same request' })).toBeVisible()
   await page.getByRole('button', { name: 'Retry exactly the same request' }).click()
   await expect(page.getByRole('button', { name: 'Mark step complete' })).toBeVisible()

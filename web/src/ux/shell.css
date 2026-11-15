@@ -140,7 +140,7 @@
 }
 .shell-nav-more {
   position: relative;
-  display: none;
+  display: block;
 }
 .shell-nav-more > .shell-nav-item .shell-icon {
   margin-right: -4px;
@@ -153,29 +153,74 @@
   z-index: 40;
   display: grid;
   gap: 2px;
-  min-width: 190px;
+  width: min(320px, calc(100vw - 24px));
+  max-height: calc(100vh - 80px);
+  overflow-y: auto;
   padding: 6px;
   border: 1px solid #e5e7eb;
   border-radius: 10px;
   background: #fff;
   box-shadow: 0 12px 32px rgba(17, 24, 39, .12);
 }
-.shell-nav-menu .shell-nav-item {
+.shell-nav-menu .shell-nav-item--menu {
+  align-items: flex-start;
   justify-content: flex-start;
+  gap: 10px;
   width: 100%;
-  height: 36px;
-  padding: 0 10px;
+  height: auto;
+  min-height: 44px;
+  padding: 8px 10px;
   color: #344054;
+  text-align: left;
+  white-space: normal;
+}
+.shell-nav-menu-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  margin-top: 2px;
+  color: #6b7280;
+}
+.shell-nav-menu .shell-nav-item--menu.active .shell-nav-menu-icon {
+  color: currentColor;
+}
+.shell-nav-menu-copy {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+.shell-nav-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.shell-nav-menu-title {
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.shell-nav-menu .shell-nav-item--menu.active .shell-nav-menu-title {
+  font-weight: 600;
+}
+.shell-nav-menu-desc {
+  color: #6b7280;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.4;
 }
 .shell-nav-menu .shell-nav-item.active {
   color: #a94c34;
 }
 .shell-nav-menu kbd {
   margin-left: auto;
-  padding-left: 16px;
+  padding-left: 12px;
   color: #9ca3af;
   font-family: inherit;
   font-size: 12px;
+  font-weight: 400;
 }
 
 /* Right side: honest connection state, queue, 设置, and a quiet 锁定. */
@@ -524,20 +569,11 @@
 }
 .shell-button--danger:hover { background: #fef3f2; }
 
-/* Narrow desktop: labels get tighter; the rarely used pages fold into 更多 only when
-   they would not fit (more than two of them, or six main pages on a small screen).
-   With the deployed flags 网站授权 and 密钥 stay one click away at every desktop width. */
-@media (max-width: 1179px) {
-  .shell-nav:has(.shell-nav-group--more > :nth-child(3)) .shell-nav-group--more { display: none; }
-  .shell-nav:has(.shell-nav-group--more > :nth-child(3)) .shell-nav-more { display: block; }
-}
+/* Narrow desktop: tighten topbar labels and collapse button text cleanly. */
 @media (max-width: 1000px) {
-  .shell-nav:has(.shell-nav-group:first-child > :nth-child(6)) .shell-nav-group--more { display: none; }
-  .shell-nav:has(.shell-nav-group:first-child > :nth-child(6)) .shell-nav-more { display: block; }
   .primary-interface .topbar { gap: 8px; padding: 0 12px; }
   .primary-interface .topbar .brand small { display: none; }
   .shell-nav-item { padding: 0 10px; }
-  .shell-nav-divider { margin: 0 4px; }
   .primary-interface .top-status .top-status-running { display: none; }
   .primary-interface .topbar .settings-button,
   .shell-lock-button { width: 34px; padding: 0; justify-content: center; }
@@ -870,9 +906,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
     width: 100%;
     min-height: 48px;
-    padding: 0 12px;
+    padding: 8px 12px;
     border: 0;
     border-radius: 10px;
     background: transparent;
@@ -888,10 +925,31 @@
   }
   .mobile-sheet-label {
     display: inline-flex;
-    align-items: center;
+    align-items: flex-start;
+    flex: 1 1 auto;
+    min-width: 0;
     gap: 12px;
   }
-  .mobile-sheet-label .shell-icon { color: #6b7280; }
+  .mobile-sheet-label .shell-icon { color: #6b7280; margin-top: 2px; flex: none; }
+  .mobile-sheet-copy {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+  .mobile-sheet-title {
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.3;
+  }
+  .mobile-sheet-item.active .mobile-sheet-title {
+    font-weight: 600;
+  }
+  .mobile-sheet-desc {
+    color: #6b7280;
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 1.4;
+  }
   .mobile-sheet-item.active .mobile-sheet-label .shell-icon { color: currentColor; }
   .primary-interface .app-shell.mobile-ui .mobile-badge {
     padding: 2px 7px;

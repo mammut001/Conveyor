@@ -144,6 +144,26 @@ export function looksLikeRawError(text: string): boolean {
   return /Traceback \(most recent call last\)/.test(value) && !value.includes('```')
 }
 
+// A failed run's stored text is `<Chinese explanation>\n原始信息：<raw provider text>`
+// (runner/pi_agent.py builds it that way). The owner only needs the explanation; the raw
+// provider text (a 401 JSON blob, a traceback…) stays behind a collapsed 技术细节.
+const FAILURE_MARKER = '\n原始信息：'
+
+/** Split a failed run's text into the owner-facing explanation and the raw provider text.
+ * A leading `[error] ` / `出错了：` is dropped; the raw part after `\n原始信息：` is separated. */
+export function splitFailureText(text: string): { explanation: string; raw: string } {
+  let value = (text || '').trim()
+  value = value.replace(/^\[error\]\s*/i, '').replace(/^出错了：\s*/, '').trim()
+  const idx = value.indexOf(FAILURE_MARKER)
+  if (idx >= 0) {
+    return {
+      explanation: value.slice(0, idx).trim(),
+      raw: value.slice(idx + FAILURE_MARKER.length).trim(),
+    }
+  }
+  return { explanation: value, raw: '' }
+}
+
 const DEEP_HINT = /\s*(?:发\s*\/deep\s*让\s*Codex\s*深入查证|想更深入地查证，可以让执行者再查一遍)。?\s*$/
 
 /** The backend closes some replies with a "dig deeper" line the web owner cannot act on; it is dropped here. */

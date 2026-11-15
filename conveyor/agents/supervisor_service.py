@@ -2566,6 +2566,9 @@ class SupervisorWorkerManager:
             try:
                 if self._settings is not None and is_enabled(self._settings):
                     ags.recover_on_startup(self._settings)
+                    from conveyor.agents.supervisor_goals import recover_on_startup as recover_goals_on_startup
+
+                    recover_goals_on_startup(self._server, self._settings)
             except Exception:
                 log.exception("supervisor startup recovery failed")
 

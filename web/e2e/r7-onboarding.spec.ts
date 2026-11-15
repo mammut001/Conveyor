@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openPage } from './helpers'
 
 // QA r7 onboarding fixes (frontend):
 //  N17  任务 never lands on a supervisor worktree session; if one is opened anyway the composer
@@ -157,6 +158,8 @@ async function install(page: Page, options: Options = {}) {
           auth: workerReady ? 'ok' : 'needs_login', login_command: '', install_command: null,
           install_supported: false, runnable: true, enabled: true, priority: 0,
           quota: { state: 'available', reset_at: null, reason: null },
+          // A ready Pi has passed its executor check, so checklist step ① is honestly done.
+          last_check: workerReady ? { ok: true, worker_id: 'pi', provider: 'local', model: 'fake-model', latency_ms: 120, kind: 'chat', message: '可以用', checked_at: new Date().toISOString() } : null,
         }],
       })
     }
@@ -231,7 +234,7 @@ test('N17b: opening a worktree session on 任务 swaps the composer for where to
   await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '项目' })).toHaveAttribute('aria-current', 'page')
 
   // 新建会话 gives a fresh composer back.
-  await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '任务' }).click()
+  await openPage(page, '任务')
   await expect(page.getByText(READ_ONLY_LINE)).toBeVisible()
   await page.locator('.task-composer--notice').getByRole('button', { name: '新建会话' }).click()
   await expect(page.getByLabel('任务内容')).toBeVisible()

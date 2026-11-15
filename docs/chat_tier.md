@@ -38,6 +38,11 @@ Unset chat values fall back to `MINIMAX_BASE_URL` / `MINIMAX_API_KEY` /
 behavior is exactly the previous one. Any chat failure (network, timeout,
 HTTP error, empty answer) falls back to Codex.
 
+The same three values are also the built-in Pi executor's model: with nothing
+`CONVEYOR_PI_*` configured, Pi runs this endpoint, this model and this key as
+one provider (`conveyor-chat` in its generated `models.json`) — see
+`docs/pi_backend.md`. Setting any `CONVEYOR_PI_*` value takes that back.
+
 ### Reasoning models and the token budget
 
 Reasoning models (StepFun `step-3.7-flash`, and any endpoint that reports

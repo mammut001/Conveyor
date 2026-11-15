@@ -51,6 +51,21 @@ export type Worker = {
   usage?: WorkerUsage
   threshold_percent?: number
   over_threshold?: boolean
+  /** Last 测试 result: null = never tested, ok:null+kind:unsupported = cannot be tested. */
+  last_check?: WorkerCheck | null
+}
+
+/** Result of POST /api/workers/<id>/check: does this executor actually work right now. */
+export type WorkerCheck = {
+  ok: boolean | null
+  worker_id: string
+  provider: string | null
+  model: string | null
+  latency_ms: number | null
+  kind: string
+  message: string
+  detail?: string | null
+  checked_at: string | null
 }
 
 export type WorkersPayload = {
@@ -109,6 +124,20 @@ function formatAgo(at: number | null): string {
   const hours = Math.round(minutes / 60)
   if (hours < 24) return `${hours} 小时前更新`
   return `${Math.round(hours / 24)} 天前更新`
+}
+
+/** "5 分钟前" style, for the 测试 result line (no "更新" suffix).
+ * `checked_at` arrives from the backend as an ISO 8601 string (e.g. "2026-11-15T16:54:10.613788+00:00"). */
+function formatCheckAgo(at: string | null): string {
+  if (!at) return ''
+  const ms = Date.parse(at)
+  if (Number.isNaN(ms)) return ''
+  const minutes = Math.round((Date.now() - ms) / 60000)
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  return `${Math.round(hours / 24)} 天前`
 }
 
 function formatLogTime(at: number): string {
@@ -341,6 +370,7 @@ export function WorkersPanel({ token }: { token: string }) {
   const [actionProblem, setActionProblem] = useState<Problem | null>(null)
   const [notice, setNotice] = useState('')
   const [detecting, setDetecting] = useState(false)
+  const [checkingId, setCheckingId] = useState('')
   const [refreshingUsage, setRefreshingUsage] = useState(false)
   const [savingOrder, setSavingOrder] = useState(false)
   const [orderDirty, setOrderDirtyState] = useState(false)
@@ -363,9 +393,12 @@ export function WorkersPanel({ token }: { token: string }) {
 
   const dirtyRef = useRef(false)
   const dragRef = useRef<string | null>(null)
+  const dragStartYRef = useRef(0)
+  const dragMovedRef = useRef(false)
   const lastYRef = useRef(0)
   const scrollerRef = useRef<HTMLElement | null>(null)
   const rafRef = useRef(0)
+  const windowDragCleanupRef = useRef<(() => void) | null>(null)
   const cardRefs = useRef(new Map<string, HTMLLIElement>())
   const workersRef = useRef<Worker[]>([])
   workersRef.current = workers
@@ -521,6 +554,26 @@ export function WorkersPanel({ token }: { token: string }) {
     }
   }
 
+  // 测试：真的发一次请求，看这个执行者现在能不能用。返回最新列表，页面直接从里面更新。
+  async function runCheck(workerId: string) {
+    setCheckingId(workerId)
+    setActionProblem(null)
+    try {
+      const res = await call(`/api/workers/${encodeURIComponent(workerId)}/check`, 'POST', {})
+      if (!res.ok) {
+        setActionProblem(describeServerError(res.err, '测试没有跑成功，请稍后重试。'))
+        return
+      }
+      // The POST returns the full workers payload; adopt it so the card shows the fresh result.
+      const data = res.data as WorkersPayload | null
+      if (data && Array.isArray(data.workers)) applyPayload(data)
+    } catch {
+      setActionProblem({ message: '无法连接服务器，测试没有跑。' })
+    } finally {
+      setCheckingId('')
+    }
+  }
+
   function moveWorker(index: number, direction: -1 | 1) {
     const target = index + direction
     if (target < 0 || target >= workers.length) return
@@ -560,26 +613,53 @@ export function WorkersPanel({ token }: { token: string }) {
 
   function autoScrollTick() {
     if (!dragRef.current) return
-    const y = lastYRef.current
-    const scroller = scrollerRef.current
-    const top = scroller ? scroller.getBoundingClientRect().top : 0
-    const bottom = scroller ? scroller.getBoundingClientRect().bottom : window.innerHeight
-    const edge = 72
-    let delta = 0
-    if (y < top + edge) delta = -Math.ceil(((top + edge - y) / edge) * 18)
-    else if (y > bottom - edge) delta = Math.ceil(((y - (bottom - edge)) / edge) * 18)
-    if (delta) {
-      if (scroller) scroller.scrollTop += delta
-      else window.scrollBy(0, delta)
+    if (dragMovedRef.current) {
+      const y = lastYRef.current
+      const scroller = scrollerRef.current
+      const top = scroller ? scroller.getBoundingClientRect().top : 0
+      const bottom = scroller ? scroller.getBoundingClientRect().bottom : window.innerHeight
+      const edge = 72
+      let delta = 0
+      if (y < top + edge) delta = -Math.ceil(((top + edge - y) / edge) * 18)
+      else if (y > bottom - edge) delta = Math.ceil(((y - (bottom - edge)) / edge) * 18)
+      if (delta) {
+        if (scroller) scroller.scrollTop += delta
+        else window.scrollBy(0, delta)
+      }
     }
     rafRef.current = requestAnimationFrame(autoScrollTick)
   }
 
   function beginDrag(id: string, startY: number) {
     dragRef.current = id
+    dragStartYRef.current = startY
+    dragMovedRef.current = false
     lastYRef.current = startY
     scrollerRef.current = findScroller(cardRefs.current.get(id) || null)
     setDragId(id)
+    windowDragCleanupRef.current?.()
+    // Keep HTML5 drops working even if the target top card is clipped above <ul> / behind the topbar.
+    const onWindowDragOver = (ev: DragEvent) => {
+      if (!dragRef.current) return
+      ev.preventDefault()
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move'
+      if (Math.abs(ev.clientY - dragStartYRef.current) > 4) dragMovedRef.current = true
+      lastYRef.current = ev.clientY
+      setDropIndex(slotFromY(ev.clientY))
+    }
+    const onWindowDrop = (ev: DragEvent) => {
+      const current = dragRef.current
+      if (!current) return
+      ev.preventDefault()
+      reorderTo(current, slotFromY(ev.clientY))
+      endDrag()
+    }
+    window.addEventListener('dragover', onWindowDragOver)
+    window.addEventListener('drop', onWindowDrop)
+    windowDragCleanupRef.current = () => {
+      window.removeEventListener('dragover', onWindowDragOver)
+      window.removeEventListener('drop', onWindowDrop)
+    }
     cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(autoScrollTick)
   }
@@ -587,13 +667,19 @@ export function WorkersPanel({ token }: { token: string }) {
   function endDrag() {
     dragRef.current = null
     dragDyRef.current = 0
+    dragMovedRef.current = false
+    windowDragCleanupRef.current?.()
+    windowDragCleanupRef.current = null
     cancelAnimationFrame(rafRef.current)
     setDragId(null)
     setDropIndex(null)
     setDragDy(0)
   }
 
-  useEffect(() => () => cancelAnimationFrame(rafRef.current), [])
+  useEffect(() => () => {
+    cancelAnimationFrame(rafRef.current)
+    windowDragCleanupRef.current?.()
+  }, [])
 
   // Mouse: native HTML5 drag and drop from the handle.
   function onHandleDragStart(event: ReactDragEvent, id: string) {
@@ -607,7 +693,9 @@ export function WorkersPanel({ token }: { token: string }) {
   function onListDragOver(event: ReactDragEvent) {
     if (!dragRef.current) return
     event.preventDefault()
+    event.stopPropagation()
     event.dataTransfer.dropEffect = 'move'
+    if (Math.abs(event.clientY - dragStartYRef.current) > 4) dragMovedRef.current = true
     lastYRef.current = event.clientY
     setDropIndex(slotFromY(event.clientY))
   }
@@ -616,6 +704,7 @@ export function WorkersPanel({ token }: { token: string }) {
     const id = dragRef.current
     if (!id) return
     event.preventDefault()
+    event.stopPropagation()
     reorderTo(id, slotFromY(event.clientY))
     endDrag()
   }
@@ -627,6 +716,7 @@ export function WorkersPanel({ token }: { token: string }) {
     const startY = event.clientY
     beginDrag(id, startY)
     const move = (ev: PointerEvent) => {
+      if (Math.abs(ev.clientY - startY) > 4) dragMovedRef.current = true
       lastYRef.current = ev.clientY
       dragDyRef.current = ev.clientY - startY
       setDragDy(ev.clientY - startY)
@@ -1217,6 +1307,10 @@ export function WorkersPanel({ token }: { token: string }) {
               const coolingReason = humanCoolingReason(worker.quota?.reason ?? null)
               const showUsage = worker.installed && Boolean(worker.usage)
               const showThreshold = worker.installed && typeof worker.threshold_percent === 'number'
+              // 测试：装好的执行者都能测；测不了的（kind: unsupported）不显示按钮。
+              const check = worker.last_check ?? null
+              const isChecking = checkingId === worker.id
+              const showCheckButton = worker.installed && check?.kind !== 'unsupported'
               const hasBody =
                 !worker.installed ||
                 Boolean(worker.installed && worker.models_supported) ||
@@ -1290,8 +1384,48 @@ export function WorkersPanel({ token }: { token: string }) {
                           <span aria-hidden="true">↓</span> 下移
                         </button>
                       </div>
+                      {worker.installed && (
+                        <div className="worker-check-action">
+                          {isChecking && <span className="guard-sub worker-check-running" role="status">正在测试…</span>}
+                          {!isChecking && check === null && <span className="guard-sub worker-check-none">还没测试过</span>}
+                          {!isChecking && check !== null && check.ok === true && (
+                            <span className="worker-check-ok" role="status" title={formatCheckAgo(check.checked_at) || undefined}>
+                              可以用 · {check.provider || '未知服务商'}/{check.model || '默认模型'}
+                            </span>
+                          )}
+                          {!isChecking && check !== null && check.ok === null && (
+                            <span className="guard-sub worker-check-none">{check.message || '这个执行者暂时不能测试。'}</span>
+                          )}
+                          {showCheckButton && (
+                            <button
+                              type="button"
+                              className="guard-btn guard-btn-small worker-check-btn"
+                              disabled={isChecking}
+                              aria-busy={isChecking || undefined}
+                              title={isChecking ? '最多等 45 秒' : undefined}
+                              onClick={() => { void runCheck(worker.id) }}
+                            >
+                              {isChecking ? '正在测试…' : '测试'}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
+
+                  {worker.installed && check !== null && check.ok === false && (
+                    <div className="worker-check-result">
+                      <div className="worker-check-failed" role="alert">
+                        <span className="worker-check-failed-msg">{check.message || '这次测试没有通过。'}</span>
+                        {check.detail && (
+                          <details className="guard-tech-details">
+                            <summary>技术细节</summary>
+                            <span className="guard-tech">{check.detail}</span>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {pv && (
                     <details className="guard-tech-details worker-tech">

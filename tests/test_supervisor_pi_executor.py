@@ -249,6 +249,39 @@ class PiParserTests(unittest.TestCase):
         self.assertTrue(meta["is_error"])
         self.assertEqual(meta["subtype"], "missing_result")
 
+    def test_intermediate_text_without_terminal_event_is_not_final(self) -> None:
+        sample = json.dumps({"type": "message_end", "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "I'll inspect this"}],
+            "stopReason": "toolUse"}})
+        text, meta = ags._parse_pi_stream(sample)
+        self.assertEqual(text, "")
+        self.assertTrue(meta["is_error"])
+
+    def test_truncated_or_unfinished_terminal_response_fails_closed(self) -> None:
+        for reason in ("length", "aborted", "toolUse", "pending", "deferred"):
+            with self.subTest(reason=reason):
+                sample = json.dumps({"type": "agent_end", "messages": [{"role": "assistant",
+                    "stopReason": reason, "content": [{"type": "text", "text": "partial"}]}]})
+                text, meta = ags._parse_pi_stream(sample)
+                self.assertEqual(text, "")
+                self.assertTrue(meta["is_error"])
+                self.assertIn(reason, meta["error"])
+
+    def test_terminal_event_does_not_reuse_earlier_assistant_text(self) -> None:
+        sample = json.dumps({"type": "agent_end", "messages": [
+            {"role": "assistant", "content": [{"type": "text", "text": "earlier"}]},
+            {"role": "assistant", "stopReason": "toolUse", "content": [{"type": "toolCall", "name": "read"}]},
+        ]})
+        text, meta = ags._parse_pi_stream(sample)
+        self.assertEqual(text, "")
+        self.assertTrue(meta["is_error"])
+
+    def test_duplicate_terminal_events_do_not_claim_success(self) -> None:
+        end = {"type": "agent_end", "messages": [{"role": "assistant", "content": [{"type": "text", "text": "done"}]}]}
+        text, meta = ags._parse_pi_stream("\n".join((json.dumps(end), json.dumps(end))))
+        self.assertEqual(text, "")
+        self.assertTrue(meta["is_error"])
+
     def test_reviewer_verdict_is_parseable_like_command_code(self) -> None:
         sha, fp = "a" * 40, "b" * 64
         verdict = {
@@ -410,6 +443,24 @@ class PiExecutorEndToEndTests(unittest.TestCase):
         self.assertIn("implemented the feature", result.output)
         # Read-only allowlist means the fake never enters the write branch.
         self.assertFalse((self.wt.resolve() / "pi_feature.txt").exists())
+
+    def test_zero_exit_with_only_intermediate_message_is_failure(self) -> None:
+        fake_pi = _write_fake_pi(self.tmp / "fake-pi-interrupted", r'''#!__PY__
+import json, sys
+sys.stdin.read()
+print(json.dumps({"type": "message_end", "message": {"role": "assistant",
+    "stopReason": "toolUse", "content": [{"type": "text", "text": "working on it"}]}}))
+''')
+        task = ags.create_task(self.settings, goal="analyze", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        ags.dispatch_task(self.settings, task["id"], worktree_path=str(self.wt))
+        with patch.dict(os.environ, _clean_env(CONVEYOR_PI_BIN=str(fake_pi)), clear=True):
+            result = asyncio.run(PiExecutor(self.settings).run(
+                role=ANALYST, prompt="analyze", worktree_path=str(self.wt),
+                timeout_seconds=30, task_id=task["id"]))
+        self.assertFalse(result.success)
+        self.assertEqual(result.evidence.get("return_code"), 0)
+        self.assertIn("final pi result", result.error)
 
 
 if __name__ == "__main__":

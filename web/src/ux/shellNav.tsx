@@ -22,6 +22,23 @@ export const VIEW_SUBTITLES: Record<ShellView, string> = {
   secrets: '只供助手使用的私密凭据', workers: '谁来替你干活：检测、登录、按额度自动轮换',
 }
 
+/** One plain-Chinese line shown underneath each item inside the 更多 menu. */
+export const VIEW_DESCRIPTIONS: Record<ShellView, string> = {
+  chat: '与助手直接对话',
+  tasks: '提问、改代码和单次运行记录',
+  code: '查看仓库、工作目录和长期目标',
+  inbox: '定时任务的结果和提醒',
+  approvals: '等待你确认或拒绝的重要操作',
+  memory: '助手长期记住你的偏好和背景',
+  teammate: '全天候值守，发现问题及时提醒',
+  skills: '可在对话和任务中使用的技能',
+  workflows: '分步骤推进的长任务',
+  connectors: '连接外部工具和扩展服务',
+  browser: '允许助手访问和登录的网站',
+  secrets: '只供助手使用的私密凭据',
+  workers: '写代码的 AI 工具，以及它们能不能用',
+}
+
 export function isShellView(value: string): value is ShellView {
   return (SHELL_VIEWS as readonly string[]).includes(value)
 }

@@ -194,6 +194,14 @@ Conveyor 执行者池（Worker Pool）允许系统将任务动态分配给多个
 
 `POST /api/workers/order` 不变（拖拽排序使用它）。以上接口在功能未开启时同样返回 404。
 
+### 11. 一键测试执行者（能不能真的回答）
+`POST /api/workers/<id>/check`
+- 只有内置 Pi 支持一键测试；其他执行者返回 `{"ok": null, "kind": "unsupported", "message": "这个执行者暂不支持一键测试"}`，不会运行任何命令。未知 ID 返回 400 `unknown_worker`。
+- 用与真实任务完全相同的服务商与环境拼法跑一次最小请求（`pi --mode json -p --no-session --no-tools ...`，stdin 为「只回复两个字：好的」），超时默认 45 秒，超时必杀进程。
+- 成功判定与 `PiBackend` 一致：退出码 0、没有错误事件、恰好一个 `agent_end`、且最终助手消息有文字。
+- 返回 `{"check": {...}, ...执行者 GET 载荷}`；`check` 含 `ok` / `kind`（`ok`/`auth`/`quota`/`model_missing`/`rate_limit`/`timeout`/`network`/`config`/`other`）/ `message`（一句中文，指向「设置 › 模型设置」，绝不出现环境变量名）/ `detail`（原始错误，已脱敏并截到 600 字）/ `latency_ms` / `checked_at`。
+- 结果按执行者存在 `<codex_memory_root>/state/workers.json` 的 `last_check`，执行者条目里以 `last_check` 返回；保存「模型设置」后会清掉 Pi 的上一次结果。目标开始前若 Pi 的上一次测试没通过，会拒绝开始（409 `executor_check_failed`）。
+
 ## 可运行的 CLI 执行者（agy / grok / cmd）
 
 `runner/cli_backend.py` 提供通用 `CliBackend`，在任务 worktree 内以非交互模式运行外部 CLI，沿用现有 diff/apply/discard 生命周期：
@@ -219,4 +227,5 @@ Pi 随 Conveyor 附带（`vendor/pi`，固定版本 1.5.0），是一个通用�
 - **安装**：在「执行者」页面点 Pi 的安装（固定命令 `bash scripts/install_pi.sh`，在仓库根目录运行，需要 Node.js >= 22.19）。它在 `vendor/pi` 内执行 `npm ci --omit=dev --ignore-scripts`，不装全局，可重复运行。`scripts/deploy_vps.sh` 部署时也会自动运行一次，失败只记日志，不影响部署。
 - **可执行文件查找顺序**：`CONVEYOR_PI_BIN` > 设置里的 `pi_bin` > `vendor/pi/node_modules/.bin/pi` > PATH 上的 `pi`。
 - **服务商桥接**：每次运行前，如果没有显式设置 `CONVEYOR_PI_PROVIDER` / `CONVEYOR_PI_MODEL`，Conveyor 会按「模型设置」里保存的服务商生成 `<CODEX_TASK_ROOT>/pi-agent/models.json`（权限 0600，`wire_api` 为 `responses` 时用 `openai-responses`，否则 `openai-completions`）。文件里的 `apiKey` 只写 `$环境变量名`，真正的密钥只通过子进程环境变量传给 Pi，不落盘、不进日志。设置了显式环境变量时保持原来的 DeepSeek 路径。
+- **配好模型就能用（对话模型桥接）**：「模型设置」里只填了自定义接口（`CONVEYOR_CHAT_BASE_URL`，例如 `http://127.0.0.1:18795/v1`）加模型名和密钥、没有填任何 Pi 自己的配置时，Pi 会整个采用这个对话模型：生成一个 `conveyor-chat` 提供商写进 `models.json`（接口、模型名、wire api、密钥全部来自同一处，`apiKey` 为 `$CONVEYOR_CHAT_API_KEY`），执行者页面显示「和对话用同一个模型（fake-model）」。优先级：显式 `CONVEYOR_PI_*` > 「模型设置」里保存的服务商 > 对话模型桥接 > Pi 自己的默认（DeepSeek）。只改了 `CONVEYOR_PI_MODEL` 时，这个模型名跟着桥接的接口一起走，不会再发给 DeepSeek。
 - **状态**：已保存服务商（或设置了 `CONVEYOR_PI_*`）显示可用；否则显示「未配置服务商」，页面上有「去模型设置」按钮。Pi 没有自己的登录命令。

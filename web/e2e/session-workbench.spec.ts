@@ -253,10 +253,10 @@ test('mobile navigation and session drawer remain keyboard reachable', async ({ 
   const navigation = page.getByRole('navigation', { name: '底部导航' })
   await expect(navigation).toBeVisible()
   const chat = navigation.getByRole('button', { name: /对话/ })
-  const tasks = navigation.getByRole('button', { name: /任务/ })
+  const inbox = navigation.getByRole('button', { name: /收件箱/ })
   await chat.focus()
   await page.keyboard.press('Tab')
-  await expect(tasks).toBeFocused()
+  await expect(inbox).toBeFocused()
 
   await navigation.getByRole('button', { name: /更多/ }).click()
   const options = page.getByRole('dialog', { name: '更多' })

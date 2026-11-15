@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openPage } from './helpers'
 
 const NOW = new Date('2026-11-03T14:30:00+08:00')
 const SHOTS = 'test-results/workers'
@@ -466,16 +467,15 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
   test('navigates to workers via desktop nav and mobile 更多 sheet', async ({ page }) => {
     await installApi(page)
 
-    // 1. Desktop navigation: click 执行者 in nav
+    // 1. Desktop navigation: open 执行者 via 更多 popover
     await page.setViewportSize(SIZES[0])
     await page.goto('/')
     await expect(page.locator('main.app-shell')).toBeVisible()
 
-    const navBtn = page.locator('.shell-nav button', { hasText: '执行者' })
-    await expect(navBtn).toBeVisible()
-    await navBtn.click()
+    await openPage(page, '执行者')
 
     await expect(page.locator('.guard-page.guard-workers')).toBeVisible()
+    await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '更多 · 执行者' })).toHaveClass(/active/)
 
     // 2. Mobile navigation: click 更多 in bottom bar then 执行者 in sheet
     await installApi(page, { mobileUI: true })

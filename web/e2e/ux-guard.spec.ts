@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openPage } from './helpers'
 
 // Visual + behaviour check for the "guard" pages: 密钥 (Secrets), 网站授权 (Browser sites)
 // and 值守 (Teammate). All API traffic is mocked with realistic Chinese data.
@@ -207,12 +208,9 @@ async function open(page: Page, view: 'secrets' | 'browser' | 'teammate', size: 
   await page.setViewportSize(size)
   await page.goto(view === 'browser' ? '/' : `/#${view}`)
   if (view === 'browser') {
-    // Reached through the navigation: the top bar on desktop, the bottom bar's 更多 sheet on phones.
+    // Reached through 更多 on both desktop and phone.
     await expect(page.locator('main.app-shell')).toBeVisible()
-    const more = page.getByRole('navigation', { name: '底部导航' }).getByRole('button', { name: '更多' })
-    if (await more.isVisible()) await more.click()
-    const name = /^\W*(Browser sites|网站授权)$/
-    await page.getByRole('button', { name }).or(page.getByRole('link', { name })).or(page.getByRole('tab', { name })).filter({ visible: true }).first().click()
+    await openPage(page, '网站授权')
   }
   const panel = page.locator(`.guard-page.guard-${view}`)
   await expect(panel).toBeVisible()
