@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page, type Route } from '@playwright/test'
+import { openPage } from './helpers'
 
 // Visual + behaviour check for the knowledge pages: 记忆, 收件箱 (定时任务) and the agent 资料 tab.
 // Every API call is mocked with realistic Chinese data; screenshots land in test-results/ux-knowledge/.
@@ -559,6 +560,7 @@ test('server errors become short Chinese without config hints', async ({ page })
 
 test('资料 tab: Chinese sections that fit the right panel', async ({ page }) => {
   await openConsole(page, { agentId: 'finance' })
+  await page.getByRole('button', { name: '详情', exact: true }).click()
   await page.getByRole('tab', { name: /^(Library|资料)$/ }).click()
   const library = page.locator('.kn-library')
   await expect(library).toBeVisible()
@@ -605,7 +607,7 @@ test('记忆 and 收件箱 for a selected agent', async ({ page }) => {
   const api = await openConsole(page, { agentId: 'finance', agentScreens: true })
   // A selected agent's memory is the top-level 记忆 page (the conversation has no second tab row).
   await expect(page.locator('.agent-screen-tabs')).toHaveCount(0)
-  await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '记忆', exact: true }).click()
+  await openPage(page, '记忆')
   await expect(page).toHaveURL(/#memory$/)
   const panel = page.locator('.kn-memory')
   await expect(page.locator('.stream-header .shell-subtitle')).toHaveText('Finance 长期记住的信息')

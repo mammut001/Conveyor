@@ -24,7 +24,7 @@ import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from '.
 import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
 import { mergeJobEvents, streamedText, type JobEvent as EventItem } from './jobEvents'
-import { CONNECTION_LABELS, LockConfirmDialog, SHORTCUT_PREFIX, ShellIcon, VIEW_LABELS, VIEW_SUBTITLES, findVisibleComposer, isTypingTarget, shellErrorText, urlForView, useMediaQuery, viewFromLocation, type ConnectionState, type ShellView } from './ux/shellNav'
+import { CONNECTION_LABELS, LockConfirmDialog, SHORTCUT_PREFIX, ShellIcon, VIEW_DESCRIPTIONS, VIEW_LABELS, VIEW_SUBTITLES, findVisibleComposer, isTypingTarget, shellErrorText, urlForView, useMediaQuery, viewFromLocation, type ConnectionState, type ShellView } from './ux/shellNav'
 import { ChangedFileList, ClampedText, DiffBody, DiffStat, ToolCallCard } from './components/TaskParts'
 import { SetupChecklist } from './components/SetupChecklist'
 import { changesDiffFrom, changesOutcome, describeJobError, durationText, emptyChangesDiff, eventKindLabel, expiryText, groupToolCalls, jobErrorSummary, modeLabel, nodeStatusLabel, nodeTypeLabel, toolDisplayName, type ChangesDiff, type ChangesOutcome, type DiffResponse } from './taskText'
@@ -321,6 +321,9 @@ export default function App() {
   const [contextPref, setContextPref] = useState<'open' | 'closed' | null>(() => {
     try { const stored = localStorage.getItem('conveyor-context-panel'); return stored === 'open' || stored === 'closed' ? stored : null } catch { return null }
   })
+  const [chatContextPref, setChatContextPref] = useState<'open' | 'closed' | null>(() => {
+    try { const stored = localStorage.getItem('conveyor-chat-context-panel'); return stored === 'open' || stored === 'closed' ? stored : null } catch { return null }
+  })
   const [navMenuOpen, setNavMenuOpen] = useState(false)
   const [lockConfirmOpen, setLockConfirmOpen] = useState(false)
   const [syncStale, setSyncStale] = useState(false)
@@ -374,17 +377,17 @@ export default function App() {
   const navItems = useMemo(() => {
     const items: { view: ShellView; group: 'main' | 'more'; badge?: number; badgeLabel?: string }[] = [
       { view: 'chat', group: 'main' },
-      { view: 'tasks', group: 'main' },
     ]
     if (features?.agent_supervisor) {
       items.push({ view: 'code', group: 'main', badge: goalsWaiting, badgeLabel: goalsWaiting > 0 ? `有 ${goalsWaiting} 个目标在等你回复` : undefined })
     }
     items.push({ view: 'inbox', group: 'main', badge: inboxUnread })
-    if (features?.approval_inbox) items.push({ view: 'approvals', group: 'main', badge: approvalInboxCount })
-    if (features?.long_term_memory || view === 'memory') items.push({ view: 'memory', group: 'main' })
-    if ((features?.teammate ?? true) || view === 'teammate') items.push({ view: 'teammate', group: 'main' })
+    items.push({ view: 'tasks', group: 'more' })
+    if (features?.long_term_memory || view === 'memory') items.push({ view: 'memory', group: 'more' })
+    if ((features?.teammate ?? true) || view === 'teammate') items.push({ view: 'teammate', group: 'more' })
     items.push({ view: 'browser', group: 'more' }, { view: 'secrets', group: 'more' })
     if (features?.workers) items.push({ view: 'workers', group: 'more' })
+    if (features?.approval_inbox) items.push({ view: 'approvals', group: 'more', badge: approvalInboxCount })
     if (features?.skills || view === 'skills') items.push({ view: 'skills', group: 'more' })
     if (features?.workflows || view === 'workflows') items.push({ view: 'workflows', group: 'more' })
     if (features?.mcp || view === 'connectors') items.push({ view: 'connectors', group: 'more' })
@@ -1508,11 +1511,18 @@ export default function App() {
 
   // Shell values for this render: right panel, connection, navigation groups and header text.
   const contextAvailable = view === 'chat' || view === 'tasks'
-  const contextPanelOpen = contextPref ? contextPref === 'open' : wideViewport
+  const contextPanelOpen = view === 'chat'
+    ? chatContextPref === 'open'
+    : (contextPref ? contextPref === 'open' : wideViewport)
   const contextShown = contextAvailable && contextPanelOpen
   const toggleContextPanel = (event: React.MouseEvent<HTMLButtonElement>) => {
     if (narrowViewport) { drawerOpenerRef.current = event.currentTarget; setSessionsDrawerOpen(false); setContextDrawerOpen(true); return }
     const next = contextPanelOpen ? 'closed' : 'open'
+    if (view === 'chat') {
+      setChatContextPref(next)
+      try { localStorage.setItem('conveyor-chat-context-panel', next) } catch { /* storage unavailable */ }
+      return
+    }
     setContextPref(next)
     try { localStorage.setItem('conveyor-context-panel', next) } catch { /* storage unavailable */ }
   }
@@ -1536,22 +1546,45 @@ export default function App() {
   const errorMessage = error ? shellErrorText(error) : null
   const mainNav = navItems.filter(item => item.group === 'main')
   const moreNav = navItems.filter(item => item.group === 'more')
-  const bottomNav = mainNav.slice(0, 4)
-  const sheetNav = navItems.filter(item => !bottomNav.includes(item))
+  const bottomNav = mainNav
+  const sheetNav = moreNav
+  const activeMoreItem = moreNav.find(item => item.view === view)
+  const moreBadge = moreNav.reduce((sum, item) => sum + (item.badge || 0), 0)
+  const moreBadgeText = moreBadge > 99 ? '99+' : String(moreBadge)
+  const moreButtonLabel = activeMoreItem ? `更多 · ${VIEW_LABELS[activeMoreItem.view]}` : '更多'
   const shortcutLabel = (target: ShellView) => {
     const index = shortcutViewsRef.current.indexOf(target)
     return index >= 0 ? `${SHORTCUT_PREFIX}${index + 1}` : ''
   }
   const navButton = (item: (typeof navItems)[number], inMenu = false) => {
     const shortcut = shortcutLabel(item.view)
-    return <button key={item.view} type="button" className={`shell-nav-item ${view === item.view ? 'active' : ''}`}
+    const titleId = inMenu ? `shell-nav-item-${item.view}-title` : undefined
+    const descId = inMenu ? `shell-nav-item-${item.view}-desc` : undefined
+    return <button key={item.view} type="button"
+      className={`shell-nav-item ${inMenu ? 'shell-nav-item--menu' : ''} ${view === item.view ? 'active' : ''}`}
       aria-current={view === item.view ? 'page' : undefined}
+      aria-labelledby={titleId}
+      aria-describedby={descId}
       title={shortcut ? `${VIEW_LABELS[item.view]}（${shortcut}）` : VIEW_LABELS[item.view]}
       onClick={() => { setView(item.view); setNavMenuOpen(false) }}>
-      {inMenu && <ShellIcon name={item.view} size={16} />}
-      <span>{VIEW_LABELS[item.view]}</span>
-      {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
-      {inMenu && shortcut && <kbd aria-hidden="true">{shortcut}</kbd>}
+      {inMenu ? (
+        <>
+          <span className="shell-nav-menu-icon"><ShellIcon name={item.view} size={16} /></span>
+          <span className="shell-nav-menu-copy">
+            <span className="shell-nav-menu-head">
+              <span id={titleId} className="shell-nav-menu-title">{VIEW_LABELS[item.view]}</span>
+              {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
+              {shortcut && <kbd aria-hidden="true">{shortcut}</kbd>}
+            </span>
+            <span id={descId} className="shell-nav-menu-desc">{VIEW_DESCRIPTIONS[item.view]}</span>
+          </span>
+        </>
+      ) : (
+        <>
+          <span>{VIEW_LABELS[item.view]}</span>
+          {item.badge ? <span className="shell-nav-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge > 99 ? '99+' : item.badge}</span> : null}
+        </>
+      )}
     </button>
   }
   const agentRole = selectedAgent ? [selectedAgent.is_default ? '默认助手' : '助手', agentTag(selectedAgent)].filter(Boolean).join(' · ') : ''
@@ -1571,17 +1604,21 @@ export default function App() {
       <div className="brand"><span className="brand-mark small">C</span><div><strong>Conveyor</strong><small>控制台</small></div></div>
       <nav className="shell-nav" aria-label="主导航">
         <div className="shell-nav-group">{mainNav.map(item => navButton(item))}</div>
-        <span className="shell-nav-divider" aria-hidden="true" />
-        <div className="shell-nav-group shell-nav-group--more">{moreNav.map(item => navButton(item))}</div>
-        <div className="shell-nav-more" ref={navMoreRef}>
-          <button type="button" className={`shell-nav-item ${moreNav.some(item => item.view === view) ? 'active' : ''}`}
-            aria-expanded={navMenuOpen} aria-controls="shell-nav-menu" onClick={() => setNavMenuOpen(open => !open)}>
-            <span>更多</span><ShellIcon name="chevron" size={14} />
-          </button>
-          {navMenuOpen && <div className="shell-nav-menu" id="shell-nav-menu" role="group" aria-label="更多页面">
-            {moreNav.map(item => navButton(item, true))}
-          </div>}
-        </div>
+        {moreNav.length > 0 && (
+          <div className="shell-nav-more" ref={navMoreRef}>
+            <button type="button"
+              className={`shell-nav-item ${activeMoreItem ? 'active' : ''}`}
+              aria-current={activeMoreItem ? 'page' : undefined}
+              aria-expanded={navMenuOpen} aria-controls="shell-nav-menu" onClick={() => setNavMenuOpen(open => !open)}>
+              <span>{moreButtonLabel}</span>
+              {moreBadge > 0 && <span className="shell-nav-badge">{moreBadgeText}</span>}
+              <ShellIcon name="chevron" size={14} />
+            </button>
+            {navMenuOpen && <div className="shell-nav-menu" id="shell-nav-menu" role="group" aria-label="更多页面">
+              {moreNav.map(item => navButton(item, true))}
+            </div>}
+          </div>
+        )}
       </nav>
       <div className="top-actions">
         {system?.features?.pwa && <PwaNotifications token={token} />}
@@ -2109,19 +2146,6 @@ export default function App() {
           {!nodes.length && <Empty text="没有可用的执行节点" />}
         </ContextSection>
         </>}
-        {(!selectedAgent || agentTab === 'details') && <>
-        <ContextSection title="系统" className="context-section--system">
-          <div className="system-stats">
-            <div title={system?.load_average?.map(n => n.toFixed(2)).join(' / ')}><span>负载</span><strong>{system?.load_average?.[0]?.toFixed(2) ?? '—'}</strong></div>
-            <div><span>可用内存</span><strong>{bytes(system?.memory?.available ?? null)}</strong></div>
-            <div><span>可用磁盘</span><strong>{bytes(system?.disk?.free ?? null)}</strong></div>
-          </div>
-          <div className="system-channels">
-            <span className={system?.channels?.telegram?.configured ? 'on' : ''}>Telegram {system?.channels?.telegram?.configured ? '已配置' : '未配置'}</span>
-            <span className={system?.channels?.feishu?.configured ? 'on' : ''}>飞书 {system?.channels?.feishu?.configured ? '已配置' : '未配置'}</span>
-          </div>
-        </ContextSection>
-        </>}
       </aside>
     </section>
     {mobileUiOn && sessionsDrawerOpen && (
@@ -2138,14 +2162,26 @@ export default function App() {
             <button type="button" className="drawer-close-btn" aria-label="关闭" onClick={() => setMoreSheetOpen(false)}>×</button>
           </div>
           <div className="mobile-sheet-items">
-            {sheetNav.map(item => (
-              <button key={item.view} type="button" className={`mobile-sheet-item ${view === item.view ? 'active' : ''}`}
-                aria-current={view === item.view ? 'page' : undefined}
-                onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
-                <span className="mobile-sheet-label"><ShellIcon name={item.view} size={20} />{VIEW_LABELS[item.view]}</span>
-                {item.badge ? <span className="mobile-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge}</span> : null}
-              </button>
-            ))}
+            {sheetNav.map(item => {
+              const titleId = `mobile-sheet-item-${item.view}-title`
+              const descId = `mobile-sheet-item-${item.view}-desc`
+              return (
+                <button key={item.view} type="button" className={`mobile-sheet-item ${view === item.view ? 'active' : ''}`}
+                  aria-current={view === item.view ? 'page' : undefined}
+                  aria-labelledby={titleId}
+                  aria-describedby={descId}
+                  onClick={() => { setView(item.view); setMoreSheetOpen(false) }}>
+                  <span className="mobile-sheet-label">
+                    <ShellIcon name={item.view} size={20} />
+                    <span className="mobile-sheet-copy">
+                      <span id={titleId} className="mobile-sheet-title">{VIEW_LABELS[item.view]}</span>
+                      <span id={descId} className="mobile-sheet-desc">{VIEW_DESCRIPTIONS[item.view]}</span>
+                    </span>
+                  </span>
+                  {item.badge ? <span className="mobile-badge" role={item.badgeLabel ? 'img' : undefined} aria-label={item.badgeLabel}>{item.badge}</span> : null}
+                </button>
+              )
+            })}
           </div>
           <div className="mobile-sheet-items mobile-sheet-system">
             <button type="button" className="mobile-sheet-item" onClick={() => { setMoreSheetOpen(false); void openSettings() }}>
@@ -2173,10 +2209,13 @@ export default function App() {
           </button>
         ))}
         <button type="button" ref={moreButtonRef}
-          className={`mobile-nav-item ${moreSheetOpen || sheetNav.some(item => item.view === view) ? 'active' : ''}`}
+          className={`mobile-nav-item ${moreSheetOpen || activeMoreItem ? 'active' : ''}`}
           aria-haspopup="dialog" aria-expanded={moreSheetOpen}
           onClick={() => setMoreSheetOpen(prev => !prev)}>
-          <span className="mobile-nav-icon"><ShellIcon name="more" size={22} /></span>
+          <span className="mobile-nav-icon" style={{ position: 'relative' }}>
+            <ShellIcon name="more" size={22} />
+            {moreBadge > 0 && <span className="mobile-badge-pill">{moreBadgeText}</span>}
+          </span>
           <span>更多</span>
         </button>
       </nav>
@@ -2191,6 +2230,7 @@ export default function App() {
     />}
     {settingsOpen && <ProviderSettings
       config={providerConfig} loadError={providerConfig ? '' : error}
+      system={system}
       onRetry={() => void openSettings()} onClose={() => setSettingsOpen(false)}
       onSave={async payload => {
         const result = await api<{ config: ProviderConfig }>('/api/config/provider', { method: 'POST', body: JSON.stringify(payload) })
@@ -2456,8 +2496,8 @@ const PROVIDER_PRESETS = [
   },
 ] as const
 
-function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
-  config: ProviderConfig | null; loadError: string; onClose: () => void; onRetry: () => void
+function ProviderSettings({ config, loadError, system, onClose, onRetry, onSave }: {
+  config: ProviderConfig | null; loadError: string; system: SystemStatus | null; onClose: () => void; onRetry: () => void
   onSave: (payload: Record<string, string>) => Promise<void>
 }) {
   const [draft, setDraft] = useState<ProviderDraft>(() => providerDraft(config))
@@ -2809,6 +2849,20 @@ function ProviderSettings({ config, loadError, onClose, onRetry, onSave }: {
             <span>浏览器拿不到完整密钥。保存后，从下一个新任务开始生效。</span>
             <small>设置保存在服务器上。</small>
           </div>
+          {system && (
+            <section className="server-status-section" aria-labelledby="provider-server-title">
+              <h3 id="provider-server-title">这台服务器</h3>
+              <div className="system-stats">
+                <div title={system.load_average?.map(n => n.toFixed(2)).join(' / ')}><span>负载</span><strong>{system.load_average?.[0]?.toFixed(2) ?? '—'}</strong></div>
+                <div><span>可用内存</span><strong>{bytes(system.memory?.available ?? null)}</strong></div>
+                <div><span>可用磁盘</span><strong>{bytes(system.disk?.free ?? null)}</strong></div>
+              </div>
+              <div className="system-channels">
+                <span className={system.channels?.telegram?.configured ? 'on' : ''}>Telegram {system.channels?.telegram?.configured ? '已配置' : '未配置'}</span>
+                <span className={system.channels?.feishu?.configured ? 'on' : ''}>飞书 {system.channels?.feishu?.configured ? '已配置' : '未配置'}</span>
+              </div>
+            </section>
+          )}
         </div>
         {confirmDiscard ? (
           <footer className="settings-discard-confirm" role="group" aria-label="确认放弃修改">

@@ -393,9 +393,12 @@ export function WorkersPanel({ token }: { token: string }) {
 
   const dirtyRef = useRef(false)
   const dragRef = useRef<string | null>(null)
+  const dragStartYRef = useRef(0)
+  const dragMovedRef = useRef(false)
   const lastYRef = useRef(0)
   const scrollerRef = useRef<HTMLElement | null>(null)
   const rafRef = useRef(0)
+  const windowDragCleanupRef = useRef<(() => void) | null>(null)
   const cardRefs = useRef(new Map<string, HTMLLIElement>())
   const workersRef = useRef<Worker[]>([])
   workersRef.current = workers
@@ -610,26 +613,53 @@ export function WorkersPanel({ token }: { token: string }) {
 
   function autoScrollTick() {
     if (!dragRef.current) return
-    const y = lastYRef.current
-    const scroller = scrollerRef.current
-    const top = scroller ? scroller.getBoundingClientRect().top : 0
-    const bottom = scroller ? scroller.getBoundingClientRect().bottom : window.innerHeight
-    const edge = 72
-    let delta = 0
-    if (y < top + edge) delta = -Math.ceil(((top + edge - y) / edge) * 18)
-    else if (y > bottom - edge) delta = Math.ceil(((y - (bottom - edge)) / edge) * 18)
-    if (delta) {
-      if (scroller) scroller.scrollTop += delta
-      else window.scrollBy(0, delta)
+    if (dragMovedRef.current) {
+      const y = lastYRef.current
+      const scroller = scrollerRef.current
+      const top = scroller ? scroller.getBoundingClientRect().top : 0
+      const bottom = scroller ? scroller.getBoundingClientRect().bottom : window.innerHeight
+      const edge = 72
+      let delta = 0
+      if (y < top + edge) delta = -Math.ceil(((top + edge - y) / edge) * 18)
+      else if (y > bottom - edge) delta = Math.ceil(((y - (bottom - edge)) / edge) * 18)
+      if (delta) {
+        if (scroller) scroller.scrollTop += delta
+        else window.scrollBy(0, delta)
+      }
     }
     rafRef.current = requestAnimationFrame(autoScrollTick)
   }
 
   function beginDrag(id: string, startY: number) {
     dragRef.current = id
+    dragStartYRef.current = startY
+    dragMovedRef.current = false
     lastYRef.current = startY
     scrollerRef.current = findScroller(cardRefs.current.get(id) || null)
     setDragId(id)
+    windowDragCleanupRef.current?.()
+    // Keep HTML5 drops working even if the target top card is clipped above <ul> / behind the topbar.
+    const onWindowDragOver = (ev: DragEvent) => {
+      if (!dragRef.current) return
+      ev.preventDefault()
+      if (ev.dataTransfer) ev.dataTransfer.dropEffect = 'move'
+      if (Math.abs(ev.clientY - dragStartYRef.current) > 4) dragMovedRef.current = true
+      lastYRef.current = ev.clientY
+      setDropIndex(slotFromY(ev.clientY))
+    }
+    const onWindowDrop = (ev: DragEvent) => {
+      const current = dragRef.current
+      if (!current) return
+      ev.preventDefault()
+      reorderTo(current, slotFromY(ev.clientY))
+      endDrag()
+    }
+    window.addEventListener('dragover', onWindowDragOver)
+    window.addEventListener('drop', onWindowDrop)
+    windowDragCleanupRef.current = () => {
+      window.removeEventListener('dragover', onWindowDragOver)
+      window.removeEventListener('drop', onWindowDrop)
+    }
     cancelAnimationFrame(rafRef.current)
     rafRef.current = requestAnimationFrame(autoScrollTick)
   }
@@ -637,13 +667,19 @@ export function WorkersPanel({ token }: { token: string }) {
   function endDrag() {
     dragRef.current = null
     dragDyRef.current = 0
+    dragMovedRef.current = false
+    windowDragCleanupRef.current?.()
+    windowDragCleanupRef.current = null
     cancelAnimationFrame(rafRef.current)
     setDragId(null)
     setDropIndex(null)
     setDragDy(0)
   }
 
-  useEffect(() => () => cancelAnimationFrame(rafRef.current), [])
+  useEffect(() => () => {
+    cancelAnimationFrame(rafRef.current)
+    windowDragCleanupRef.current?.()
+  }, [])
 
   // Mouse: native HTML5 drag and drop from the handle.
   function onHandleDragStart(event: ReactDragEvent, id: string) {
@@ -657,7 +693,9 @@ export function WorkersPanel({ token }: { token: string }) {
   function onListDragOver(event: ReactDragEvent) {
     if (!dragRef.current) return
     event.preventDefault()
+    event.stopPropagation()
     event.dataTransfer.dropEffect = 'move'
+    if (Math.abs(event.clientY - dragStartYRef.current) > 4) dragMovedRef.current = true
     lastYRef.current = event.clientY
     setDropIndex(slotFromY(event.clientY))
   }
@@ -666,6 +704,7 @@ export function WorkersPanel({ token }: { token: string }) {
     const id = dragRef.current
     if (!id) return
     event.preventDefault()
+    event.stopPropagation()
     reorderTo(id, slotFromY(event.clientY))
     endDrag()
   }
@@ -677,6 +716,7 @@ export function WorkersPanel({ token }: { token: string }) {
     const startY = event.clientY
     beginDrag(id, startY)
     const move = (ev: PointerEvent) => {
+      if (Math.abs(ev.clientY - startY) > 4) dragMovedRef.current = true
       lastYRef.current = ev.clientY
       dragDyRef.current = ev.clientY - startY
       setDragDy(ev.clientY - startY)

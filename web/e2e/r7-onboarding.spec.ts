@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openPage } from './helpers'
 
 // QA r7 onboarding fixes (frontend):
 //  N17  任务 never lands on a supervisor worktree session; if one is opened anyway the composer
@@ -233,7 +234,7 @@ test('N17b: opening a worktree session on 任务 swaps the composer for where to
   await expect(page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '项目' })).toHaveAttribute('aria-current', 'page')
 
   // 新建会话 gives a fresh composer back.
-  await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '任务' }).click()
+  await openPage(page, '任务')
   await expect(page.getByText(READ_ONLY_LINE)).toBeVisible()
   await page.locator('.task-composer--notice').getByRole('button', { name: '新建会话' }).click()
   await expect(page.getByLabel('任务内容')).toBeVisible()

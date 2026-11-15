@@ -1,6 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
+import { openPage } from './helpers'
 
 // Visual + behaviour check for the 任务 view and the right-hand context panel
 // (agent card, runs, job, approvals, changes/diff, computer, system).
@@ -278,9 +279,8 @@ async function openTasks(page: Page) {
   if (await page.locator('.workbench-modebar').isVisible()) {
     await page.addStyleTag({ content: '.workbench-modebar { display: none !important; } .primary-interface .app-shell { height: 100dvh !important; }' })
   }
-  // The section switcher may be renamed by the shell (and carries an icon on phones); accept either label.
-  const tasks = page.locator('button, a, [role="tab"]').filter({ hasText: /^[^\p{L}\p{N}]*(任务|Tasks)\s*$/u }).filter({ visible: true })
-  await tasks.first().click()
+  // Tasks lives under 更多 on desktop and inside the 更多 sheet on phones.
+  await openPage(page, '任务')
   await expect(page.locator('.stream-panel > .event-stream')).toBeVisible()
 }
 

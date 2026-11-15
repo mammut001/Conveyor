@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 import { mkdirSync } from 'node:fs'
+import { openPage } from './helpers'
 
 // 任务 view fixes: failed-run presentation, stale badge, touch composer, 40px mode toggle.
 const SESSION = 'web:web-console:agent-coder'
@@ -50,8 +51,7 @@ async function openTasks(page: Page) {
   if (await page.locator('.workbench-modebar').isVisible()) {
     await page.addStyleTag({ content: '.workbench-modebar { display: none !important; } .primary-interface .app-shell { height: 100dvh !important; }' })
   }
-  const tasks = page.locator('button, a, [role="tab"]').filter({ hasText: /^[^\p{L}\p{N}]*(任务|Tasks)\s*$/u }).filter({ visible: true })
-  await tasks.first().click()
+  await openPage(page, '任务')
   await expect(page.locator('.stream-panel > .event-stream')).toBeVisible()
 }
 

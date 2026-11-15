@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
+import { openPage } from './helpers'
 
 // Shell area: frame, primary navigation, URL routing, layout, phone layout, keyboard.
 // Screenshots land in web/test-results/ux-shell/<view>-<width>.png.
@@ -181,7 +182,7 @@ test('desktop: Chinese primary nav that never moves, short header, 详情 panel 
   await installShellApi(page)
   await page.goto('/')
   const nav = primaryNav(page)
-  await expect(nav.getByRole('button')).toHaveText(['对话', '任务', /^收件箱\s*2$/, '记忆', '值守', '网站授权', '密钥'])
+  await expect(nav.getByRole('button')).toHaveText(['对话', /^收件箱\s*2$/, '更多'])
   await expect(nav.getByRole('button', { name: '对话', exact: true })).toHaveAttribute('aria-current', 'page')
   await expect(page).toHaveTitle('对话 · Conveyor 控制台')
   await expect(page.locator('html')).toHaveAttribute('lang', 'zh-CN')
@@ -196,27 +197,39 @@ test('desktop: Chinese primary nav that never moves, short header, 详情 panel 
   await expect(topbar.getByRole('button', { name: '设置' })).toBeVisible()
   await expect(topbar.getByRole('button', { name: '锁定' })).toBeVisible()
 
+  // 对话 right rail starts collapsed on first visit; opening 详情 expands it.
+  await expect(page.locator('aside.context-panel')).toBeHidden()
+  await expect(page.getByRole('button', { name: '详情' })).toHaveAttribute('aria-expanded', 'false')
+
   const anchor = await nav.getByRole('button', { name: '对话', exact: true }).boundingBox()
   const views = [
-    { slug: 'chat', label: '对话', title: 'Conveyor', subtitle: '默认助手' },
-    { slug: 'tasks', label: '任务', title: '登录页错误提示改成中文', subtitle: '任务' },
-    { slug: 'inbox', label: '收件箱', title: '收件箱', subtitle: '定时任务的结果和通知' },
-    { slug: 'memory', label: '记忆', title: '记忆', subtitle: '助手长期记住的信息' },
-    { slug: 'teammate', label: '值守', title: '值守', subtitle: '全天候值守，发现问题及时提醒' },
-    { slug: 'browser', label: '网站授权', title: '网站授权', subtitle: '允许助手访问的网站' },
-    { slug: 'secrets', label: '密钥', title: '密钥', subtitle: '只供助手使用的私密凭据' },
+    { slug: 'chat', label: '对话', inMore: false, title: 'Conveyor', subtitle: '默认助手' },
+    { slug: 'tasks', label: '任务', inMore: true, title: '登录页错误提示改成中文', subtitle: '任务' },
+    { slug: 'inbox', label: '收件箱', inMore: false, title: '收件箱', subtitle: '定时任务的结果和通知' },
+    { slug: 'memory', label: '记忆', inMore: true, title: '记忆', subtitle: '助手长期记住的信息' },
+    { slug: 'teammate', label: '值守', inMore: true, title: '值守', subtitle: '全天候值守，发现问题及时提醒' },
+    { slug: 'browser', label: '网站授权', inMore: true, title: '网站授权', subtitle: '允许助手访问的网站' },
+    { slug: 'secrets', label: '密钥', inMore: true, title: '密钥', subtitle: '只供助手使用的私密凭据' },
   ]
   for (const view of views) {
-    const button = nav.getByRole('button', { name: view.slug === 'inbox' ? /^收件箱/ : view.label, exact: view.slug !== 'inbox' })
-    await button.click()
+    await openPage(page, view.label)
     await expect(page).toHaveURL(new RegExp(`/#${view.slug}$`))
-    await expect(button).toHaveAttribute('aria-current', 'page')
+    const activeBtn = view.inMore
+      ? nav.locator('.shell-nav-more > button')
+      : nav.getByRole('button', { name: view.slug === 'inbox' ? /^收件箱/ : view.label, exact: view.slug !== 'inbox' })
+    await expect(activeBtn).toHaveAttribute('aria-current', 'page')
+    if (view.inMore) await expect(activeBtn).toHaveText(`更多 · ${view.label}`)
     await expect(heading(page)).toHaveText(view.title)
     await expect(page.locator('.stream-header .shell-subtitle')).toHaveText(view.subtitle)
     await expect(page.locator('.stream-header .eyebrow')).toHaveCount(0)
     expect(await nav.getByRole('button', { name: '对话', exact: true }).boundingBox()).toEqual(anchor)
     const panel = page.locator('aside.context-panel')
-    if (view.slug === 'chat' || view.slug === 'tasks') {
+    if (view.slug === 'chat') {
+      await expect(panel).toBeHidden()
+      await page.getByRole('button', { name: '详情' }).click()
+      await expect(panel).toBeVisible()
+      await expect(page.getByRole('button', { name: '详情' })).toHaveAttribute('aria-expanded', 'true')
+    } else if (view.slug === 'tasks') {
       await expect(panel).toBeVisible()
       await expect(page.getByRole('button', { name: '详情' })).toHaveAttribute('aria-expanded', 'true')
     } else {
@@ -270,13 +283,16 @@ for (const size of [DESKTOP, { width: 1366, height: 768 }, { width: 1519, height
     }
     await page.goto('/#chat')
     await expect(page.locator('.stream-panel .composer textarea:visible')).toBeVisible()
-    await page.evaluate(() => localStorage.setItem('conveyor-context-panel', 'open'))
+    await page.evaluate(() => {
+      localStorage.setItem('conveyor-context-panel', 'open')
+      localStorage.setItem('conveyor-chat-context-panel', 'open')
+    })
     await page.reload()
     await expect(page.locator('aside.context-panel')).toBeVisible()
     await expect(page.locator('.stream-panel .composer textarea:visible')).toBeVisible()
     await fits('chat')
     await shot(page, `fit-chat-${size.width}x${size.height}`, false)
-    await page.getByRole('button', { name: '任务' }).first().click()
+    await openPage(page, '任务')
     await expect(heading(page)).toHaveText('登录页错误提示改成中文')
     await fits('tasks')
     fixture.failJobs = true
@@ -315,38 +331,39 @@ test('desktop: 详情 toggle hides the right panel, remembers it, and stays coll
   await expect(panel).toBeVisible()
   expect(await noSidewaysScroll(page)).toBe(true)
 
-  // Narrow desktop with the deployed flags: 网站授权 and 密钥 stay one click away.
+  // Narrow desktop: main nav shows 对话, 收件箱, 更多; moved pages open from 更多.
   const nav = primaryNav(page)
-  await expect(nav.getByRole('button')).toHaveText(['对话', '任务', /^收件箱/, '记忆', '值守', '网站授权', '密钥'])
-  await nav.getByRole('button', { name: '网站授权' }).click()
+  await expect(nav.getByRole('button')).toHaveText(['对话', /^收件箱/, '更多 · 任务'])
+  await openPage(page, '网站授权')
   await expect(page).toHaveURL(/#browser$/)
   await expect(page.locator('aside.context-panel')).toBeHidden()
   await shot(page, `browser-1100`, false)
 })
 
-test('narrow desktop with every optional page on: the rarely used pages fold into 更多', async ({ page }) => {
+test('narrow desktop with every optional page on: all moved pages live inside 更多', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 })
   await installShellApi(page, { moreFeatures: true })
   await page.goto('/#tasks')
   const nav = primaryNav(page)
-  await expect(nav.getByRole('button')).toHaveText(['对话', '任务', /^收件箱/, '审批', '记忆', '值守', '更多'])
-  await expect(nav.getByRole('button', { name: '密钥' })).toHaveCount(0)
-  await nav.getByRole('button', { name: '更多' }).click()
+  await expect(nav.getByRole('button')).toHaveText(['对话', /^收件箱/, '更多 · 任务'])
+  await expect(nav.getByRole('button', { name: '密钥', exact: true })).toHaveCount(0)
+  await nav.locator('.shell-nav-more > button').click()
   const menu = page.getByRole('group', { name: '更多页面' })
-  await expect(menu.getByRole('button')).toHaveText([/^网站授权/, /^密钥/, /^技能/, /^工作流/, /^连接器/])
-  await expect(menu.getByRole('button', { name: '密钥', exact: true })).toHaveAttribute('title', /密钥（(Alt\+|⌥)8）/)
+  await expect(menu.getByRole('button')).toHaveText([/^任务/, /^记忆/, /^值守/, /^网站授权/, /^密钥/, /^审批/, /^技能/, /^工作流/, /^连接器/])
+  await expect(menu.getByRole('button', { name: '密钥', exact: true })).toHaveAttribute('title', /密钥（(Alt\+|⌥)7）/)
   expect(await noSidewaysScroll(page)).toBe(true)
   await shot(page, `more-menu-1024`, false)
   await page.keyboard.press('Escape')
   await expect(menu).toBeHidden()
-  await expect(nav.getByRole('button', { name: '更多' })).toBeFocused()
-  await nav.getByRole('button', { name: '更多' }).click()
-  await menu.getByRole('button', { name: '密钥' }).click()
+  await expect(nav.locator('.shell-nav-more > button')).toBeFocused()
+  await nav.locator('.shell-nav-more > button').click()
+  await menu.getByRole('button', { name: '密钥', exact: true }).click()
   await expect(page).toHaveURL(/#secrets$/)
   await expect(menu).toBeHidden()
-  await expect(nav.getByRole('button', { name: '更多' })).toHaveClass(/active/)
+  await expect(nav.locator('.shell-nav-more > button')).toHaveClass(/active/)
+  await expect(nav.locator('.shell-nav-more > button')).toHaveText('更多 · 密钥')
   await page.setViewportSize({ width: 1440, height: 900 })
-  await expect(nav.getByRole('button')).toHaveText(['对话', '任务', /^收件箱/, '审批', '记忆', '值守', '网站授权', '密钥', '技能', '工作流', '连接器'])
+  await expect(nav.getByRole('button')).toHaveText(['对话', /^收件箱/, '更多 · 密钥'])
   expect(await noSidewaysScroll(page)).toBe(true)
   await shot(page, `all-pages-1440`, false)
 })
@@ -357,15 +374,15 @@ test('the view lives in the URL: back/forward, reload, hand-edited hashes and ?a
   const nav = primaryNav(page)
   await page.goto('/?agent=finance')
   await expect(page).toHaveURL(/\/\?agent=finance#chat$/)
-  await nav.getByRole('button', { name: '记忆' }).click()
+  await openPage(page, '记忆')
   await expect(page).toHaveURL(/\/\?agent=finance#memory$/)
-  await nav.getByRole('button', { name: '密钥' }).click()
+  await openPage(page, '密钥')
   await expect(page).toHaveURL(/\/\?agent=finance#secrets$/)
 
   await page.goBack()
   await expect(page).toHaveURL(/\/\?agent=finance#memory$/)
   await expect(heading(page)).toHaveText('记忆')
-  await expect(nav.getByRole('button', { name: '记忆' })).toHaveAttribute('aria-current', 'page')
+  await expect(nav.getByRole('button', { name: '更多 · 记忆' })).toHaveAttribute('aria-current', 'page')
   await page.goBack()
   await expect(page).toHaveURL(/#chat$/)
   await expect(heading(page)).toHaveText('Conveyor')
@@ -397,9 +414,12 @@ test('keyboard: Alt+number switches views, "/" jumps to the message box, Esc clo
   await installShellApi(page)
   await page.goto('/')
   const nav = primaryNav(page)
-  await expect(nav.getByRole('button', { name: '任务' })).toHaveAttribute('title', /任务（(Alt\+|⌥)2）/)
-  await expect(nav.getByRole('button', { name: '密钥' })).toHaveAttribute('title', /密钥（(Alt\+|⌥)7）/)
-  await page.keyboard.press('Alt+2')
+  await nav.locator('.shell-nav-more > button').click()
+  const menu = page.getByRole('group', { name: '更多页面' })
+  await expect(menu.getByRole('button', { name: '任务', exact: true })).toHaveAttribute('title', /任务（(Alt\+|⌥)3）/)
+  await expect(menu.getByRole('button', { name: '密钥', exact: true })).toHaveAttribute('title', /密钥（(Alt\+|⌥)7）/)
+  await page.keyboard.press('Escape')
+  await page.keyboard.press('Alt+3')
   await expect(page).toHaveURL(/#tasks$/)
   await page.keyboard.press('Alt+4')
   await expect(page).toHaveURL(/#memory$/)
@@ -419,7 +439,7 @@ test('keyboard: Alt+number switches views, "/" jumps to the message box, Esc clo
   await page.keyboard.type('/plan')
   await expect(chatBox).toHaveValue('/plan')
   // 任务: the chat panel stays mounted but hidden; "/" must reach the visible 任务 box.
-  await page.keyboard.press('Alt+2')
+  await page.keyboard.press('Alt+3')
   await expect(page).toHaveURL(/#tasks$/)
   await expect(hiddenChatBox).toBeHidden()
   await page.locator('.stream-header h2').click()
@@ -494,7 +514,7 @@ test('phone (390): compact bar, bottom nav, drawers, pinned message box, no side
   const bottom = page.getByRole('navigation', { name: '底部导航' })
   await expect(bottom).toBeVisible()
   await expect(primaryNav(page)).toBeHidden()
-  await expect(bottom.getByRole('button')).toHaveText(['对话', '任务', /收件箱/, '记忆', '更多'])
+  await expect(bottom.getByRole('button')).toHaveText(['对话', /收件箱/, '更多'])
   await expect(page.locator('header.topbar .top-status')).toContainText('在线')
   await expect(page.getByRole('button', { name: '设置' })).toHaveCount(0)
 
@@ -509,15 +529,15 @@ test('phone (390): compact bar, bottom nav, drawers, pinned message box, no side
   await shot(page, `chat-390`)
 
   const views = [
-    { slug: 'tasks', label: '任务', inSheet: false, title: '登录页错误提示改成中文' },
-    { slug: 'memory', label: '记忆', inSheet: false, title: '记忆' },
+    { slug: 'tasks', label: '任务', inSheet: true, title: '登录页错误提示改成中文' },
+    { slug: 'memory', label: '记忆', inSheet: true, title: '记忆' },
     { slug: 'teammate', label: '值守', inSheet: true, title: '值守' },
     { slug: 'secrets', label: '密钥', inSheet: true, title: '密钥' },
   ]
   for (const view of views) {
     if (view.inSheet) {
       await bottom.getByRole('button', { name: '更多' }).click()
-      await page.getByRole('dialog', { name: '更多' }).getByRole('button', { name: view.label }).click()
+      await page.getByRole('dialog', { name: '更多' }).getByRole('button', { name: view.label, exact: true }).click()
       await expect(page.getByRole('dialog', { name: '更多' })).toBeHidden()
       await expect(bottom.getByRole('button', { name: '更多' })).toHaveClass(/active/)
     } else {
@@ -535,10 +555,10 @@ test('phone (390): compact bar, bottom nav, drawers, pinned message box, no side
     await shot(page, `${view.slug}-390`)
   }
 
-  // 更多 sheet: the other pages plus 设置 and 锁定 (the only settings entry on a phone).
+  // 更多 sheet: same moved pages in the same order as desktop, plus 设置 and 锁定.
   await bottom.getByRole('button', { name: '更多' }).click()
   const sheet = page.getByRole('dialog', { name: '更多' })
-  await expect(sheet.getByRole('button')).toHaveText(['×', '值守', '网站授权', '密钥', '设置', '锁定'])
+  await expect(sheet.getByRole('button')).toHaveText(['×', /^任务/, /^记忆/, /^值守/, /^网站授权/, /^密钥/, '设置', '锁定'])
   await expect(page.getByRole('button', { name: '设置' })).toHaveCount(1)
   await shot(page, `more-390`, false)
   await page.keyboard.press('Escape')

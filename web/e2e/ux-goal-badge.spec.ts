@@ -169,7 +169,7 @@ test('supervisor feature off: no 项目 nav and no goals poll', async ({ page })
   await page.goto('/#tasks')
 
   const nav = page.getByRole('navigation', { name: '主导航' })
-  await expect(nav.getByRole('button', { name: '任务' })).toBeVisible()
+  await expect(nav.getByRole('button', { name: '更多 · 任务' })).toBeVisible()
   await expect(nav.getByRole('button', { name: /^项目/ })).toHaveCount(0)
   await page.clock.fastForward(31_000)
   expect(fixture.goalRequests).toBe(0)
