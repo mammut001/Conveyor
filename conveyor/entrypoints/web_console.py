@@ -894,9 +894,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 from conveyor.web.web_chat import build_history
                 # Unknown (e.g. brand-new, not yet persisted) sessions are simply empty.
                 session = self.server.control.get_session(session_id)
+                hist_settings = getattr(self.server.control, "settings", None)
                 self._json(HTTPStatus.OK, {
                     "session_id": session_id,
-                    "messages": build_history(session),
+                    "messages": build_history(session, settings=hist_settings),
                 })
             elif path == "/api/nodes":
                 self._json(HTTPStatus.OK, {"nodes": self.server.control.nodes()})
@@ -1497,8 +1498,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 else:
                     from conveyor.automation.overnight_chat import route as nightly_route
                     nightly_control = os.getenv('CONVEYOR_NIGHTLY_CONTROL') == '1' and nightly_route(message) is not None
-                    from conveyor.agents import goal_loop
-                    if not chat_enabled(settings) and not nightly_control and not goal_loop.is_goal_command(message):
+                    from conveyor.agents import chat_intents, goal_loop
+                    chat_intent_hit = chat_intents.has_pending_or_detected_intent(
+                        settings, durable_session_id, message,
+                    )
+                    if (
+                        not chat_enabled(settings)
+                        and not nightly_control
+                        and not goal_loop.is_goal_command(message)
+                        and not chat_intent_hit
+                    ):
                         self._feature_off("chat_disabled")
                         return
 
@@ -1573,6 +1582,16 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     "ok": ok, "message": message, "job_id": job.id if job else None,
                     "session_id": durable_session_id,
                 })
+            elif parsed.path == "/api/chat/actions":
+                # Only trust action_id from client; payload and execution live server-side.
+                action_id = str(body.get("action_id") or "") if isinstance(body, dict) else ""
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from conveyor.core.config import load_runtime_settings
+                    settings = load_runtime_settings()
+                from conveyor.agents.chat_intents import execute_action
+                status, payload = execute_action(self.server, settings, action_id)
+                self._json(status, payload)
             elif parsed.path == "/api/config/provider/models":
                 from conveyor.core.provider_config import fetch_provider_models, ProviderModelsError, ApiKeyRequiredError
                 draft = body if isinstance(body, dict) else {}

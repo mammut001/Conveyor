@@ -1755,16 +1755,26 @@ function SupervisorDeployView({
   )
 }
 
+export type SupervisorNavigationRequest = {
+  nonce: number
+  repoId: string
+  worktreeId?: string
+  tab?: 'goals' | 'workspace'
+  goalOutcome?: string
+}
+
 export function SupervisorWorkspace({
   token,
   active,
   coordinatorFallbackName,
   onOpenWorkers,
+  navigationRequest,
 }: {
   token: string
   active: boolean
   coordinatorFallbackName?: string
   onOpenWorkers?: () => void
+  navigationRequest?: SupervisorNavigationRequest | null
 }) {
   const narrowViewport = useMediaQuery('(max-width: 900px)')
   const [capabilities, setCapabilities] = useState<SupervisorCapabilities | null>(null)
@@ -2071,6 +2081,47 @@ export function SupervisorWorkspace({
     saveContext(repoId, worktreeId)
     setMobileRepoDrawerOpen(false)
   }, [])
+
+  const handledNavNonceRef = useRef(0)
+  useEffect(() => {
+    if (!navigationRequest || navigationRequest.nonce <= handledNavNonceRef.current) return
+    if (!navigationRequest.repoId) {
+      handledNavNonceRef.current = navigationRequest.nonce
+      if (navigationRequest.tab) {
+        subTabTouchedRef.current = true
+        setSubTab(navigationRequest.tab)
+      }
+      if (navigationRequest.goalOutcome) {
+        setGoalDraft(navigationRequest.goalOutcome)
+      }
+      return
+    }
+    const repo = repositories.find(r => r.id === navigationRequest.repoId)
+    if (!repo) return
+    handledNavNonceRef.current = navigationRequest.nonce
+    const targetWt = (
+      (navigationRequest.worktreeId
+        ? (repo.worktrees || []).find(w => w.id === navigationRequest.worktreeId)
+        : null)
+      || (repo.worktrees || []).find(w => w.managed && !w.is_main)
+      || repo.worktrees?.[0]
+    )
+    if (targetWt) {
+      selectWorktreeContext(repo.id, targetWt.id)
+    } else {
+      setSelectedRepoId(repo.id)
+      setSelectedWorktreeId('')
+      setExpandedRepos(prev => ({ ...prev, [repo.id]: true }))
+      saveContext(repo.id, '')
+    }
+    if (navigationRequest.tab) {
+      subTabTouchedRef.current = true
+      setSubTab(navigationRequest.tab)
+    }
+    if (navigationRequest.goalOutcome) {
+      setGoalDraft(navigationRequest.goalOutcome)
+    }
+  }, [navigationRequest, repositories, selectWorktreeContext])
 
   const toggleRepo = useCallback((repoId: string) => {
     setExpandedRepos(prev => {

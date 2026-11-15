@@ -490,6 +490,10 @@ async def run_web_chat(
                 msg, settings, goal_command, goal_loop_web_driver(msg, settings, runner, port)))
             port.emit("done", {"outcome": "answered"})
             return
+        from conveyor.agents import chat_intents
+        if await chat_intents.maybe_handle_web_chat(msg, port, settings, prompt):
+            port.emit("done", {"outcome": "answered"})
+            return
         from conveyor.automation.overnight_chat import route as nightly_route
         nightly=nightly_route(prompt)
         if nightly is not None:
@@ -675,7 +679,11 @@ async def decide_tool_approval(
     }
 
 
-def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
+def build_history(
+    session: dict[str, Any] | None,
+    *,
+    settings: Any = None,
+) -> list[dict[str, Any]]:
     """Transcript messages for the chat view, with approval prompts resolved.
 
     An approval prompt is shown as pending only while its token is still live;
@@ -700,6 +708,12 @@ def build_history(session: dict[str, Any] | None) -> list[dict[str, Any]]:
         if meta.get("origin_channel") in ("web", "telegram", "feishu"):
             item["origin_channel"] = meta["origin_channel"]
         text = item["text"]
+        if m.get("kind") == "action_card" and meta.get("card_id") and settings is not None:
+            from conveyor.agents.chat_intents import get_action_card
+
+            card = get_action_card(settings, str(meta["card_id"]))
+            if card is not None:
+                item["action_card"] = card
         if m.get("kind") == "task_suggestion" and isinstance(meta.get("prompt"), str):
             from conveyor.agents.supervisor_task_draft import task_suggestion_from_metadata
 
