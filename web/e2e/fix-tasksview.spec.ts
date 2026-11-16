@@ -108,7 +108,11 @@ test('older failure does not stay above a later successful run', async ({ page }
   await expect(page.locator('.shell-heading')).not.toContainText('失败')
   await expect(page.locator('.shell-heading h2')).toHaveText('成功的新提问')
   await expect(page.locator('.stream-panel')).not.toContainText('任务执行失败')
-  // The old failure is still listed among the runs; opening it does not resurrect the card above the newer chat.
+  // The old failure stays collapsed in 运行记录 behind the newer successful run;
+  // expanding 运行记录 lists it without resurrecting the card above the newer chat.
+  const runsToggle = page.locator('.context-section--runs .context-section-toggle')
+  await expect(runsToggle).toHaveAttribute('aria-expanded', 'false')
+  await runsToggle.click()
   const oldRun = page.locator('.session-run', { hasText: '旧的构建任务' })
   await expect(oldRun).toContainText('失败')
   // Explicitly opening the old failed run shows its own card and badge again.

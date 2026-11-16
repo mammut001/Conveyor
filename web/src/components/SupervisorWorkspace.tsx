@@ -439,10 +439,15 @@ export function isTerminalTaskState(state?: string | null): boolean {
 const WORKTREE_INFLIGHT_TASK_STATES = new Set([
   'queued',
   'dispatching',
+  'dispatched',
+  'running',
   'analyzing',
   'implementing',
   'reviewing',
+  'verifying',
   'repair_pending',
+  'repairing',
+  'cancelling',
 ])
 
 /** Task states that hold a worktree lock on the API (see agent_supervisor.has_active_task_for_worktree). */

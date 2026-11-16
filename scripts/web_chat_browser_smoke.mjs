@@ -302,14 +302,27 @@ try {
   await page.getByRole('button', {name:'对话',exact:true}).first().click();
   await page.getByRole('button', {name:'准备执行任务',exact:false}).waitFor();
   console.log('[pass] full App chat-to-task handoff, review before submission, same session, task list, restored action');
+  const openTasksView = async () => {
+    const nav = page.getByRole('navigation', {name:'主导航'});
+    const direct = nav.locator('.shell-nav-group').getByRole('button', {name:/^任务(?:[\s\d,]|$)/});
+    if (await direct.count()) {
+      await direct.first().click();
+      return;
+    }
+    const moreBtn = nav.locator('.shell-nav-more > button');
+    if ((await moreBtn.getAttribute('aria-expanded')) !== 'true') {
+      await moreBtn.click();
+    }
+    await page.locator('#shell-nav-menu').getByRole('button', {name:'任务',exact:true}).click();
+  };
   await input.fill('尚未发送的下一步想法');
-  await page.getByRole('button', {name:'任务',exact:true}).first().click();
+  await openTasksView();
   await page.getByRole('button', {name:'对话',exact:true}).first().click();
   assert.equal(await input.inputValue(), '尚未发送的下一步想法', 'draft survives tab navigation');
   await send('continue while I inspect Tasks');
   const backgroundReply = pending;
   await input.fill('回复期间写的草稿');
-  await page.getByRole('button', {name:'任务',exact:true}).first().click();
+  await openTasksView();
   assert.equal(backgroundReply.destroyed, false, 'switching views must not cancel the chat request');
   backgroundReply.write(frame('delta', {text:'Reply completed while Tasks was open'}));
   backgroundReply.write(frame('message', {text:'Reply completed while Tasks was open'}));
@@ -334,7 +347,7 @@ try {
   holdRaceReplay = true;
   await page.reload();
   // The view lives in the URL (#chat after the steps above); live task progress is on 任务.
-  await page.getByRole('button', {name:'任务',exact:true}).first().click();
+  await openTasksView();
   await waitForFixture(() => replayReply && liveTaskStream);
   liveTaskStream.write(frame('event',taskEvent(2,'Live operation')));
   await page.locator('.live-tools-list .tool-call-title strong').getByText('Live operation',{exact:true}).waitFor();
