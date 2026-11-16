@@ -674,6 +674,104 @@
 .primary-interface .provider-settings .system-channels span.on { color: #1f2328; }
 .primary-interface .provider-settings .system-channels span.on::before { background: #15803d; }
 
+/* Intent decider section inside 模型设置 */
+.primary-interface .provider-settings .intent-decider-section {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+  margin-bottom: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #eaecf0;
+}
+.primary-interface .provider-settings .intent-decider-head {
+  display: grid;
+  gap: 4px;
+}
+.primary-interface .provider-settings .intent-decider-head h3 {
+  margin: 0;
+  color: #1f2328;
+  font-size: 14px;
+  font-weight: 600;
+}
+.primary-interface .provider-settings .intent-decider-desc {
+  margin: 0;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.primary-interface .provider-settings .intent-decider-secret-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  color: #475467;
+  font-size: 13px;
+}
+.primary-interface .provider-settings .intent-decider-secret-row code {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #f3f4f6;
+  color: #1f2328;
+  font-size: 12px;
+}
+.primary-interface .provider-settings .intent-decider-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.primary-interface .provider-settings .intent-decider-badge.is-ok {
+  background: #ecfdf3;
+  color: #027a48;
+}
+.primary-interface .provider-settings .intent-decider-badge.is-missing {
+  background: #fef3f2;
+  color: #b42318;
+}
+.primary-interface .provider-settings .intent-decider-secret-link {
+  color: #bd5c40;
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: underline;
+}
+.primary-interface .provider-settings .intent-decider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.primary-interface .provider-settings .intent-decider-btn {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2328;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.primary-interface .provider-settings .intent-decider-btn:hover:not(:disabled) {
+  background: #f9fafb;
+  border-color: #98a2b3;
+}
+.primary-interface .provider-settings .intent-decider-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+.primary-interface .provider-settings .intent-decider-feedback {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.primary-interface .provider-settings .intent-decider-feedback.is-ok {
+  color: #027a48;
+}
+.primary-interface .provider-settings .intent-decider-feedback.is-error {
+  color: #b42318;
+}
+
 /* Phones: dialogs become full-screen sheets with a fixed header and footer. */
 @media (max-width: 620px) {
   .primary-interface .settings-backdrop { padding: 0; place-items: stretch; }

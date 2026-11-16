@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 
-from conveyor.web.console_secrets import SecretStoreError, delete_secret, list_secrets, set_secret
+from conveyor.web.console_secrets import SecretStoreError, delete_secret, list_secrets, secret_hint, set_secret
 
 
 def dispatch(handler, method: str, path: str, body=None) -> bool:
@@ -18,6 +18,7 @@ def dispatch(handler, method: str, path: str, body=None) -> bool:
             if not isinstance(body, dict) or set(body) != {"name", "value"}:
                 raise SecretStoreError("name and value required")
             result = set_secret(settings, body["name"], body["value"])
+            result["hint"] = secret_hint(body["value"])
             handler._json(HTTPStatus.CREATED, result)
         elif method == "DELETE" and path.startswith("/api/secrets/"):
             # Do not decode percent-escaped separators into additional paths.

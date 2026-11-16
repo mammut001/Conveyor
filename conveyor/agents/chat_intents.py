@@ -12,8 +12,10 @@ authoritative on the server and disabled after a single execution.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import math
 import os
 import re
 import sqlite3
@@ -26,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import intent_decider
 from conveyor.agents import supervisor_goals as goals_mod
 from conveyor.agents import supervisor_service as svc
 from conveyor.agents import supervisor_validation
@@ -1536,10 +1539,463 @@ def _start_timed_goal_from_action(
     return action_outcome, reply_text, card
 
 
+DECIDER_CONFIDENCE_DIRECT = 0.8
+DECIDER_CONFIDENCE_CLARIFY = 0.5
+
+_DECIDER_QUESTION_END_RE = re.compile(r"(?:[?？]|[吗呢]\s*[?？。！!]?)\s*$")
+_DECIDER_QUESTION_START_RE = re.compile(r"^\s*(?:怎么|如何|为什么|什么是)")
+
+_CLARIFY_ACTION_TEXT: dict[str, str] = {
+    "progress": "查看项目进度",
+    "stop": "停止正在运行的目标",
+    "resume": "继续之前的项目目标",
+    "create_project": "创建一个新项目",
+    "timed_goal": "让助手持续改进项目",
+}
+
+_ACTIVE_GOAL_STATES = ("running", "waiting_user", "waiting_quota")
+_GOAL_STATE_ZH: dict[str, str] = {
+    "running": "进行中",
+    "waiting_user": "等待你回复",
+    "waiting_quota": "等待额度恢复",
+    "achieved": "已达成",
+    "stopped": "已停止",
+    "exhausted": "轮数用尽",
+    "failed": "已失败",
+}
+
+
+def _is_question_for_decider(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    return bool(_DECIDER_QUESTION_END_RE.search(raw) or _DECIDER_QUESTION_START_RE.search(raw))
+
+
+def _format_remaining_zh(remaining_seconds: int | None) -> str:
+    if remaining_seconds is None:
+        return ""
+    rem = max(0, int(remaining_seconds))
+    if rem == 0:
+        return "已到结束时间"
+    if rem < 60:
+        return "还剩不到 1 分钟"
+    total_mins = math.ceil(rem / 60)
+    if total_mins < 60:
+        return f"还剩 {total_mins} 分钟"
+    hours, mins = divmod(total_mins, 60)
+    if mins == 0:
+        return f"还剩 {hours} 小时"
+    return f"还剩 {hours} 小时 {mins} 分"
+
+
+def _build_clarifying_card(
+    settings: Any,
+    session_id: str,
+    choice: str,
+    raw_text: str,
+) -> tuple[str, dict[str, Any]]:
+    action_phrase = _CLARIFY_ACTION_TEXT.get(choice, "执行这个操作")
+    text = f"你是想{action_phrase}吗？"
+    card = create_action_card(
+        settings,
+        session_id=session_id,
+        title="确认你的意思",
+        text=text,
+        buttons=[
+            {
+                "label": "是",
+                "action": "confirm_clarified_intent",
+                "style": "primary",
+                "client_payload": {},
+                "server_payload": {"intent_choice": choice, "raw_text": raw_text},
+            },
+            {
+                "label": "不是",
+                "action": "reject_clarified_intent",
+                "style": "secondary",
+                "client_payload": {},
+                "server_payload": {"raw_text": raw_text},
+            },
+        ],
+    )
+    return text, card
+
+
+def _build_duration_picker_card(
+    settings: Any,
+    session_id: str,
+    repo: dict[str, Any],
+    goal_text: str,
+    *,
+    title: str = "选择持续时间",
+    text: str = "",
+    cancel_outcome: str = "已取消",
+) -> tuple[str, dict[str, Any]]:
+    repo_id = str(repo.get("id") or "")
+    repo_name = str(repo.get("name") or "")
+    goal_display = goal_text.strip() or DEFAULT_TIMED_GOAL_OUTCOME
+    prompt_text = text or f"在 {repo_name} 上持续改进多久？"
+    card = create_action_card(
+        settings,
+        session_id=session_id,
+        title=title,
+        text=prompt_text,
+        buttons=[
+            {
+                "label": "1 小时",
+                "action": "pick_timed_goal_duration",
+                "style": "primary",
+                "client_payload": {},
+                "server_payload": {"repo_id": repo_id, "duration_minutes": 60, "goal_text": goal_display},
+            },
+            {
+                "label": "3 小时",
+                "action": "pick_timed_goal_duration",
+                "style": "secondary",
+                "client_payload": {},
+                "server_payload": {"repo_id": repo_id, "duration_minutes": 180, "goal_text": goal_display},
+            },
+            {
+                "label": "10 小时",
+                "action": "pick_timed_goal_duration",
+                "style": "secondary",
+                "client_payload": {},
+                "server_payload": {"repo_id": repo_id, "duration_minutes": 600, "goal_text": goal_display},
+            },
+            {
+                "label": "取消",
+                "action": "cancel_action",
+                "style": "secondary",
+                "client_payload": {},
+                "server_payload": {"outcome": cancel_outcome},
+            },
+        ],
+    )
+    return prompt_text, card
+
+
+def _handle_progress_intent(
+    settings: Any,
+    session_id: str,
+    raw_text: str,
+) -> tuple[str, dict[str, Any] | None]:
+    if not svc.is_enabled(settings):
+        return "目前还没有开启项目目标功能，请先检查配置。", None
+
+    repos = _safe_list_repos(settings)
+    try:
+        goals = goals_mod.list_goals(settings)
+    except svc.SupervisorServiceError:
+        return "现在没有在跑的目标。", None
+
+    matched_repo = _match_repo_mentioned_in_text(repos, raw_text)
+    selected_goal: dict[str, Any] | None = None
+
+    if matched_repo is not None:
+        repo_goals = [g for g in goals if g.get("repo_id") == matched_repo.get("id")]
+        active_repo_goals = [g for g in repo_goals if g.get("state") in _ACTIVE_GOAL_STATES]
+        selected_goal = active_repo_goals[0] if active_repo_goals else (repo_goals[0] if repo_goals else None)
+    else:
+        active_goals = [g for g in goals if g.get("state") in _ACTIVE_GOAL_STATES]
+        if active_goals:
+            selected_goal = active_goals[0]
+
+    if selected_goal is None:
+        return "现在没有在跑的目标。", None
+
+    try:
+        detail = goals_mod.get_goal(settings, str(selected_goal["id"]))
+    except svc.SupervisorServiceError:
+        detail = selected_goal
+
+    repo = _find_repo_by_id(repos, str(detail.get("repo_id") or ""))
+    repo_name = str((repo or {}).get("name") or detail.get("title") or "项目")
+    repo_id = str(detail.get("repo_id") or "")
+    wt_id = str(detail.get("worktree_id") or "")
+    if repo_id:
+        _set_recent_repo(settings, session_id, repo_id)
+
+    state = str(detail.get("state") or "")
+    state_label = _GOAL_STATE_ZH.get(state, state or "进行中")
+    rem_text = _format_remaining_zh(detail.get("remaining_seconds"))
+    rounds_total = int(detail.get("rounds_total") or 0)
+    rounds_passed = int(detail.get("rounds_passed") or 0)
+
+    iterations = detail.get("iterations") or []
+    last_round_title = ""
+    for it in reversed(iterations):
+        rt = str(it.get("round_title") or "").strip()
+        if rt:
+            last_round_title = rt
+            break
+
+    parts = [f"{repo_name}（{state_label}）"]
+    if rem_text:
+        parts.append(rem_text)
+    parts.append(f"已跑 {rounds_total} 轮 / 通过 {rounds_passed} 轮")
+    line1 = "，".join(parts) + "。"
+    if last_round_title:
+        text = f"{line1}\n最近一轮：{last_round_title}"
+    else:
+        text = line1
+
+    card = create_action_card(
+        settings,
+        session_id=session_id,
+        title="目标进度",
+        text=text,
+        buttons=[
+            {
+                "label": "查看进度",
+                "action": "open_goal_progress",
+                "style": "primary",
+                "client_payload": {
+                    "view": "code",
+                    "tab": "goals",
+                    "repo_id": repo_id,
+                    "worktree_id": wt_id,
+                },
+                "server_payload": {},
+            }
+        ],
+    )
+    return text, card
+
+
+def _handle_stop_intent(
+    settings: Any,
+    session_id: str,
+    raw_text: str,
+) -> tuple[str, dict[str, Any] | None]:
+    if not svc.is_enabled(settings):
+        return "目前还没有开启项目目标功能，请先检查配置。", None
+
+    repos = _safe_list_repos(settings)
+    try:
+        goals = goals_mod.list_goals(settings)
+    except svc.SupervisorServiceError:
+        return "现在没有在跑的目标。", None
+
+    active_goals = [g for g in goals if g.get("state") in _ACTIVE_GOAL_STATES]
+    if not active_goals:
+        return "现在没有在跑的目标。", None
+
+    matched_repo = _match_repo_mentioned_in_text(repos, raw_text)
+    target_goal: dict[str, Any] | None = None
+    if matched_repo is not None:
+        for g in active_goals:
+            if g.get("repo_id") == matched_repo.get("id"):
+                target_goal = g
+                break
+        if target_goal is None:
+            return f"「{matched_repo['name']}」现在没有在跑的目标。", None
+    else:
+        recent_id = _get_session_state(settings, session_id).get("recent_repo_id", "")
+        if recent_id:
+            for g in active_goals:
+                if g.get("repo_id") == recent_id:
+                    target_goal = g
+                    break
+        if target_goal is None:
+            target_goal = active_goals[0]
+
+    repo = _find_repo_by_id(repos, str(target_goal.get("repo_id") or ""))
+    repo_name = str((repo or {}).get("name") or target_goal.get("title") or "当前项目")
+    if repo is not None:
+        _set_recent_repo(settings, session_id, str(repo["id"]))
+
+    text = f"要停止 {repo_name} 的目标吗？已经做好的改动会保留。"
+    card = create_action_card(
+        settings,
+        session_id=session_id,
+        title="确认停止目标",
+        text=text,
+        buttons=[
+            {
+                "label": "停止",
+                "action": "confirm_stop_goal",
+                "style": "primary",
+                "client_payload": {},
+                "server_payload": {
+                    "goal_id": str(target_goal["id"]),
+                    "repo_id": str(target_goal.get("repo_id") or ""),
+                    "repo_name": repo_name,
+                },
+            },
+            {
+                "label": "先不停",
+                "action": "cancel_action",
+                "style": "secondary",
+                "client_payload": {},
+                "server_payload": {"outcome": "先不停止，继续保持当前状态"},
+            },
+        ],
+    )
+    return text, card
+
+
+def _handle_resume_intent(
+    settings: Any,
+    session_id: str,
+    raw_text: str,
+) -> tuple[str, dict[str, Any] | None]:
+    if not svc.is_enabled(settings):
+        return "目前还没有开启项目目标功能，请先检查配置。", None
+
+    repos = _safe_list_repos(settings)
+    if not repos:
+        return "目前还没有项目，请先创建一个项目再继续。", None
+
+    try:
+        goals = goals_mod.list_goals(settings)
+    except svc.SupervisorServiceError:
+        goals = []
+
+    matched_repo = _match_repo_mentioned_in_text(repos, raw_text)
+    target_repo: dict[str, Any] | None = matched_repo
+    last_goal: dict[str, Any] | None = None
+
+    if target_repo is not None:
+        repo_goals = [g for g in goals if g.get("repo_id") == target_repo.get("id")]
+        non_active = [g for g in repo_goals if g.get("state") not in _ACTIVE_GOAL_STATES]
+        last_goal = non_active[0] if non_active else (repo_goals[0] if repo_goals else None)
+    else:
+        recent_id = _get_session_state(settings, session_id).get("recent_repo_id", "")
+        if recent_id:
+            recent_goals = [g for g in goals if g.get("repo_id") == recent_id]
+            if recent_goals:
+                non_active = [g for g in recent_goals if g.get("state") not in _ACTIVE_GOAL_STATES]
+                last_goal = non_active[0] if non_active else recent_goals[0]
+                target_repo = _find_repo_by_id(repos, recent_id)
+        if last_goal is None and goals:
+            non_active = [g for g in goals if g.get("state") not in _ACTIVE_GOAL_STATES]
+            last_goal = non_active[0] if non_active else goals[0]
+            target_repo = _find_repo_by_id(repos, str(last_goal.get("repo_id") or ""))
+
+    if target_repo is None or last_goal is None:
+        return "之前还没有做过项目目标，请直接告诉我你想在哪个项目上做什么。", None
+
+    _set_recent_repo(settings, session_id, str(target_repo["id"]))
+    last_goal_text = str(last_goal.get("outcome") or "").strip() or DEFAULT_TIMED_GOAL_OUTCOME
+    short_title = _short_goal_title(last_goal_text)
+    prompt_text = f"要继续在 {target_repo['name']} 上做「{short_title}」吗？选一下这次跑多久："
+    return _build_duration_picker_card(
+        settings,
+        session_id,
+        target_repo,
+        last_goal_text,
+        title="继续之前的目标",
+        text=prompt_text,
+        cancel_outcome="已取消继续目标",
+    )
+
+
+def _handle_decider_timed_goal_intent(
+    settings: Any,
+    session_id: str,
+    raw_text: str,
+) -> tuple[str, dict[str, Any] | None]:
+    if not svc.is_enabled(settings):
+        return "目前还没有开启项目目标功能，请先检查配置。", None
+
+    repos = _safe_list_repos(settings)
+    if not repos:
+        return _handle_start_timed_goal_intent(
+            settings,
+            session_id,
+            Intent(kind="start_timed_goal", duration_minutes=None, goal_text=raw_text),
+            raw_text,
+        )
+
+    timed_match = _TIMED_VERB_DURATION_RE.search(raw_text) or _DURATION_VERB_RE.search(raw_text)
+    duration_minutes = _parse_duration_match(timed_match) if timed_match else None
+    goal_text = _extract_goal_text(raw_text, verb_span=timed_match.span()) if timed_match else _strip_goal_edges(raw_text)
+
+    if duration_minutes is not None:
+        return _handle_start_timed_goal_intent(
+            settings,
+            session_id,
+            Intent(
+                kind="start_timed_goal",
+                duration_minutes=duration_minutes,
+                goal_text=goal_text,
+                mentions_github=bool(_GITHUB_RE.search(raw_text)),
+            ),
+            raw_text,
+        )
+
+    target_repo = _match_repo_mentioned_in_text(repos, raw_text)
+    if target_repo is None:
+        recent_id = _get_session_state(settings, session_id).get("recent_repo_id", "")
+        if recent_id:
+            target_repo = _find_repo_by_id(repos, recent_id)
+    if target_repo is None and len(repos) == 1:
+        target_repo = repos[0]
+
+    if target_repo is None:
+        return _build_pick_project_card(
+            settings,
+            session_id,
+            repos,
+            0,
+            goal_text or DEFAULT_TIMED_GOAL_OUTCOME,
+            prefix_text="在哪个项目上持续改进？",
+        )
+
+    _set_recent_repo(settings, session_id, str(target_repo["id"]))
+    return _build_duration_picker_card(
+        settings,
+        session_id,
+        target_repo,
+        goal_text or DEFAULT_TIMED_GOAL_OUTCOME,
+    )
+
+
+def _dispatch_decider_choice(
+    settings: Any,
+    session_id: str,
+    choice: str,
+    raw_text: str,
+) -> tuple[str, dict[str, Any] | None]:
+    if choice == "progress":
+        return _handle_progress_intent(settings, session_id, raw_text)
+    if choice == "stop":
+        return _handle_stop_intent(settings, session_id, raw_text)
+    if choice == "resume":
+        return _handle_resume_intent(settings, session_id, raw_text)
+    if choice == "create_project":
+        return _handle_create_project_intent(
+            settings,
+            session_id,
+            Intent(
+                kind="create_project",
+                project_name=None,
+                mentions_github=bool(_GITHUB_RE.search(raw_text)),
+            ),
+        )
+    if choice == "timed_goal":
+        return _handle_decider_timed_goal_intent(settings, session_id, raw_text)
+    return "", None
+
+
+def has_pending_skip_decider(settings: Any, session_id: str, text: str) -> bool:
+    """Return True when the owner just rejected a clarifying card for this exact text."""
+    try:
+        pending = _has_active_pending(settings, session_id)
+    except Exception:
+        return False
+    if pending is None or pending.get("pending_kind") != "skip_decider_once":
+        return False
+    expected = str((pending.get("pending_payload") or {}).get("text") or "").strip()
+    return bool(expected and expected == (text or "").strip())
+
+
 def has_pending_or_detected_intent(settings: Any, session_id: str, text: str) -> bool:
     """Return True if web chat can handle this message without requiring a chat model."""
     try:
-        if _has_active_pending(settings, session_id) is not None:
+        pending = _has_active_pending(settings, session_id)
+        if pending is not None and pending.get("pending_kind") != "skip_decider_once":
             return True
     except Exception:
         logger.exception("chat intent state unavailable")
@@ -1564,9 +2020,14 @@ async def maybe_handle_web_chat(
         if not raw:
             return False
 
-        # 1. Check active pending follow-up state (e.g. awaiting project name).
+        # 1. Check active pending follow-up state (e.g. awaiting project name, or skip_decider_once).
         pending = _has_active_pending(settings, session_id)
-        if pending is not None and pending["pending_kind"] == "awaiting_project_name":
+        if pending is not None and pending["pending_kind"] == "skip_decider_once":
+            expected = str((pending.get("pending_payload") or {}).get("text") or "").strip()
+            _clear_pending_state(settings, session_id)
+            if expected == raw:
+                return False
+        elif pending is not None and pending["pending_kind"] == "awaiting_project_name":
             _clear_pending_state(settings, session_id)
             if raw in {"取消", "算了", "不用了", "不建了", "cancel"}:
                 _emit_plain_reply(port, msg, "好的，已取消创建项目。")
@@ -1579,7 +2040,50 @@ async def maybe_handle_web_chat(
                 _emit_plain_reply(port, msg, reply_text)
             return True
 
-        # 2. Deterministic pattern first; optional chat-tier LLM fallback on ambiguous inputs.
+        # 2. Deterministic pattern first (always wins).
+        direct = detect_intent(raw)
+        if direct is not None:
+            if direct.kind == "create_project":
+                reply_text, card = _handle_create_project_intent(settings, session_id, direct)
+            elif direct.kind == "start_timed_goal":
+                reply_text, card = _handle_start_timed_goal_intent(settings, session_id, direct, raw)
+            else:
+                return False
+            if card is not None:
+                _emit_card_reply(port, msg, reply_text, card)
+            else:
+                _emit_plain_reply(port, msg, reply_text)
+            return True
+
+        # 3. Decision model (Gemini Decisions / Jev / custom) if configured.
+        if not raw.startswith("/"):
+            decider_configured = intent_decider.is_configured(settings)
+            decision = await asyncio.to_thread(
+                intent_decider.decide_intent,
+                settings,
+                raw,
+                intent_decider.INTENT_OPTIONS,
+            )
+            if decision is not None:
+                if decision.choice == "chat" or decision.confidence < DECIDER_CONFIDENCE_CLARIFY:
+                    return False
+                if _is_question_for_decider(raw) or decision.confidence < DECIDER_CONFIDENCE_DIRECT:
+                    reply_text, card = _build_clarifying_card(settings, session_id, decision.choice, raw)
+                    _emit_card_reply(port, msg, reply_text, card)
+                    return True
+                reply_text, card = _dispatch_decider_choice(settings, session_id, decision.choice, raw)
+                if not reply_text and card is None:
+                    return False
+                if card is not None:
+                    _emit_card_reply(port, msg, reply_text, card)
+                else:
+                    _emit_plain_reply(port, msg, reply_text)
+                return True
+            if decider_configured:
+                # Decider was configured and errored/timed out -> fall back to normal chat.
+                return False
+
+        # 4. Legacy optional chat-tier LLM fallback when no decider is configured.
         intent = await classify_intent(raw, settings, model=model)
         if intent is None:
             return False
@@ -1716,7 +2220,8 @@ def execute_action(
             outcome = f"已处理本地托管项目「{pname}」"
     elif action == "pick_project":
         repo_id = str(server_payload.get("repo_id") or "")
-        duration_minutes = int(server_payload.get("duration_minutes") or 60)
+        raw_dur = server_payload.get("duration_minutes")
+        duration_minutes = int(raw_dur) if raw_dur is not None else 60
         goal_text = str(server_payload.get("goal_text") or "")
         repo = _find_repo_by_id(_safe_list_repos(settings), repo_id)
         if repo is None:
@@ -1725,6 +2230,32 @@ def execute_action(
         else:
             _set_recent_repo(settings, session_id, repo_id)
             outcome = f"已选择项目「{repo['name']}」"
+            if duration_minutes <= 0:
+                follow_up_text, follow_up_card = _build_duration_picker_card(
+                    settings,
+                    session_id,
+                    repo,
+                    goal_text,
+                )
+            else:
+                follow_up_text, follow_up_card = _build_timed_goal_confirmation_card(
+                    settings,
+                    session_id,
+                    repo,
+                    duration_minutes,
+                    goal_text,
+                )
+    elif action == "pick_timed_goal_duration":
+        repo_id = str(server_payload.get("repo_id") or "")
+        duration_minutes = int(server_payload.get("duration_minutes") or 60)
+        goal_text = str(server_payload.get("goal_text") or "")
+        repo = _find_repo_by_id(_safe_list_repos(settings), repo_id)
+        if repo is None:
+            outcome = "找不到所选项目"
+            follow_up_text = "找不到所选项目，请到「项目」页面确认。"
+        else:
+            _set_recent_repo(settings, session_id, repo_id)
+            outcome = f"已选择持续 {_format_duration_zh(duration_minutes)}"
             follow_up_text, follow_up_card = _build_timed_goal_confirmation_card(
                 settings,
                 session_id,
@@ -1732,6 +2263,30 @@ def execute_action(
                 duration_minutes,
                 goal_text,
             )
+    elif action == "confirm_stop_goal":
+        goal_id = str(server_payload.get("goal_id") or "")
+        repo_name = str(server_payload.get("repo_name") or "当前项目")
+        try:
+            goals_mod.stop_goal(server, settings, goal_id)
+        except svc.SupervisorServiceError as exc:
+            outcome = f"停止失败：{exc.message}"
+            follow_up_text = exc.message
+        else:
+            outcome = f"已停止「{repo_name}」的目标"
+            follow_up_text = f"已停止 {repo_name} 的目标，已经做好的改动会保留。"
+    elif action == "confirm_clarified_intent":
+        intent_choice = str(server_payload.get("intent_choice") or "")
+        raw_text = str(server_payload.get("raw_text") or "")
+        outcome = f"已确认：{intent_decider.INTENT_ACTION_LABELS.get(intent_choice, btn['label'])}"
+        follow_up_text, follow_up_card = _dispatch_decider_choice(settings, session_id, intent_choice, raw_text)
+        if not follow_up_text and follow_up_card is None:
+            follow_up_text = "好的，你可以直接补充更多细节。"
+    elif action == "reject_clarified_intent":
+        raw_text = str(server_payload.get("raw_text") or "")
+        outcome = "好的，按普通对话回答"
+        if raw_text:
+            _set_pending_state(settings, session_id, "skip_decider_once", {"text": raw_text})
+            client_action = {"type": "normal_chat", "text": raw_text}
     elif action == "confirm_start_timed_goal":
         outcome, follow_up_text, follow_up_card = _start_timed_goal_from_action(
             server,
