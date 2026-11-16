@@ -249,6 +249,38 @@ test('执行者: 测试 shows 正在测试… then the 可以用 line', async ({
   await expect(codex.getByText('还没测试过')).toHaveCount(0)
 })
 
+test('执行者: bridged Pi hides internal conveyor-chat id and shows plain Chinese label', async ({ page }) => {
+  await install(page, {
+    workers: [
+      piWorker({
+        provider: {
+          configured: true,
+          provider_name: '和对话用同一个模型（fake-model）',
+          model: 'fake-model',
+        },
+        last_check: {
+          ok: true,
+          worker_id: 'pi',
+          provider: 'conveyor-chat',
+          provider_name: '和对话用同一个模型（fake-model）',
+          model: 'fake-model',
+          latency_ms: 498,
+          kind: 'ok',
+          message: '可以用：和对话用同一个模型（fake-model） 回复正常（498 毫秒）。',
+          checked_at: NOW_ISO,
+        },
+      }),
+    ],
+    active: 'pi',
+  })
+  await page.goto('/#workers')
+
+  const pi = page.locator('li.worker-card', { hasText: 'Pi（内置）' })
+  await expect(pi.getByText('可以用 · 和对话用同一个模型（fake-model）')).toBeVisible()
+  await expect(pi.getByTestId('pi-provider-box')).toContainText('和对话用同一个模型（fake-model）')
+  await expect(pi).not.toContainText('conveyor-chat')
+})
+
 test('执行者: a failing 测试 shows the red message and a collapsed 技术细节', async ({ page }) => {
   await install(page, {
     workers: [codexWorker()],

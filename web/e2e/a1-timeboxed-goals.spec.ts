@@ -350,8 +350,11 @@ test('running time-boxed goal card shows countdown, passed rounds list, and tick
 test('waiting_quota state shows HH:MM auto-resume copy and keeps 停止 button working', async ({ page }) => {
   await page.setViewportSize(PHONE)
   const expectedDate = new Date('2026-11-15T14:35:00Z')
-  const pad = (n: number) => String(n).padStart(2, '0')
-  const expectedHHMM = `${pad(expectedDate.getHours())}:${pad(expectedDate.getMinutes())}`
+  const expectedHHMM = expectedDate.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
 
   const quotaGoal: GoalDetail = {
     id: 'goal-tb-quota',
@@ -365,7 +368,7 @@ test('waiting_quota state shows HH:MM auto-resume copy and keeps 停止 button w
     created_at: '2026-11-15T10:00:00Z',
     updated_at: '2026-11-15T14:05:00Z',
     question: '',
-    summary: `模型额度暂时用完，会在 ${expectedHHMM} 自动继续。`,
+    summary: '模型额度暂时用完，大约 30 分钟后自动继续。',
     stop_reason: '',
     last_next_prompt: '补充边界测试',
     deadline_at: '2026-11-15T20:00:00Z',

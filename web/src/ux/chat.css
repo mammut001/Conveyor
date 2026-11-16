@@ -480,6 +480,12 @@
   font-size: 13px;
   line-height: 1.5;
 }
+.primary-interface .chat-panel-container .chat-action-card-deadline {
+  margin: 0 0 8px;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 1.4;
+}
 .primary-interface .chat-panel-container .chat-action-card .action-row {
   display: flex;
   flex-wrap: wrap;

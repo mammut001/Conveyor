@@ -223,13 +223,19 @@ class CheckWorkerTests(unittest.TestCase):
         self.assertTrue(result["ok"], result)
         self.assertEqual(result["kind"], "ok")
         self.assertEqual(result["provider"], "conveyor-chat")
+        self.assertEqual(result["provider_name"], f"和对话用同一个模型（{CHAT_MODEL}）")
         self.assertEqual(result["model"], CHAT_MODEL)
         self.assertNotEqual(result["provider"], "deepseek")
+        self.assertNotIn("conveyor-chat", result["message"])
+        self.assertIn(f"可以用：和对话用同一个模型（{CHAT_MODEL}）", result["message"])
+        self.assertIn("回复正常", result["message"])
         self.assertNotIn(CHAT_SECRET, json.dumps(result))
 
         saved = workers.load_workers_state(self.settings)["last_check"]["pi"]
         self.assertEqual(saved["provider"], "conveyor-chat")
+        self.assertEqual(saved["provider_name"], f"和对话用同一个模型（{CHAT_MODEL}）")
         self.assertEqual(saved["model"], CHAT_MODEL)
+        self.assertNotIn("conveyor-chat", saved["message"])
         self.assertEqual(saved["ok"], True)
 
         # The bridged models.json was written for the probe run: chat endpoint
@@ -253,9 +259,31 @@ class CheckWorkerTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertEqual(result["kind"], "config")
         self.assertEqual(result["provider"], "conveyor-chat")
+        self.assertEqual(result["provider_name"], f"和对话用同一个模型（{CHAT_MODEL}）")
         self.assertEqual(result["model"], CHAT_MODEL)
         self.assertIn("模型设置", result["detail"])
+        self.assertNotIn("conveyor-chat", result["message"])
         self.assertNotIn(CHAT_SECRET, json.dumps(result))
+
+    def test_bridged_chat_model_auth_error_hides_internal_provider_id(self) -> None:
+        fake = _write_fake_pi(
+            self.root,
+            "pi",
+            [{"type": "error", "message": '401: {"message":"Authentication Fails"}'}],
+        )
+        env = _clean_pi_env(fake)
+        env.update({
+            "CONVEYOR_CHAT_BASE_URL": CHAT_BASE_URL,
+            "CONVEYOR_CHAT_MODEL": CHAT_MODEL,
+            "CONVEYOR_CHAT_API_KEY": CHAT_SECRET,
+        })
+        with patch.dict(os.environ, env, clear=True):
+            result = asyncio.run(worker_check.check_worker(self.settings, "pi"))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["kind"], "auth")
+        self.assertEqual(result["provider"], "conveyor-chat")
+        self.assertNotIn("conveyor-chat", result["message"])
+        self.assertIn("和对话用同一个模型", result["message"])
 
     def test_timeout_kills_the_process(self) -> None:
         pid_file = self.root / "pi.pid"

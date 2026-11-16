@@ -67,6 +67,7 @@ export type ActionCard = {
   buttons: ActionCardButton[];
   used?: boolean;
   outcome?: string;
+  deadline_at?: string | null;
 };
 
 type HistoryApproval = { id: string; tool_name: string; arg: string; status: string; expires_in_seconds?: number };
@@ -127,6 +128,19 @@ const NAVIGATION_ONLY_ACTIONS = new Set([
   'open_workers',
   'open_code',
 ]);
+
+function formatActionCardDeadline(deadlineAt?: string | null): string {
+  const raw = (deadlineAt || '').trim();
+  if (!raw) return '';
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const hhmm = parsed.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  return `预计 ${hhmm} 结束`;
+}
 
 function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: boolean }) {
   if (!tasks || tasks.length === 0) return null;
@@ -1075,6 +1089,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           }
 
           const shownText = stripDeepHint(message.text);
+          const actionCardDeadline = message.actionCard
+            ? formatActionCardDeadline(message.actionCard.deadline_at)
+            : '';
           return (
             <article key={message.id} className="transcript-message role-assistant chat-turn">
               {avatar}
@@ -1112,6 +1129,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                     )}
                     {message.actionCard.text && message.actionCard.text !== shownText && (
                       <p className="chat-action-card-text">{message.actionCard.text}</p>
+                    )}
+                    {actionCardDeadline && (
+                      <p className="chat-action-card-deadline">{actionCardDeadline}</p>
                     )}
                     {message.actionCard.buttons.length > 0 && (
                       <div className="action-row">

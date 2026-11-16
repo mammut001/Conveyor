@@ -381,6 +381,8 @@ class TimeboxedGoalTests(unittest.TestCase):
         self.assertEqual(paused["iterations"][1]["prompt"], r2_prompt)
         self.assertEqual(self.fake.calls, eval_calls_before)  # evaluator not invoked on quota pause
         self.assertIn("自动继续", paused["summary"])
+        self.assertIn("大约 15 分钟后自动继续", paused["summary"])
+        self.assertNotRegex(paused["summary"], r"\b\d{1,2}:\d{2}\b")
         # No extra timer thread: the pause is driven by the existing goal-loop tick.
         self.assertFalse(
             [t for t in threading.enumerate() if isinstance(t, threading.Timer)],
