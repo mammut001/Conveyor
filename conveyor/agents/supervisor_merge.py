@@ -84,6 +84,23 @@ CODE_NOTHING_TO_MERGE = "nothing_to_merge"
 CODE_MERGE_CONFLICT = "merge_conflict"
 CODE_COMMIT_FAILED = "commit_failed"
 CODE_MERGE_ABORT_FAILED = "merge_abort_failed"
+CODE_MISSING_GIT_IDENTITY = "missing_git_identity"
+
+_MISSING_GIT_IDENTITY_MARKERS = (
+    "committer identity unknown",
+    "author identity unknown",
+    "please tell me who you are",
+    "unable to auto-detect email address",
+    "no email was given",
+    "no name was given",
+    "empty ident name",
+)
+
+
+def _is_missing_git_identity_error(stderr: str, stdout: str = "") -> bool:
+    """Return True when git failed to create a commit due to missing identity."""
+    combined = f"{stderr}\n{stdout}".lower()
+    return any(marker in combined for marker in _MISSING_GIT_IDENTITY_MARKERS)
 
 # --------------------------------------------------------------------------
 # per-repository merge serialization
@@ -999,6 +1016,12 @@ def _run_merge(settings: Any, scope: dict[str, Any], message: str) -> dict[str, 
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 "合并失败后没能把主工作目录恢复原状，请手动检查主工作目录的状态",
                 code=CODE_MERGE_ABORT_FAILED,
+            )
+        if not conflicts and _is_missing_git_identity_error(err, _out):
+            raise _error(
+                HTTPStatus.CONFLICT,
+                "服务器上的 git 没有设置提交人信息，合并没有进行",
+                code=CODE_MISSING_GIT_IDENTITY,
             )
         raise _error(
             HTTPStatus.CONFLICT,

@@ -2711,12 +2711,14 @@ class SupervisorWorkerManager:
             )
 
     async def _claim_available(self, settings: Any) -> None:
+        if self._closed:
+            return
         for tid, flow in list(self._active_flows.items()):
             if flow.done():
                 self._on_flow_done(settings, tid, flow)
 
         max_flows = max(1, int(getattr(ags, "MAX_CONCURRENT_FLOWS", 2)))
-        while len(self._active_flows) < max_flows:
+        while not self._closed and len(self._active_flows) < max_flows:
             claimed = ags.claim_task(settings)
             if claimed is None:
                 break
@@ -2783,22 +2785,28 @@ class SupervisorWorkerManager:
             if self._closed:
                 return
             self._closed = True
-            worker = self._worker_task
-            flows = list(self._active_flows.values())
         self._unregister_goal_wake_hook()
 
         async def _shutdown() -> None:
+            # Stop the poll loop first so it cannot launch new flows or goal passes
+            # before we snapshot and cancel active tasks.
+            with self._lock:
+                worker = self._worker_task
             if worker is not None and not worker.done():
                 worker.cancel()
+                await asyncio.gather(worker, return_exceptions=True)
+
+            with self._lock:
+                flows = list(self._active_flows.values())
+                goals_task = self._goals_task
             for f in flows:
                 if not f.done():
                     f.cancel()
-            goals_task = self._goals_task
             if goals_task is not None and not goals_task.done():
                 goals_task.cancel()
             pending = [
                 t
-                for t in ([worker] if worker else []) + flows + ([goals_task] if goals_task else [])
+                for t in flows + ([goals_task] if goals_task else [])
                 if t is not None and not t.done()
             ]
             if pending:

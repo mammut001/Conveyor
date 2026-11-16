@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import chat_intents
+from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_goals as goals_mod
 from conveyor.agents import supervisor_service as svc
 from conveyor.core.transcript_store import get_transcript_store
@@ -640,73 +641,76 @@ class ChatActionsHttpTests(unittest.TestCase):
         _start_available_executor_patches(self)
 
     def test_http_chat_actions_executes_server_payload_only_and_rejects_replay(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="conveyor-ci-http-") as tmp:
-            settings = _make_settings(Path(tmp) / "env")
-            created = svc.create_managed_project(settings, name="web-repo")
-            repo_id = created["repository"]["id"]
-            card = chat_intents.create_action_card(
-                settings,
-                session_id="web:web-console:default",
-                title="确认开始持续改进",
-                text="准备在 web-repo 上持续改进 2 小时：修好页面。",
-                buttons=[
-                    {
-                        "label": "开始",
-                        "action": "confirm_start_timed_goal",
-                        "style": "primary",
-                        "client_payload": {},
-                        "server_payload": {
-                            "repo_id": repo_id,
-                            "duration_minutes": 120,
-                            "goal_text": "修好页面",
-                        },
-                    }
-                ],
-            )
-            btn_id = card["buttons"][0]["id"]
-            h = _HttpHarness(settings)
-            try:
-                conn = http.client.HTTPConnection("127.0.0.1", h.port, timeout=10)
-                conn.request(
-                    "POST",
-                    "/api/chat/actions",
-                    body=json.dumps({
-                        "action_id": btn_id,
-                        # Client attempts to tamper with duration & repo_id; must be ignored!
-                        "duration_minutes": 1440,
-                        "repo_id": "forged-repo",
-                    }),
-                    headers={
-                        "Authorization": f"Bearer {TOKEN}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                resp = conn.getresponse()
-                data = json.loads(resp.read().decode("utf-8"))
-                self.assertEqual(resp.status, 200)
-                self.assertTrue(data["ok"])
-                self.assertTrue(data["card"]["used"])
-                goals = goals_mod.list_goals(settings)
-                self.assertEqual(len(goals), 1)
-                self.assertEqual(goals[0]["repo_id"], repo_id)
+        # Cleanups run LIFO: close client conn -> close HTTP server & worker ->
+        # drain async goal_notify queue -> remove temp dir.
+        tmp_dir = tempfile.TemporaryDirectory(prefix="conveyor-ci-http-")
+        self.addCleanup(tmp_dir.cleanup)
+        self.addCleanup(goal_notify.drain)
 
-                # Replay same action_id -> HTTP 409.
-                conn.request(
-                    "POST",
-                    "/api/chat/actions",
-                    body=json.dumps({"action_id": btn_id}),
-                    headers={
-                        "Authorization": f"Bearer {TOKEN}",
-                        "Content-Type": "application/json",
+        settings = _make_settings(Path(tmp_dir.name) / "env")
+        created = svc.create_managed_project(settings, name="web-repo")
+        repo_id = created["repository"]["id"]
+        card = chat_intents.create_action_card(
+            settings,
+            session_id="web:web-console:default",
+            title="确认开始持续改进",
+            text="准备在 web-repo 上持续改进 2 小时：修好页面。",
+            buttons=[
+                {
+                    "label": "开始",
+                    "action": "confirm_start_timed_goal",
+                    "style": "primary",
+                    "client_payload": {},
+                    "server_payload": {
+                        "repo_id": repo_id,
+                        "duration_minutes": 120,
+                        "goal_text": "修好页面",
                     },
-                )
-                resp2 = conn.getresponse()
-                resp2.read()
-                self.assertEqual(resp2.status, 409)
-                conn.close()
-            finally:
-                svc.stop_server_worker(h.server)
-                h.close()
+                }
+            ],
+        )
+        btn_id = card["buttons"][0]["id"]
+        h = _HttpHarness(settings)
+        self.addCleanup(h.close)
+        conn = http.client.HTTPConnection("127.0.0.1", h.port, timeout=10)
+        self.addCleanup(conn.close)
+
+        conn.request(
+            "POST",
+            "/api/chat/actions",
+            body=json.dumps({
+                "action_id": btn_id,
+                # Client attempts to tamper with duration & repo_id; must be ignored!
+                "duration_minutes": 1440,
+                "repo_id": "forged-repo",
+            }),
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp = conn.getresponse()
+        data = json.loads(resp.read().decode("utf-8"))
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["card"]["used"])
+        goals = goals_mod.list_goals(settings)
+        self.assertEqual(len(goals), 1)
+        self.assertEqual(goals[0]["repo_id"], repo_id)
+
+        # Replay same action_id -> HTTP 409.
+        conn.request(
+            "POST",
+            "/api/chat/actions",
+            body=json.dumps({"action_id": btn_id}),
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp2 = conn.getresponse()
+        resp2.read()
+        self.assertEqual(resp2.status, 409)
 
 
 class ChatIntentsFailSafeTests(unittest.TestCase):

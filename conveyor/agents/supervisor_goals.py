@@ -46,7 +46,7 @@ from conveyor.agents import supervisor_service as svc
 from conveyor.agents import workers
 from conveyor.agents import worker_usage
 from conveyor.agents.goal_notify import NOTIFY_STATES as GOAL_NOTIFY_STATES
-from conveyor.agents.goal_notify import notify_goal_change
+from conveyor.agents.goal_notify import goal_status_label, notify_goal_change
 from conveyor.core.redaction import redact_text, truncate
 
 log = logging.getLogger("conveyor.supervisor_goals")
@@ -61,6 +61,8 @@ GOAL_ACHIEVED = "achieved"
 GOAL_STOPPED = "stopped"
 GOAL_EXHAUSTED = "exhausted"
 GOAL_FAILED = "failed"
+GOAL_TERMINAL_STATES = (GOAL_ACHIEVED, GOAL_STOPPED, GOAL_EXHAUSTED, GOAL_FAILED)
+MAX_FINISH_REPORT_BULLETS = 8
 
 GOAL_MODE_OUTCOME = "outcome"
 GOAL_MODE_CONTINUOUS = "continuous"
@@ -178,7 +180,8 @@ CREATE TABLE IF NOT EXISTS supervisor_goals (
     deadline_at TEXT,
     mode TEXT NOT NULL DEFAULT 'outcome',
     resume_at TEXT,
-    consecutive_failures INTEGER NOT NULL DEFAULT 0
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    origin_session_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS supervisor_goal_iterations (
@@ -210,6 +213,14 @@ CREATE TABLE IF NOT EXISTS supervisor_goal_notifications (
     sent_at TEXT NOT NULL,
     PRIMARY KEY (goal_id, state, updated_at)
 );
+
+-- Finish report idempotency: at most one web-chat finish report per goal.
+CREATE TABLE IF NOT EXISTS supervisor_goal_reports (
+    goal_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL DEFAULT '',
+    card_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -218,6 +229,7 @@ _GOAL_SCHEMA_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("supervisor_goals", "mode", "TEXT NOT NULL DEFAULT 'outcome'"),
     ("supervisor_goals", "resume_at", "TEXT"),
     ("supervisor_goals", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
+    ("supervisor_goals", "origin_session_id", "TEXT"),
     ("supervisor_goal_iterations", "passed", "INTEGER NOT NULL DEFAULT 0"),
     ("supervisor_goal_iterations", "round_title", "TEXT NOT NULL DEFAULT ''"),
 )
@@ -340,6 +352,7 @@ def _goal_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     raw_mode = row["mode"] if "mode" in keys else GOAL_MODE_OUTCOME
     raw_resume = row["resume_at"] if "resume_at" in keys else None
     raw_consec = row["consecutive_failures"] if "consecutive_failures" in keys else 0
+    raw_origin = row["origin_session_id"] if "origin_session_id" in keys else None
     return {
         "id": str(row["id"]),
         "repo_id": str(row["repo_id"]),
@@ -359,6 +372,7 @@ def _goal_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "mode": str(raw_mode or GOAL_MODE_OUTCOME),
         "resume_at": str(raw_resume) if raw_resume else None,
         "consecutive_failures": int(raw_consec or 0),
+        "origin_session_id": str(raw_origin).strip() if raw_origin else None,
     }
 
 
@@ -828,6 +842,16 @@ def create_goal(server: Any, settings: Any, body: dict[str, Any]) -> dict[str, A
         max_iterations = _clamp_max_iterations(body.get("max_iterations"))
         deadline_at = None
     role_overrides = svc._sanitize_role_overrides(body.get("role_overrides")) or {}
+    raw_origin = body.get("origin_session_id")
+    origin_session_id: str | None = None
+    if raw_origin is not None:
+        if not isinstance(raw_origin, str):
+            raise _service_error(HTTPStatus.BAD_REQUEST, "origin_session_id must be a string", code="invalid_origin_session_id")
+        cleaned_origin = raw_origin.strip()
+        if cleaned_origin:
+            if len(cleaned_origin) > 256 or any(ch in cleaned_origin for ch in ("\x00", "\r", "\n")):
+                raise _service_error(HTTPStatus.BAD_REQUEST, "origin_session_id is invalid", code="invalid_origin_session_id")
+            origin_session_id = cleaned_origin
 
     repo, wt = svc._resolve_repo_and_worktree(
         settings,
@@ -861,8 +885,8 @@ def create_goal(server: Any, settings: Any, body: dict[str, Any]) -> dict[str, A
                (id, repo_id, worktree_id, title, outcome, max_iterations,
                 role_overrides_json, state, created_at, updated_at,
                 question, summary, stop_reason, last_next_prompt,
-                deadline_at, mode, resume_at, consecutive_failures)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?, ?, NULL, 0)""",
+                deadline_at, mode, resume_at, consecutive_failures, origin_session_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', '', ?, ?, NULL, 0, ?)""",
             (
                 goal_id,
                 str(repo["id"]),
@@ -876,6 +900,7 @@ def create_goal(server: Any, settings: Any, body: dict[str, Any]) -> dict[str, A
                 now,
                 deadline_at,
                 mode,
+                origin_session_id,
             ),
         )
         conn.commit()
@@ -979,7 +1004,7 @@ def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:
         return get_goal(settings, goal_id)
 
     reason = "用户手动停止了目标"
-    _update_goal(
+    updated = _update_goal(
         settings,
         goal_id,
         state=GOAL_STOPPED,
@@ -1001,6 +1026,7 @@ def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:
             except svc.SupervisorServiceError:
                 log.warning("goal %s: cancelling task %s failed", goal_id, tid, exc_info=True)
 
+    _on_goal_terminal(settings, updated)
     _wake_goal_worker(server, settings)
     return get_goal(settings, goal_id)
 
@@ -1087,6 +1113,7 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
                 conn.close()
             updated = _get_goal_row(settings, gid)
             notify_goal_change(settings, updated, GOAL_ACHIEVED)
+            _on_goal_terminal(settings, updated)
             _wake_goal_worker(server, settings)
             return get_goal(settings, gid)
 
@@ -1457,6 +1484,338 @@ def _record_decision(
         conn.close()
 
 
+_GOAL_REPORTS_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS supervisor_goal_reports (
+    goal_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL DEFAULT '',
+    card_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+)
+"""
+
+
+def _positive_int(raw: Any) -> int:
+    if isinstance(raw, bool):
+        return 0
+    if isinstance(raw, int) and raw > 0:
+        return raw
+    if isinstance(raw, str) and raw.strip().isdigit() and int(raw.strip()) > 0:
+        return int(raw.strip())
+    return 0
+
+
+def _clip_report_detail(text: Any, limit: int = 200) -> str:
+    collapsed = " ".join(redact_text(str(text or "")).split())
+    if len(collapsed) > limit:
+        return collapsed[:limit] + "…"
+    return collapsed
+
+
+def _format_elapsed_zh(created_at: Any, updated_at: Any) -> str:
+    start_dt = _parse_utc(created_at)
+    if start_dt is None:
+        return "用时不到 1 分钟"
+    end_dt = _parse_utc(updated_at) or _now()
+    elapsed_seconds = max(0, int((end_dt - start_dt).total_seconds()))
+    total_mins = elapsed_seconds // 60
+    if total_mins <= 0:
+        return "用时不到 1 分钟"
+    hours, mins = divmod(total_mins, 60)
+    if hours == 0:
+        return f"用时 {mins} 分"
+    if mins == 0:
+        return f"用时 {hours} 小时"
+    return f"用时 {hours} 小时 {mins} 分"
+
+
+def _resolve_report_iterations(settings: Any, goal: dict[str, Any]) -> list[dict[str, Any]]:
+    goal_id = str(goal.get("id") or "").strip()
+    if goal_id and settings is not None and getattr(settings, "codex_memory_root", ""):
+        try:
+            db_iters = _iterations(settings, goal_id)
+            if db_iters:
+                return db_iters
+        except Exception:
+            pass
+    raw = goal.get("iterations")
+    if isinstance(raw, list):
+        return [it for it in raw if isinstance(it, dict)]
+    return []
+
+
+def _is_check_script_entry(entry: Any) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("name") == "check-script":
+        return True
+    argv = entry.get("argv")
+    if isinstance(argv, (list, tuple)) and tuple(argv) == ("sh", "scripts/check.sh"):
+        return True
+    return "scripts/check.sh" in str(entry.get("command") or "")
+
+
+def _last_round_check_script_passed(settings: Any, iterations: list[dict[str, Any]]) -> bool | None:
+    ran = [it for it in iterations if _iteration_ran(it)]
+    if not ran:
+        return None
+    last_it = ran[-1]
+    task_id = str(last_it.get("task_id") or "").strip()
+    if task_id and settings is not None and getattr(settings, "codex_memory_root", ""):
+        try:
+            acc = ags.latest_acceptance(settings, task_id)
+            if isinstance(acc, dict):
+                checks = acc.get("executed_checks") or []
+                if isinstance(checks, list):
+                    for chk in checks:
+                        if _is_check_script_entry(chk):
+                            return bool(chk.get("passed"))
+        except Exception:
+            pass
+    return bool(
+        last_it.get("passed")
+        or last_it.get("decision") == DECISION_ACHIEVED
+        or last_it.get("task_final_state") == "completed"
+    )
+
+
+def _resolve_report_scope(
+    settings: Any,
+    goal: dict[str, Any],
+    iterations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    repo_id = str(goal.get("repo_id") or "").strip()
+    worktree_id = str(goal.get("worktree_id") or "").strip()
+    repo_name = str(goal.get("repo_name") or "").strip()
+    repo_path = ""
+    worktree_path = ""
+    branch = ""
+    target_branch = ""
+    commits_ahead = 0
+
+    if settings is not None and getattr(settings, "codex_memory_root", "") and repo_id and worktree_id:
+        try:
+            conn = svc._connect(settings)
+            try:
+                repo_row = conn.execute(
+                    "SELECT name, canonical_path FROM supervisor_repositories WHERE id = ?",
+                    (repo_id,),
+                ).fetchone()
+                wt_row = conn.execute(
+                    "SELECT canonical_path, branch FROM supervisor_worktrees WHERE id = ?",
+                    (worktree_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if repo_row is not None:
+                repo_name = repo_name or str(repo_row["name"] or "").strip()
+                repo_path = str(repo_row["canonical_path"] or "")
+            if wt_row is not None:
+                worktree_path = str(wt_row["canonical_path"] or "")
+                branch = str(wt_row["branch"] or "").strip()
+        except Exception:
+            pass
+
+    if worktree_path and Path(worktree_path).is_dir() and repo_path and Path(repo_path).is_dir():
+        try:
+            from conveyor.agents import supervisor_merge as merge_mod
+
+            if not branch:
+                branch = merge_mod._current_branch(settings, worktree_path)
+            target_branch = merge_mod._target_branch(
+                settings,
+                {"main_path": repo_path, "worktree_path": worktree_path},
+            )
+            if target_branch and merge_mod._branch_exists(settings, worktree_path, target_branch):
+                commits_ahead = merge_mod._commits_ahead(
+                    settings,
+                    {"worktree_path": worktree_path},
+                    target_branch,
+                )
+            else:
+                first_task_id = next(
+                    (str(it.get("task_id") or "") for it in iterations if it.get("task_id")),
+                    "",
+                )
+                first_task = ags.get_task(settings, first_task_id) if first_task_id else None
+                base_sha = str((first_task or {}).get("base_sha") or "").strip()
+                if base_sha:
+                    rc, out, _ = merge_mod._git(
+                        settings,
+                        worktree_path,
+                        ["rev-list", "--count", f"{base_sha}..HEAD"],
+                    )
+                    if rc == 0:
+                        commits_ahead = int(out.strip() or "0")
+        except Exception:
+            pass
+
+    if not repo_name:
+        repo_name = str(goal.get("title") or "").strip() or "当前项目"
+    if not target_branch:
+        target_branch = "main"
+
+    return {
+        "repo_id": repo_id,
+        "worktree_id": worktree_id,
+        "repo_name": repo_name,
+        "branch": branch,
+        "target_branch": target_branch,
+        "commits_ahead": max(0, int(commits_ahead)),
+    }
+
+
+def _build_finish_report_bundle(
+    settings: Any,
+    goal: dict[str, Any],
+    *,
+    state: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    eff_state = str(state if state is not None else goal.get("state") or "").strip()
+    stop_reason = str(goal.get("stop_reason") or "").strip()
+    label = goal_status_label(eff_state, stop_reason)
+
+    iterations = _resolve_report_iterations(settings, goal)
+    if iterations:
+        enriched = _enrich_goal_dict(goal, iterations)
+        rounds_total = int(enriched["rounds_total"])
+        rounds_passed = int(enriched["rounds_passed"])
+    else:
+        rounds_total = _positive_int(goal.get("rounds_total")) or _positive_int(goal.get("iterations_used"))
+        rounds_passed = _positive_int(goal.get("rounds_passed"))
+
+    scope = _resolve_report_scope(settings, goal, iterations)
+    elapsed_zh = _format_elapsed_zh(goal.get("created_at"), goal.get("updated_at"))
+
+    lines: list[str] = [
+        f"{scope['repo_name']} 的目标结束了：{label}。",
+        f"跑了 {rounds_total} 轮，通过 {rounds_passed} 轮，{elapsed_zh}。",
+    ]
+
+    passed_titles: list[str] = []
+    for it in iterations:
+        if bool(it.get("passed")) or it.get("decision") == DECISION_ACHIEVED:
+            rt = str(it.get("round_title") or "").strip()
+            if rt:
+                passed_titles.append(rt)
+    for rt in passed_titles[-MAX_FINISH_REPORT_BULLETS:]:
+        lines.append(f"- {rt}")
+
+    if eff_state == GOAL_FAILED and stop_reason:
+        lines.append(f"原因：{_clip_report_detail(stop_reason)}")
+
+    if _repo_uses_check_script(settings, goal):
+        check_passed = _last_round_check_script_passed(settings, iterations)
+        if check_passed is True:
+            lines.append("自动检查：scripts/check.sh（最后一轮 通过）")
+        elif check_passed is False:
+            lines.append("自动检查：scripts/check.sh（最后一轮 没通过）")
+        else:
+            lines.append("自动检查：scripts/check.sh（尚未运行）")
+
+    if scope["commits_ahead"] > 0 and scope["branch"]:
+        lines.append(f"改动在工作目录 {scope['branch']}，还没有合并到主分支。")
+    else:
+        lines.append("没有产生改动。")
+
+    return "\n".join(lines), scope
+
+
+def build_finish_report_text(
+    settings: Any,
+    goal: dict[str, Any],
+    *,
+    state: str | None = None,
+) -> str:
+    """Build the plain Simplified-Chinese finish report shared by web chat and notifications."""
+    text, _scope = _build_finish_report_bundle(settings, goal, state=state)
+    return text
+
+
+def _default_report_session_id() -> str:
+    from conveyor.agents import agents
+    return agents.session_id_for(agents.DEFAULT_AGENT_ID)
+
+
+def _claim_finish_report(settings: Any, goal_id: str, session_id: str) -> bool:
+    if settings is None or not goal_id:
+        return False
+    conn = _connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(_GOAL_REPORTS_SCHEMA_SQL)
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO supervisor_goal_reports
+               (goal_id, session_id, card_id, created_at)
+               VALUES (?, ?, '', ?)""",
+            (goal_id, session_id, _utc_now()),
+        )
+        claimed = cur.rowcount == 1
+        conn.commit()
+        return claimed
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        conn.close()
+
+
+def _record_finish_report_card(settings: Any, goal_id: str, card_id: str) -> None:
+    if settings is None or not goal_id or not card_id:
+        return
+    conn = _connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE supervisor_goal_reports SET card_id = ? WHERE goal_id = ?",
+            (card_id, goal_id),
+        )
+        conn.commit()
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+def _on_goal_terminal(settings: Any, goal: dict[str, Any]) -> None:
+    """Post the finish report once to the origin (or default main) web-chat session."""
+    if settings is None or not isinstance(goal, dict):
+        return
+    if not getattr(settings, "codex_memory_root", ""):
+        return
+    goal_id = str(goal.get("id") or "").strip()
+    state = str(goal.get("state") or "").strip()
+    if not goal_id or state not in GOAL_TERMINAL_STATES:
+        return
+    target_session_id = str(goal.get("origin_session_id") or "").strip() or _default_report_session_id()
+    if not _claim_finish_report(settings, goal_id, target_session_id):
+        return
+    try:
+        from conveyor.agents import chat_intents
+
+        report_text, scope = _build_finish_report_bundle(settings, goal, state=state)
+        card = chat_intents.post_goal_finish_report(
+            settings,
+            session_id=target_session_id,
+            report_text=report_text,
+            goal_id=goal_id,
+            repo_id=scope["repo_id"],
+            worktree_id=scope["worktree_id"],
+            source_branch=scope["branch"],
+            target_branch=scope["target_branch"],
+            outcome=str(goal.get("outcome") or ""),
+        )
+        if isinstance(card, dict) and card.get("id"):
+            _record_finish_report_card(settings, goal_id, str(card["id"]))
+    except Exception:
+        log.warning("goal %s: failed to post finish report", goal_id, exc_info=True)
+
+
 def _finish_goal(
     settings: Any,
     goal: dict[str, Any],
@@ -1466,15 +1825,32 @@ def _finish_goal(
     question: str = "",
     stop_reason: str = "",
 ) -> dict[str, Any]:
+    now = _utc_now()
+    clean_question = truncate(redact_text(question or ""), MAX_QUESTION_CHARS)
+    clean_summary = truncate(redact_text(summary or ""), MAX_SUMMARY_CHARS)
+    clean_stop_reason = truncate(redact_text(stop_reason or ""), MAX_REASON_CHARS)
+    if state in GOAL_TERMINAL_STATES:
+        terminal_snapshot = dict(goal)
+        terminal_snapshot.update(
+            {
+                "state": state,
+                "question": clean_question,
+                "summary": clean_summary,
+                "stop_reason": clean_stop_reason,
+                "resume_at": None,
+                "updated_at": now,
+            }
+        )
+        _on_goal_terminal(settings, terminal_snapshot)
     updated = _update_goal(
         settings,
         goal["id"],
         state=state,
-        question=truncate(redact_text(question or ""), MAX_QUESTION_CHARS),
-        summary=truncate(redact_text(summary or ""), MAX_SUMMARY_CHARS),
-        stop_reason=truncate(redact_text(stop_reason or ""), MAX_REASON_CHARS),
+        question=clean_question,
+        summary=clean_summary,
+        stop_reason=clean_stop_reason,
         resume_at=None,
-        updated_at=_utc_now(),
+        updated_at=now,
     )
     log.info("goal %s -> %s (%s)", goal["id"], state, updated.get("stop_reason") or updated.get("question") or "")
     # Tell the owner on Telegram / Feishu / Web Push. Non-blocking and idempotent;
@@ -2492,6 +2868,27 @@ def _prepare_evaluator_call(
     return True, "", executor, coordinator, prompt, timeout
 
 
+async def _to_thread(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    """Run a synchronous goal/DB step in a worker thread.
+
+    If the caller task is cancelled while the thread step is in flight, wait for
+    it to finish before propagating ``CancelledError`` so ``SupervisorWorkerManager.stop()``
+    never returns while SQLite writes are still active.
+    """
+    fut = asyncio.ensure_future(asyncio.to_thread(func, *args, **kwargs))
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        while not fut.done():
+            try:
+                await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                pass
+            except BaseException:
+                break
+        raise
+
+
 async def _ask_evaluator(
     settings: Any,
     goal: dict[str, Any],
@@ -2504,7 +2901,7 @@ async def _ask_evaluator(
     """Ask the coordinator chat model for a decision. Never raises."""
     empty = _normalize_decision(None)
     try:
-        ok, reason, executor, coordinator, prompt, timeout = await asyncio.to_thread(
+        ok, reason, executor, coordinator, prompt, timeout = await _to_thread(
             _prepare_evaluator_call,
             settings,
             goal,
@@ -3027,20 +3424,20 @@ async def _evaluate_iteration(
     n = int(iteration["n"])
     task_id = str(iteration["task_id"])
 
-    claimed = await asyncio.to_thread(_claim_iteration, settings, goal_id, n)
+    claimed = await _to_thread(_claim_iteration, settings, goal_id, n)
     if not claimed:
         return  # another tick owns it, or it was already evaluated
 
-    handled_quota = await asyncio.to_thread(
+    handled_quota = await _to_thread(
         _maybe_handle_quota_failure, server, settings, goal, iteration, iterations, task
     )
     if handled_quota:
         return
 
     try:
-        repo_path, wt_path, _managed = await asyncio.to_thread(_scope_paths, settings, goal)
+        repo_path, wt_path, _managed = await _to_thread(_scope_paths, settings, goal)
     except svc.SupervisorServiceError as exc:
-        await asyncio.to_thread(_fail_goal, settings, goal, str(exc.message))
+        await _to_thread(_fail_goal, settings, goal, str(exc.message))
         return
 
     decision = await _ask_evaluator(
@@ -3052,7 +3449,7 @@ async def _evaluate_iteration(
         task_id=task_id,
     )
 
-    await asyncio.to_thread(
+    await _to_thread(
         _apply_evaluation_decision,
         server,
         settings,
@@ -3101,16 +3498,16 @@ def _recover_interrupted_iteration(
 
 async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) -> None:
     goal_id = goal["id"]
-    goal = await asyncio.to_thread(_get_goal_row, settings, goal_id)
+    goal = await _to_thread(_get_goal_row, settings, goal_id)
     if goal["state"] != GOAL_RUNNING:
         return
 
-    iterations = await asyncio.to_thread(_iterations, settings, goal_id)
+    iterations = await _to_thread(_iterations, settings, goal_id)
     if not iterations:
         if _deadline_passed(goal):
-            await asyncio.to_thread(_finish_deadline, settings, goal, iterations)
+            await _to_thread(_finish_deadline, settings, goal, iterations)
             return
-        await asyncio.to_thread(
+        await _to_thread(
             _start_iteration,
             server,
             settings,
@@ -3122,21 +3519,21 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
 
     current = iterations[-1]
     if current.get("decision") or current.get("task_final_state") == "cancelled":
-        await asyncio.to_thread(_reapply_decision, server, settings, goal, current, iterations)
+        await _to_thread(_reapply_decision, server, settings, goal, current, iterations)
         return
 
     if not current["task_id"]:
         # Crash between iteration insert and task creation, or resumed from waiting_quota:
         # enforce deadline before dispatching a new task.
         if _deadline_passed(goal):
-            await asyncio.to_thread(_finish_deadline, settings, goal, iterations)
+            await _to_thread(_finish_deadline, settings, goal, iterations)
             return
-        await asyncio.to_thread(_start_iteration, server, settings, goal, int(current["n"]), current["prompt"])
+        await _to_thread(_start_iteration, server, settings, goal, int(current["n"]), current["prompt"])
         return
 
-    task = await asyncio.to_thread(ags.get_task, settings, current["task_id"])
+    task = await _to_thread(ags.get_task, settings, current["task_id"])
     if task is None:
-        await asyncio.to_thread(
+        await _to_thread(
             _fail_goal,
             settings,
             goal,
@@ -3146,7 +3543,7 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
 
     task_state = str(task.get("state") or "")
     if task_state == "pending_dispatch":
-        await asyncio.to_thread(
+        await _to_thread(
             _redispatch_iteration_task,
             server,
             settings,
@@ -3160,7 +3557,7 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
         return  # still active (even if deadline passed, let running round finish)
 
     if task_state == "interrupted":
-        await asyncio.to_thread(_recover_interrupted_iteration, server, settings, goal, current, iterations, task)
+        await _to_thread(_recover_interrupted_iteration, server, settings, goal, current, iterations, task)
         return
 
     await _evaluate_iteration(server, settings, goal, current, iterations, task)
@@ -3172,14 +3569,14 @@ async def advance_goals(server: Any, settings: Any) -> None:
     if settings is None or not svc.is_enabled(settings):
         return
     try:
-        await asyncio.to_thread(_resume_due_waiting_quota, settings)
+        await _to_thread(_resume_due_waiting_quota, settings)
     except asyncio.CancelledError:
         raise
     except Exception:
         log.exception("failed to check waiting_quota goals")
 
     try:
-        goals = await asyncio.to_thread(_running_goals, settings)
+        goals = await _to_thread(_running_goals, settings)
     except Exception:
         log.exception("failed to list running goals")
         return

@@ -565,7 +565,7 @@ class GoalNotificationHintTests(unittest.TestCase):
             with self.subTest(state=state):
                 text = goal_notify.notification_text(
                     self.settings, _goal_row(state=state, stop_reason="原因"), state, "telegram")
-                self.assertTrue(text.endswith(goal_notify.OPEN_HINT))
+                self.assertTrue(text.endswith(goal_notify.WEB_CHAT_HINT))
                 self.assertNotIn("goal_reply", text)
 
     def test_the_push_channel_never_gets_the_text(self) -> None:

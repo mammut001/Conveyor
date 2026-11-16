@@ -93,22 +93,22 @@ class GoalNotifyTextTests(unittest.TestCase):
 
     def test_achieved_reports_the_round_number(self) -> None:
         text = goal_notify.notification_text(self.settings, _goal(), "achieved")
-        self.assertEqual(
-            text, "目标「修好登录页的报错」已达成（第 3 轮）。\n\n打开 Conveyor 的「项目」页查看。"
-        )
+        self.assertIn("的目标结束了：已达成。", text)
+        self.assertIn("跑了 3 轮", text)
+        self.assertIn("在网页 对话 里可以合并或再跑", text)
 
     def test_exhausted_reports_the_budget(self) -> None:
         text = goal_notify.notification_text(self.settings, _goal(), "exhausted")
-        self.assertEqual(
-            text, "目标「修好登录页的报错」用完了 5 轮还没达成。\n\n打开 Conveyor 的「项目」页查看。"
-        )
+        self.assertIn("的目标结束了：轮数用完了。", text)
+        self.assertIn("跑了 3 轮", text)
+        self.assertIn("在网页 对话 里可以合并或再跑", text)
 
     def test_failed_reports_the_reason(self) -> None:
         goal = _goal(state="failed", stop_reason=STOP_REASON)
         text = goal_notify.notification_text(self.settings, goal, "failed")
-        self.assertEqual(
-            text, "目标「修好登录页的报错」没能完成：" + STOP_REASON + "\n\n打开 Conveyor 的「项目」页查看。"
-        )
+        self.assertIn("的目标结束了：没能完成。", text)
+        self.assertIn(STOP_REASON, text)
+        self.assertIn("在网页 对话 里可以合并或再跑", text)
 
     def test_question_and_reason_are_clipped_to_200_characters(self) -> None:
         long_question = "请" * 400
@@ -133,8 +133,12 @@ class GoalNotifyTextTests(unittest.TestCase):
                 goal = _goal(state=state, stop_reason=STOP_REASON)
                 text = goal_notify.notification_text(self.settings, goal, state)
                 self.assertTrue(text)
-                self.assertTrue(text.endswith(goal_notify.OPEN_HINT))
-                self.assertIn("目标", text)
+                if state == "waiting_user":
+                    self.assertTrue(text.endswith(goal_notify.OPEN_HINT))
+                    self.assertIn("目标", text)
+                else:
+                    self.assertTrue(text.endswith(goal_notify.WEB_CHAT_HINT))
+                    self.assertIn("的目标结束了：", text)
                 self.assertNotIn("[truncated]", text)
                 self.assertNotIn("\n\n\n", text)
 
