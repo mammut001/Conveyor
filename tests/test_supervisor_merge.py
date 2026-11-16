@@ -541,6 +541,43 @@ class MergeExecutionTests(_MergeFixture):
         self.assertFalse((self.repo_dir / "MERGE_HEAD").exists())
         self.assertEqual(merge_mod.list_merge_audit(self.settings), [])
 
+    def test_missing_committer_identity_reports_clear_chinese_error(self) -> None:
+        self._worktree_change_committed("worktree side")
+        self._unset_config("user.name")
+        self._unset_config("user.email")
+        self._set_config("user.useConfigOnly", "true")
+        main_head_before = _head(self.repo_dir)
+        empty_home = self.root / "empty-home"
+        empty_home.mkdir(parents=True, exist_ok=True)
+        clean_env = os.environ.copy()
+        for key in (
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+            "GIT_CONFIG_SYSTEM",
+        ):
+            clean_env.pop(key, None)
+        clean_env["HOME"] = str(empty_home)
+        clean_env["GIT_CONFIG_GLOBAL"] = os.devnull
+        clean_env["GIT_CONFIG_NOSYSTEM"] = "1"
+
+        with patch.dict(os.environ, clean_env, clear=True):
+            with self.assertRaises(svc.SupervisorServiceError) as ctx:
+                self._merge({"confirm": True})
+
+        exc = ctx.exception
+        self.assertEqual(exc.status, 409)
+        self.assertEqual(exc.to_payload().get("code"), "missing_git_identity")
+        self.assertEqual(
+            exc.to_payload().get("error"),
+            "服务器上的 git 没有设置提交人信息，合并没有进行",
+        )
+        self.assertEqual(_head(self.repo_dir), main_head_before)
+        self.assertEqual(_git(self.repo_dir, "status", "--porcelain").strip(), "")
+        self.assertFalse((self.repo_dir / "MERGE_HEAD").exists())
+        self.assertEqual(merge_mod.list_merge_audit(self.settings), [])
+
     def test_nothing_to_merge(self) -> None:
         with self.assertRaises(svc.SupervisorServiceError) as ctx:
             self._merge({"confirm": True})

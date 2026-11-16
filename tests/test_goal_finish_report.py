@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import subprocess
 import tempfile
 import unittest
@@ -42,15 +43,47 @@ class GoalFinishReportTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix="conveyor-f1-finish-")
         self.addCleanup(self._tmp.cleanup)
         self.addCleanup(goal_notify.drain)
-        self.root = Path(self._tmp.name)
+        self.root = Path(self._tmp.name).resolve()
+        empty_home = self.root / "home"
+        empty_home.mkdir(parents=True, exist_ok=True)
+        isolated_env = os.environ.copy()
+        for key in (
+            "GIT_CONFIG_SYSTEM",
+            "GIT_TEMPLATE_DIR",
+            "GIT_AUTHOR_NAME",
+            "GIT_AUTHOR_EMAIL",
+            "GIT_COMMITTER_NAME",
+            "GIT_COMMITTER_EMAIL",
+        ):
+            isolated_env.pop(key, None)
+        isolated_env["HOME"] = str(empty_home)
+        isolated_env["GIT_CONFIG_GLOBAL"] = os.devnull
+        isolated_env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env_patch = patch.dict(os.environ, isolated_env, clear=True)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
         self.settings = _make_settings(self.root / "env")
         self.session_id = "web:web-console:f1-origin-session"
         _start_available_executor_patches(self)
 
     def _create_project(self, name: str = "qa-todo-cli") -> tuple[dict[str, Any], dict[str, Any]]:
-        created = svc.create_managed_project(self.settings, name=name)
-        repo = created["repository"]
-        wt = next(w for w in repo["worktrees"] if w["managed"] and not w["is_main"])
+        repo_dir = self.root / "repos" / name
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        _git_run(repo_dir, ["-c", "init.defaultBranch=main", "init", "-b", "main"])
+        _git_run(repo_dir, ["config", "user.email", "test@example.com"])
+        _git_run(repo_dir, ["config", "user.name", "Supervisor Test"])
+        (repo_dir / "README.md").write_text(f"# {name}\n", encoding="utf-8")
+        _git_run(repo_dir, ["add", "-A"])
+        _git_run(
+            repo_dir,
+            [
+                "-c", "user.name=Supervisor Test",
+                "-c", "user.email=test@example.com",
+                "commit", "--no-verify", "-qm", "initial commit",
+            ],
+        )
+        repo, _created = svc.register_repository(self.settings, path=str(repo_dir), name=name)
+        wt = svc.create_managed_worktree(self.settings, repo["id"])
         return repo, wt
 
     def _insert_iteration(
