@@ -20,7 +20,7 @@ import sqlite3
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any
@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS chat_action_cards (
     text TEXT NOT NULL,
     used INTEGER NOT NULL DEFAULT 0,
     outcome TEXT NOT NULL DEFAULT '',
+    deadline_at TEXT NOT NULL DEFAULT '',
     created_at REAL NOT NULL
 );
 
@@ -582,6 +583,12 @@ def _connect(settings: Any) -> sqlite3.Connection:
             if key not in _INITIALIZED_DBS:
                 conn.execute("PRAGMA journal_mode = WAL")
                 conn.executescript(_SCHEMA_SQL)
+                cols = {
+                    str(row["name"])
+                    for row in conn.execute("PRAGMA table_info(chat_action_cards)").fetchall()
+                }
+                if "deadline_at" not in cols:
+                    conn.execute("ALTER TABLE chat_action_cards ADD COLUMN deadline_at TEXT NOT NULL DEFAULT ''")
                 conn.commit()
                 _INITIALIZED_DBS.add(key)
     return conn
@@ -687,19 +694,21 @@ def create_action_card(
     title: str,
     text: str,
     buttons: list[dict[str, Any]],
+    deadline_at: str | None = None,
 ) -> dict[str, Any]:
     """Persist an interactive action card and return its client-safe representation."""
     card_id = f"card_{os.urandom(8).hex()}"
     now = time.time()
+    clean_deadline = str(deadline_at or "").strip()
     client_buttons: list[dict[str, Any]] = []
 
     conn = _connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
-            """INSERT INTO chat_action_cards (id, session_id, title, text, used, outcome, created_at)
-               VALUES (?, ?, ?, ?, 0, '', ?)""",
-            (card_id, session_id, title, text, now),
+            """INSERT INTO chat_action_cards (id, session_id, title, text, used, outcome, deadline_at, created_at)
+               VALUES (?, ?, ?, ?, 0, '', ?, ?)""",
+            (card_id, session_id, title, text, clean_deadline, now),
         )
         for idx, spec in enumerate(buttons):
             btn_id = f"act_{os.urandom(8).hex()}"
@@ -737,7 +746,7 @@ def create_action_card(
     finally:
         conn.close()
 
-    return {
+    card: dict[str, Any] = {
         "id": card_id,
         "title": title,
         "text": text,
@@ -745,11 +754,14 @@ def create_action_card(
         "used": False,
         "outcome": "",
     }
+    if clean_deadline:
+        card["deadline_at"] = clean_deadline
+    return card
 
 
 def _row_to_card(conn: sqlite3.Connection, card_id: str) -> dict[str, Any] | None:
     card_row = conn.execute(
-        "SELECT id, title, text, used, outcome FROM chat_action_cards WHERE id = ?",
+        "SELECT id, title, text, used, outcome, deadline_at FROM chat_action_cards WHERE id = ?",
         (card_id,),
     ).fetchone()
     if card_row is None:
@@ -774,7 +786,7 @@ def _row_to_card(conn: sqlite3.Connection, card_id: str) -> dict[str, Any] | Non
             "style": str(b["style"] or "secondary"),
             "payload": payload,
         })
-    return {
+    card: dict[str, Any] = {
         "id": str(card_row["id"]),
         "title": str(card_row["title"]),
         "text": str(card_row["text"]),
@@ -782,6 +794,10 @@ def _row_to_card(conn: sqlite3.Connection, card_id: str) -> dict[str, Any] | Non
         "used": bool(card_row["used"]),
         "outcome": str(card_row["outcome"] or ""),
     }
+    deadline_val = str(card_row["deadline_at"] or "").strip()
+    if deadline_val:
+        card["deadline_at"] = deadline_val
+    return card
 
 
 def get_action_card(settings: Any, card_id: str) -> dict[str, Any] | None:
@@ -1312,12 +1328,23 @@ def _handle_start_timed_goal_intent(
     )
 
 
-def _format_deadline_hhmm(deadline_at: Any) -> str | None:
+def format_relative_deadline_zh(minutes: int) -> str:
+    """Format a positive minute duration as a timezone-independent relative end phrase."""
+    total = max(1, int(minutes))
+    if total < 60:
+        return f"大约 {total} 分钟后结束"
+    hours, rem = divmod(total, 60)
+    if rem == 0:
+        return f"大约 {hours} 小时后结束"
+    return f"大约 {hours} 小时 {rem} 分后结束"
+
+
+def _normalize_deadline_iso(deadline_at: Any) -> str | None:
     if deadline_at is None or isinstance(deadline_at, bool):
         return None
     if isinstance(deadline_at, (int, float)):
         try:
-            return datetime.fromtimestamp(float(deadline_at)).astimezone().strftime("%H:%M")
+            return datetime.fromtimestamp(float(deadline_at), tz=timezone.utc).isoformat(timespec="seconds")
         except (ValueError, OverflowError, OSError):
             return None
     if isinstance(deadline_at, str):
@@ -1329,9 +1356,11 @@ def _format_deadline_hhmm(deadline_at: Any) -> str | None:
             dt = datetime.fromisoformat(iso)
         except ValueError:
             return None
-        if dt.tzinfo is not None:
-            dt = dt.astimezone()
-        return dt.strftime("%H:%M")
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.isoformat(timespec="seconds")
     return None
 
 
@@ -1431,9 +1460,10 @@ def _start_timed_goal_from_action(
         return f"启动失败：{exc.message}", exc.message, card
 
     _set_recent_repo(settings, session_id, str(repo["id"]))
-    end_hhmm = _format_deadline_hhmm(created_goal.get("deadline_at"))
-    if end_hhmm:
-        reply_text = f"已经开始了，预计 {end_hhmm} 结束。随时在 项目 › 目标 里看进度或停止。"
+    deadline_iso = _normalize_deadline_iso(created_goal.get("deadline_at"))
+    if deadline_iso:
+        relative_end = format_relative_deadline_zh(duration_minutes)
+        reply_text = f"已经开始了，{relative_end}。随时在 项目 › 目标 里看进度或停止。"
         duration_label = _format_duration_zh(duration_minutes)
         action_outcome = f"已开始持续改进「{repo['name']}」（{duration_label}）"
     else:
@@ -1451,6 +1481,7 @@ def _start_timed_goal_from_action(
         session_id=session_id,
         title="已开始持续改进",
         text=reply_text,
+        deadline_at=deadline_iso,
         buttons=[
             {
                 "label": "查看进度",

@@ -101,22 +101,47 @@ def _short(text: str) -> str:
     return redact_text(str(text or "").strip())[:MAX_DETAIL_CHARS]
 
 
+def _is_chat_bridge_provider(provider: str) -> bool:
+    from runner import pi_agent
+
+    return str(provider or "").strip() == pi_agent.PI_CHAT_BRIDGE_PROVIDER
+
+
+def _resolved_provider_name(provider: str, model: str = "", provider_name: str = "") -> str:
+    """Human-readable provider name for UI/messages; never expose internal bridge id."""
+    from runner import pi_agent
+
+    if _is_chat_bridge_provider(provider):
+        return pi_agent.chat_bridge_provider_name(model)
+    clean_name = str(provider_name or "").strip()
+    return clean_name or str(provider or "").strip()
+
+
 def _message(
     kind: str,
     *,
     provider: str = "",
     model: str = "",
+    provider_name: str = "",
     latency_ms: int = 0,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     detail: str = "",
 ) -> str:
     """给老板看的一句话。短、中文、能动手，绝不出现环境变量名。"""
+    from runner import pi_agent
+
+    is_bridge = _is_chat_bridge_provider(provider)
+    display_provider = _resolved_provider_name(provider, model, provider_name)
     if kind == KIND_OK:
-        return f"可以用：{provider} / {model} 回复正常（{latency_ms} 毫秒）。"
+        if is_bridge:
+            return f"可以用：{display_provider} 回复正常（{latency_ms} 毫秒）。"
+        return f"可以用：{display_provider} / {model} 回复正常（{latency_ms} 毫秒）。"
     if kind == KIND_AUTH:
-        return f"模型服务拒绝了密钥（{provider}）。{SETTINGS_HINT} 重新填写 API Key。"
+        auth_target = pi_agent.chat_bridge_provider_name("") if is_bridge else display_provider
+        return f"模型服务拒绝了密钥（{auth_target}）。{SETTINGS_HINT} 重新填写 API Key。"
     if kind == KIND_QUOTA:
-        return f"模型服务额度用完了（{provider}）。请到服务商充值后再测试。"
+        quota_target = pi_agent.chat_bridge_provider_name("") if is_bridge else display_provider
+        return f"模型服务额度用完了（{quota_target}）。请到服务商充值后再测试。"
     if kind == KIND_MODEL_MISSING:
         return f"模型 {model or '(未设置)'} 不存在或没有权限。{SETTINGS_HINT} 换一个模型。"
     if kind == KIND_RATE_LIMIT:
@@ -136,16 +161,19 @@ def _result(
     kind: str,
     provider: str = "",
     model: str = "",
+    provider_name: str = "",
     detail: str = "",
     latency_ms: int = 0,
     checked_at: str = "",
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     safe_detail = _short(detail)
+    resolved_name = _resolved_provider_name(provider, model, provider_name) if provider else ""
     return {
         "ok": ok,
         "worker_id": "pi",
         "provider": provider or "",
+        "provider_name": resolved_name,
         "model": model or "",
         "latency_ms": int(latency_ms),
         "kind": kind,
@@ -153,6 +181,7 @@ def _result(
             kind,
             provider=provider or "",
             model=model or "",
+            provider_name=resolved_name,
             latency_ms=int(latency_ms),
             timeout=timeout,
             detail=safe_detail,
@@ -259,12 +288,21 @@ async def _check_pi(settings: Any, timeout: float) -> dict[str, Any]:
 
     env = _probe_child_env(settings)
     selection = pi_agent.resolve_pi_provider(settings, base_env=env)
+    provider_name = ""
+    if selection.chat_bridge or selection.provider == pi_agent.PI_CHAT_BRIDGE_PROVIDER:
+        provider_name = pi_agent.chat_bridge_provider_name(selection.model)
+    else:
+        try:
+            provider_name = str(pi_agent.describe_pi_provider(settings).get("provider_name") or "")
+        except Exception:
+            provider_name = ""
     if selection.config_error:
         return _result(
             ok=False,
             kind=KIND_CONFIG,
             provider=selection.provider,
             model=selection.model,
+            provider_name=provider_name,
             detail=selection.config_error,
             latency_ms=_elapsed_ms(started),
             checked_at=checked_at,
@@ -278,6 +316,7 @@ async def _check_pi(settings: Any, timeout: float) -> dict[str, Any]:
             kind=KIND_CONFIG,
             provider=selection.provider,
             model=selection.model,
+            provider_name=provider_name,
             detail=str(exc),
             latency_ms=_elapsed_ms(started),
             checked_at=checked_at,
@@ -303,6 +342,7 @@ async def _check_pi(settings: Any, timeout: float) -> dict[str, Any]:
                 kind=KIND_CONFIG,
                 provider=selection.provider,
                 model=selection.model,
+                provider_name=provider_name,
                 detail=str(exc),
                 latency_ms=_elapsed_ms(started),
                 checked_at=checked_at,
@@ -377,6 +417,7 @@ async def _check_pi(settings: Any, timeout: float) -> dict[str, Any]:
                 kind=KIND_TIMEOUT,
                 provider=selection.provider,
                 model=selection.model,
+                provider_name=provider_name,
                 detail="",
                 latency_ms=latency_ms,
                 checked_at=checked_at,
@@ -390,6 +431,7 @@ async def _check_pi(settings: Any, timeout: float) -> dict[str, Any]:
                 kind=KIND_OK,
                 provider=selection.provider,
                 model=selection.model,
+                provider_name=provider_name,
                 detail="",
                 latency_ms=latency_ms,
                 checked_at=checked_at,
@@ -408,6 +450,7 @@ async def _check_pi(settings: Any, timeout: float) -> dict[str, Any]:
             kind=kind,
             provider=selection.provider,
             model=selection.model,
+            provider_name=provider_name,
             detail=raw_error,
             latency_ms=latency_ms,
             checked_at=checked_at,

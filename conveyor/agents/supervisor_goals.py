@@ -2169,8 +2169,19 @@ def _earliest_quota_reset(settings: Any, task: dict[str, Any]) -> datetime:
     return now_dt + timedelta(minutes=DEFAULT_QUOTA_PAUSE_MINUTES)
 
 
-def _local_hhmm(dt: datetime) -> str:
-    return dt.astimezone().strftime("%H:%M")
+def _format_relative_resume_zh(resume_dt: datetime, *, now: datetime | None = None) -> str:
+    """Server-safe relative pause summary for `waiting_quota` (never uses server clock HH:MM)."""
+    ref = now or _now()
+    seconds = max(0.0, (resume_dt - ref).total_seconds())
+    minutes = max(1, int(round(seconds / 60.0))) if seconds > 0 else 0
+    if minutes <= 0:
+        return "模型额度暂时用完，稍后会自动继续。"
+    if minutes < 60:
+        return f"模型额度暂时用完，大约 {minutes} 分钟后自动继续。"
+    hours, rem = divmod(minutes, 60)
+    if rem == 0:
+        return f"模型额度暂时用完，大约 {hours} 小时后自动继续。"
+    return f"模型额度暂时用完，大约 {hours} 小时 {rem} 分后自动继续。"
 
 
 def _resume_waiting_quota_goal(settings: Any, goal_id: str) -> bool:
@@ -2291,7 +2302,7 @@ def _maybe_handle_quota_failure(
     # Pause without burning a round. Only a goal that is still `running` may move
     # to `waiting_quota` (never overwrite a stop the owner just made).
     resume_iso = _format_utc(resume_dt)
-    hhmm = _local_hhmm(resume_dt)
+    relative_summary = _format_relative_resume_zh(resume_dt)
     conn = _connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -2303,7 +2314,7 @@ def _maybe_handle_quota_failure(
             (
                 GOAL_WAITING_QUOTA,
                 resume_iso,
-                f"模型额度暂时用完，会在 {hhmm} 自动继续。",
+                relative_summary,
                 _utc_now(),
                 goal_id,
                 GOAL_RUNNING,

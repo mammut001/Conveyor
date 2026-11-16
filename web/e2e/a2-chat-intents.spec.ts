@@ -3,6 +3,7 @@ import type { SupervisorCapabilities, SupervisorRepo } from '../src/components/S
 
 const TOKEN = 'a2-chat-intents-e2e-token'
 const SESSION_ID = 'web:web-console:default'
+const GOAL_DEADLINE_ISO = '2026-11-15T18:30:00+00:00'
 
 function createMockCapabilities(): SupervisorCapabilities {
   return {
@@ -198,13 +199,14 @@ async function setupMockServer(page: Page) {
           card: confirmActionCard,
           follow_up_message: {
             role: 'assistant',
-            text: '已经开始了，预计 22:00 结束。随时在 项目 › 目标 里看进度或停止。',
+            text: '已经开始了，大约 10 小时后结束。随时在 项目 › 目标 里看进度或停止。',
             kind: 'action_card',
             created_at: new Date().toISOString(),
             action_card: {
               id: 'card-goal-started',
               title: '已开始持续改进',
-              text: '已经开始了，预计 22:00 结束。随时在 项目 › 目标 里看进度或停止。',
+              text: '已经开始了，大约 10 小时后结束。随时在 项目 › 目标 里看进度或停止。',
+              deadline_at: GOAL_DEADLINE_ISO,
               used: false,
               outcome: '',
               buttons: [
@@ -283,7 +285,14 @@ test('create project action card navigates to 项目 and timed goal 开始 disab
   await expect(editBtn).toBeDisabled()
   await expect(cancelBtn).toBeDisabled()
   await expect(confirmCard.getByRole('status')).toContainText('已开始持续改进「todo-app」')
-  await expect(page.getByText('已经开始了，预计 22:00 结束。随时在 项目 › 目标 里看进度或停止。')).toBeVisible()
+  await expect(page.getByText('已经开始了，大约 10 小时后结束。随时在 项目 › 目标 里看进度或停止。')).toBeVisible()
+  const expectedLocalTime = new Date(GOAL_DEADLINE_ISO).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  const startedCard = page.getByRole('region', { name: '已开始持续改进', exact: true })
+  await expect(startedCard).toContainText(`预计 ${expectedLocalTime} 结束`)
   await expect(page.getByRole('button', { name: '查看进度', exact: true })).toBeEnabled()
 })
 
