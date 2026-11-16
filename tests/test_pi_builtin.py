@@ -355,9 +355,11 @@ class PiCatalogTests(unittest.TestCase):
 
     def test_builtin_ids_match_pinned_pi_150_catalog(self) -> None:
         import re
+        pi_root = Path(__file__).resolve().parents[1] / "vendor" / "pi"
+        if not (pi_root / "node_modules").is_dir():
+            self.skipTest("vendor/pi/node_modules is absent; run `bash scripts/install_pi.sh` to verify Pi catalog")
         catalog = (
-            Path(__file__).resolve().parents[1]
-            / "vendor" / "pi" / "node_modules" / "@earendil-works" / "pi-ai"
+            pi_root / "node_modules" / "@earendil-works" / "pi-ai"
             / "dist" / "models.generated.js"
         )
         self.assertTrue(catalog.is_file(), str(catalog))

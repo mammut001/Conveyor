@@ -5705,6 +5705,23 @@ def _reject_json_constant(const: str) -> Any:
     raise ReviewEnvelopeError(f"invalid JSON constant in review verdict: {const!r}")
 
 
+def _contains_json_object(text: str) -> bool:
+    """Return True if ``text`` embeds a non-empty JSON object (e.g. a second verdict)."""
+    decoder = json.JSONDecoder()
+    idx = 0
+    while True:
+        pos = text.find("{", idx)
+        if pos < 0:
+            return False
+        try:
+            obj, _ = decoder.raw_decode(text, pos)
+            if isinstance(obj, dict) and obj:
+                return True
+        except json.JSONDecodeError:
+            pass
+        idx = pos + 1
+
+
 def parse_review_verdict(text: str, *,
                          expected_sha: str, expected_fingerprint: str,
                          strict_checks: bool = True) -> dict[str, Any]:
@@ -5738,9 +5755,9 @@ def parse_review_verdict(text: str, *,
             raise ReviewEnvelopeError("malformed or ambiguous fenced review verdict")
         match = matches[0]
         outside = (stripped[: match.start()] + stripped[match.end() :]).strip()
-        # Allow benign reviewer prose outside the fence; reject only extra code fences
-        # (multiple fenced blocks remain ambiguous and are caught by len(matches) != 1).
-        if "```" in outside:
+        # Allow benign reviewer prose (including non-JSON braces like CSS) outside the fence;
+        # reject extra code fences and stray JSON objects that make the verdict ambiguous.
+        if "```" in outside or _contains_json_object(outside):
             raise ReviewEnvelopeError("ambiguous content outside fenced review verdict")
         inner = match.group(1).strip()
         if not (inner.startswith("{") and inner.endswith("}")):
