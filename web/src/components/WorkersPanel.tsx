@@ -60,6 +60,7 @@ export type WorkerCheck = {
   ok: boolean | null
   worker_id: string
   provider: string | null
+  provider_name?: string | null
   model: string | null
   latency_ms: number | null
   kind: string
@@ -82,6 +83,23 @@ type LoginState = 'waiting_url' | 'open_url' | 'needs_code' | 'done' | 'failed'
 
 const MODEL_SEARCH_MIN = 15
 const QUOTA_TEXT = /RESOURCE_EXHAUSTED|quota|usage limit|rate limit|429|credit balance/i
+const CHAT_BRIDGE_PROVIDER = 'conveyor-chat'
+
+function formatBridgeProviderLabel(model?: string | null): string {
+  const name = (model || '').trim()
+  return name ? `和对话用同一个模型（${name}）` : '和对话用同一个模型'
+}
+
+function formatWorkerCheckTarget(check: WorkerCheck, provider?: Worker['provider']): string {
+  if (check.provider === CHAT_BRIDGE_PROVIDER) {
+    return check.provider_name || provider?.provider_name || formatBridgeProviderLabel(check.model)
+  }
+  if (check.provider_name && check.provider_name.startsWith('和对话')) {
+    return check.provider_name
+  }
+  const label = check.provider_name || check.provider || '未知服务商'
+  return `${label}/${check.model || '默认模型'}`
+}
 
 function formatCoolingChip(resetAt: number | null): string {
   if (!resetAt) return '额度用完·冷却中'
@@ -1070,9 +1088,19 @@ export function WorkersPanel({ token }: { token: string }) {
     if (worker.id !== 'pi') return null
     const provider = worker.provider
     const configured = Boolean(provider?.configured)
-    const detail = provider?.provider_name
-      ? `${provider.provider_name}${provider.model ? ` / ${provider.model}` : ''}`
-      : ''
+    let detail = ''
+    if (provider?.provider_name) {
+      if (provider.provider_name === CHAT_BRIDGE_PROVIDER) {
+        detail = formatBridgeProviderLabel(provider.model)
+      } else if (
+        provider.provider_name.startsWith('和对话')
+        || (provider.model && provider.provider_name.includes(`（${provider.model}）`))
+      ) {
+        detail = provider.provider_name
+      } else {
+        detail = `${provider.provider_name}${provider.model ? ` / ${provider.model}` : ''}`
+      }
+    }
     return (
       <div className="worker-login-box" data-testid="pi-provider-box">
         {configured ? (
@@ -1390,7 +1418,7 @@ export function WorkersPanel({ token }: { token: string }) {
                           {!isChecking && check === null && <span className="guard-sub worker-check-none">还没测试过</span>}
                           {!isChecking && check !== null && check.ok === true && (
                             <span className="worker-check-ok" role="status" title={formatCheckAgo(check.checked_at) || undefined}>
-                              可以用 · {check.provider || '未知服务商'}/{check.model || '默认模型'}
+                              可以用 · {formatWorkerCheckTarget(check, worker.provider)}
                             </span>
                           )}
                           {!isChecking && check !== null && check.ok === null && (

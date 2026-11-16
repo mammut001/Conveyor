@@ -158,8 +158,8 @@ function formatQuotaResumeClock(resumeAt?: string | null): string {
   if (!raw) return '模型额度暂时用完，稍后会自动继续'
   const parsed = new Date(raw)
   if (Number.isNaN(parsed.getTime())) return '模型额度暂时用完，稍后会自动继续'
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `模型额度暂时用完，会在 ${pad(parsed.getHours())}:${pad(parsed.getMinutes())} 自动继续`
+  const hhmm = parsed.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+  return `模型额度暂时用完，会在 ${hhmm} 自动继续`
 }
 
 // 结果卡片怎么说这一步是怎么结束的：全部白话中文。

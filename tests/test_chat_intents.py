@@ -357,13 +357,16 @@ class ChatIntentsFlowTests(unittest.TestCase):
         self.assertEqual(goals[0]["title"], "把它做成一个好用的待办应用")
         self.assertEqual(goals[0]["outcome"], long_outcome)
 
-        # Backend supports duration_minutes, so the goal has deadline_at and reports an end time.
+        # Backend supports duration_minutes, so the goal has deadline_at; reply uses a relative phrase
+        # (never a server-clock HH:MM) while the action card carries the ISO UTC deadline_at.
         follow_text = res["follow_up_message"]["text"]
-        self.assertRegex(
+        self.assertEqual(
             follow_text,
-            r"^已经开始了，预计 \d{2}:\d{2} 结束。随时在 项目 › 目标 里看进度或停止。$",
+            "已经开始了，大约 10 小时后结束。随时在 项目 › 目标 里看进度或停止。",
         )
-        self.assertIn("预计", follow_text)
+        self.assertNotRegex(follow_text, r"\b\d{1,2}:\d{2}\b")
+        follow_card = res["follow_up_message"]["action_card"]
+        self.assertTrue(follow_card["deadline_at"])
         self.assertEqual(goals[0]["mode"], "continuous")
         self.assertTrue(goals[0]["deadline_at"])
 
@@ -418,9 +421,8 @@ class ChatIntentsFlowTests(unittest.TestCase):
         self.assertIn("用 Pi 和 Claude Code。", mixed_payload["text"])
         self.assertNotIn("执行者：", mixed_payload["text"])
 
-        # 3. Backend returns deadline_at -> confirms exact HH:MM from deadline_at.
+        # 3. Backend returns deadline_at -> reply stays relative and card carries ISO UTC deadline_at.
         deadline_iso = "2026-11-15T18:30:00Z"
-        expected_hhmm = datetime.fromisoformat("2026-11-15T18:30:00+00:00").astimezone().strftime("%H:%M")
         start_btn_id = mixed_payload["action_card"]["buttons"][0]["id"]
         with patch.object(
             goals_mod,
@@ -433,10 +435,18 @@ class ChatIntentsFlowTests(unittest.TestCase):
         ):
             status, res = chat_intents.execute_action(None, self.settings, start_btn_id)
         self.assertEqual(status, HTTPStatus.OK)
+        follow_text = res["follow_up_message"]["text"]
         self.assertEqual(
-            res["follow_up_message"]["text"],
-            f"已经开始了，预计 {expected_hhmm} 结束。随时在 项目 › 目标 里看进度或停止。",
+            follow_text,
+            "已经开始了，大约 2 小时后结束。随时在 项目 › 目标 里看进度或停止。",
         )
+        self.assertNotRegex(follow_text, r"\b\d{1,2}:\d{2}\b")
+        follow_card = res["follow_up_message"]["action_card"]
+        self.assertEqual(follow_card["deadline_at"], "2026-11-15T18:30:00+00:00")
+        stored_card = chat_intents.get_action_card(self.settings, follow_card["id"])
+        self.assertIsNotNone(stored_card)
+        assert stored_card is not None
+        self.assertEqual(stored_card["deadline_at"], "2026-11-15T18:30:00+00:00")
 
     def test_edit_button_claims_card_and_navigation_only_stays_usable(self) -> None:
         # 1. Create project card: 打开项目 (nav-only) + 让它开始干活 (action).
@@ -507,6 +517,60 @@ class ChatIntentsFlowTests(unittest.TestCase):
         self.assertEqual(r_status, HTTPStatus.OK)
         self.assertIn("执行者检查未通过", r_res["follow_up_message"]["text"])
         self.assertEqual(r_res["follow_up_message"]["action_card"]["buttons"][0]["action"], "open_workers")
+
+    def test_timed_goal_relative_phrases_and_no_server_clock_hhmm(self) -> None:
+        cases = (
+            (30, "大约 30 分钟后结束"),
+            (90, "大约 1 小时 30 分后结束"),
+            (600, "大约 10 小时后结束"),
+            (1440, "大约 24 小时后结束"),
+        )
+        for minutes, expected_phrase in cases:
+            self.assertEqual(chat_intents.format_relative_deadline_zh(minutes), expected_phrase)
+
+        created = svc.create_managed_project(self.settings, name="rel-proj")
+        repo_id = created["repository"]["id"]
+        for minutes, expected_phrase in cases:
+            card = chat_intents.create_action_card(
+                self.settings,
+                session_id=self.session_id,
+                title="确认开始持续改进",
+                text="confirm",
+                buttons=[
+                    {
+                        "label": "开始",
+                        "action": "confirm_start_timed_goal",
+                        "style": "primary",
+                        "client_payload": {},
+                        "server_payload": {
+                            "repo_id": repo_id,
+                            "duration_minutes": minutes,
+                            "goal_text": f"测试 {minutes} 分钟",
+                        },
+                    }
+                ],
+            )
+            with patch.object(
+                goals_mod,
+                "create_goal",
+                return_value={
+                    "id": f"goal-{minutes}",
+                    "max_iterations": 20,
+                    "deadline_at": "2026-11-15T18:30:00Z",
+                },
+            ):
+                status, res = chat_intents.execute_action(None, self.settings, card["buttons"][0]["id"])
+            self.assertEqual(status, HTTPStatus.OK)
+            follow_text = res["follow_up_message"]["text"]
+            self.assertEqual(
+                follow_text,
+                f"已经开始了，{expected_phrase}。随时在 项目 › 目标 里看进度或停止。",
+            )
+            self.assertNotRegex(follow_text, r"\b\d{1,2}:\d{2}\b")
+            self.assertEqual(
+                res["follow_up_message"]["action_card"]["deadline_at"],
+                "2026-11-15T18:30:00+00:00",
+            )
 
 
 class ChatActionsHttpTests(unittest.TestCase):
