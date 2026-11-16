@@ -157,6 +157,16 @@ class DetectCandidatesTests(unittest.TestCase):
         self.assertEqual(val.detect_candidates(""), [])
         self.assertEqual(val.detect_candidates(str(self.root / "nope")), [])
 
+    def test_empty_repo_always_offers_check_script(self) -> None:
+        d = self._repo("empty")
+        cands = val.detect_candidates(str(d))
+        self.assertEqual(_ids(cands), ["check-script"])
+        cand = cands[0]
+        self.assertEqual(cand["label"], "项目自己的检查脚本（scripts/check.sh）")
+        self.assertEqual(cand["argv"], ["sh", "scripts/check.sh"])
+        self.assertEqual(cand["reason"], "由执行者维护：运行这个项目真正的测试")
+        self.assertIsInstance(cand["available"], bool)
+
     def test_node_default_test_is_skipped_but_lint_build_detected(self) -> None:
         d = self._repo("npm-default")
         (d / "package.json").write_text(
@@ -218,16 +228,16 @@ class DetectCandidatesTests(unittest.TestCase):
     def test_garbage_package_json_is_skipped(self) -> None:
         d = self._repo("garbage")
         (d / "package.json").write_text("{ this is : not json ]", encoding="utf-8")
-        self.assertEqual(val.detect_candidates(str(d)), [])
+        self.assertEqual(_ids(val.detect_candidates(str(d))), ["check-script"])
         # package.json that is valid JSON but not an object is also skipped.
         (d / "package.json").write_text("[1, 2, 3]", encoding="utf-8")
-        self.assertEqual(val.detect_candidates(str(d)), [])
+        self.assertEqual(_ids(val.detect_candidates(str(d))), ["check-script"])
 
     def test_pytest_ini(self) -> None:
         d = self._repo("pytest-ini")
         (d / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
         cands = _by_id(val.detect_candidates(str(d)))
-        self.assertEqual(_ids(list(cands.values())), ["pytest"])
+        self.assertEqual(_ids(list(cands.values())), ["pytest", "check-script"])
         self.assertEqual(cands["pytest"]["argv"], ["python3", "-m", "pytest", "-q"])
         self.assertEqual(cands["pytest"]["reason"], "pytest.ini")
 
@@ -262,7 +272,7 @@ class DetectCandidatesTests(unittest.TestCase):
             "import unittest\n", encoding="utf-8"
         )
         cands = _by_id(val.detect_candidates(str(d)))
-        self.assertEqual(_ids(list(cands.values())), ["unittest"])
+        self.assertEqual(_ids(list(cands.values())), ["unittest", "check-script"])
         self.assertEqual(cands["unittest"]["label"], "运行测试")
         self.assertEqual(
             cands["unittest"]["argv"],
@@ -308,7 +318,7 @@ class DetectCandidatesTests(unittest.TestCase):
         )
         (d / "go.mod").write_text("module m\n", encoding="utf-8")
         ids = set(_ids(val.detect_candidates(str(d))))
-        self.assertEqual(ids, {"npm-test", "go-test"})
+        self.assertEqual(ids, {"npm-test", "go-test", "check-script"})
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +390,19 @@ class RepoValidationStorageTests(unittest.TestCase):
         with self.assertRaises(svc.SupervisorServiceError) as ctx:
             val.get_repo_validation(self.settings, "repo-doesnotexist")
         self.assertEqual(ctx.exception.status, 404)
+
+    def test_set_check_script_on_empty_repo(self) -> None:
+        empty_dir = self.root / "empty-repo"
+        _init_repo(empty_dir)
+        empty_repo, _ = svc.register_repository(self.settings, path=str(empty_dir))
+        empty_id = str(empty_repo["id"])
+        payload = val.set_repo_validation(self.settings, empty_id, ["check-script"])
+        self.assertEqual(payload["selected"], ["check-script"])
+        self.assertEqual(payload["source"], "repo")
+        self.assertEqual(
+            payload["effective"],
+            [{"name": "check-script", "argv": ["sh", "scripts/check.sh"]}],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +633,103 @@ class RunSupervisorFlowValidationTests(unittest.TestCase):
         self.assertEqual(checks[0]["exit_code"], 0)
         self.assertFalse(checks[0]["passed"])
         self.assertIn("未发现任何 unittest 测试", checks[0]["output"])
+
+    def test_check_script_missing_fails_with_chinese_reason(self) -> None:
+        result = self._run_flow(
+            repo_specs=[("check-script", ("sh", "scripts/check.sh"))],
+            max_repairs=0,
+        )
+        self.assertEqual(result["state"], "failed", result)
+        acceptance = ags.latest_acceptance(self.settings, result["id"])
+        self.assertIsNotNone(acceptance)
+        assert acceptance is not None
+        self.assertFalse(acceptance["passed"])
+        checks = acceptance["executed_checks"]
+        self.assertEqual(len(checks), 1)
+        self.assertFalse(checks[0]["passed"])
+        self.assertIn("还没有 scripts/check.sh", checks[0]["output"])
+        self.assertTrue(any("还没有 scripts/check.sh" in issue for issue in acceptance["issues"]))
+
+    def test_check_script_exit_1_fails(self) -> None:
+        scripts = self.repo_dir / "scripts"
+        scripts.mkdir()
+        (scripts / "check.sh").write_text("#!/bin/sh\necho 'failing check'\nexit 1\n", encoding="utf-8")
+        _git("add", "scripts/check.sh", cwd=self.repo_dir)
+        _git("commit", "-qm", "add failing check.sh", cwd=self.repo_dir)
+        result = self._run_flow(
+            repo_specs=[("check-script", ("sh", "scripts/check.sh"))],
+            max_repairs=0,
+        )
+        self.assertEqual(result["state"], "failed", result)
+        checks = ags.latest_acceptance(self.settings, result["id"])["executed_checks"]
+        self.assertEqual(checks[0]["exit_code"], 1)
+        self.assertFalse(checks[0]["passed"])
+
+    def test_check_script_exit_0_passes(self) -> None:
+        scripts = self.repo_dir / "scripts"
+        scripts.mkdir()
+        (scripts / "check.sh").write_text("#!/bin/sh\nset -e\necho 'all good'\nexit 0\n", encoding="utf-8")
+        _git("add", "scripts/check.sh", cwd=self.repo_dir)
+        _git("commit", "-qm", "add passing check.sh", cwd=self.repo_dir)
+        result = self._run_flow(
+            repo_specs=[("check-script", ("sh", "scripts/check.sh"))],
+            max_repairs=0,
+        )
+        self.assertEqual(result["state"], "completed", result)
+        acceptance = ags.latest_acceptance(self.settings, result["id"])
+        self.assertTrue(acceptance["passed"])
+        self.assertTrue(acceptance["executed_checks"][0]["passed"])
+
+    def test_reviewer_prompt_includes_check_script_rule_only_when_applicable(self) -> None:
+        identity = ags.target_identity(str(self.repo_dir))
+        base_sha = identity["sha"]
+
+        # 1. check-script configured, but scripts/check.sh does NOT exist -> no rule
+        p_missing = ags.build_reviewer_prompt(
+            goal="g",
+            worktree_path=str(self.repo_dir),
+            base_sha=base_sha,
+            current_sha=identity["sha"],
+            fingerprint=identity["fingerprint"],
+            analysis_plan="plan",
+            implementer_summary="summary",
+            acceptance_criteria="ok",
+            validation_results=[{"name": "check-script", "argv": ["sh", "scripts/check.sh"], "passed": False}],
+        )
+        self.assertNotIn("Check-script validation rule:", p_missing)
+
+        # 2. scripts/check.sh exists, check-script configured -> rule included
+        scripts = self.repo_dir / "scripts"
+        scripts.mkdir()
+        (scripts / "check.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        p_with = ags.build_reviewer_prompt(
+            goal="g",
+            worktree_path=str(self.repo_dir),
+            base_sha=base_sha,
+            current_sha=identity["sha"],
+            fingerprint=identity["fingerprint"],
+            analysis_plan="plan",
+            implementer_summary="summary",
+            acceptance_criteria="ok",
+            validation_results=[{"name": "check-script", "argv": ["sh", "scripts/check.sh"], "passed": True}],
+        )
+        self.assertIn("Check-script validation rule:", p_with)
+        self.assertIn("scripts/check.sh", p_with)
+        self.assertIn("Chinese", p_with)
+
+        # 3. scripts/check.sh exists, but validation uses make-test (not check-script) -> no rule
+        p_other = ags.build_reviewer_prompt(
+            goal="g",
+            worktree_path=str(self.repo_dir),
+            base_sha=base_sha,
+            current_sha=identity["sha"],
+            fingerprint=identity["fingerprint"],
+            analysis_plan="plan",
+            implementer_summary="summary",
+            acceptance_criteria="ok",
+            validation_results=[{"name": "make-test", "argv": ["make", "test"], "passed": True}],
+        )
+        self.assertNotIn("Check-script validation rule:", p_other)
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ from typing import Any
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import supervisor_goals as goals_mod
 from conveyor.agents import supervisor_service as svc
+from conveyor.agents import supervisor_validation
 from conveyor.core.transcript_store import get_transcript_store
 
 logger = logging.getLogger(__name__)
@@ -1011,6 +1012,16 @@ def _build_existing_project_card(
     return text, card
 
 
+def _repo_has_validation(settings: Any, repo_id: str) -> bool:
+    if not repo_id:
+        return False
+    try:
+        info = supervisor_validation.get_repo_validation(settings, repo_id)
+    except svc.SupervisorServiceError:
+        return False
+    return str(info.get("source") or "none") != "none"
+
+
 def _build_timed_goal_confirmation_card(
     settings: Any,
     session_id: str,
@@ -1026,49 +1037,70 @@ def _build_timed_goal_confirmation_card(
     goal_display = goal_text.strip() or DEFAULT_TIMED_GOAL_OUTCOME
 
     roles_summary, _, _ = _summarize_roles_and_overrides(settings)
+    has_validation = _repo_has_validation(settings, repo_id)
     text = (
         f"准备在 {repo_name} 上持续改进 {duration_label}：{goal_display}。"
         f"{roles_summary}。时间到或者模型额度用完会自动停。"
     )
+    if not has_validation:
+        text += (
+            "这个项目还没有自动检查：会让执行者先写一个 scripts/check.sh 跑真正的测试，"
+            "之后每一轮都用它来验证。"
+        )
+    buttons: list[dict[str, Any]] = [
+        {
+            "label": "开始",
+            "action": "confirm_start_timed_goal",
+            "style": "primary",
+            "client_payload": {},
+            "server_payload": {
+                "repo_id": repo_id,
+                "duration_minutes": int(duration_minutes),
+                "goal_text": goal_display,
+            },
+        },
+    ]
+    if not has_validation:
+        buttons.append({
+            "label": "每轮等我确认",
+            "action": "confirm_start_timed_goal_manual",
+            "style": "secondary",
+            "client_payload": {},
+            "server_payload": {
+                "repo_id": repo_id,
+                "duration_minutes": int(duration_minutes),
+                "goal_text": goal_display,
+            },
+        })
+    buttons.extend([
+        {
+            "label": "改一改",
+            "action": "edit_timed_goal",
+            "style": "secondary",
+            "client_payload": {
+                "view": "code",
+                "tab": "goals",
+                "repo_id": repo_id,
+                "worktree_id": wt_id,
+                "goal_outcome": goal_display,
+                "duration_minutes": int(duration_minutes),
+            },
+            "server_payload": {},
+        },
+        {
+            "label": "取消",
+            "action": "cancel_action",
+            "style": "secondary",
+            "client_payload": {},
+            "server_payload": {"outcome": "已取消这次定时任务"},
+        },
+    ])
     card = create_action_card(
         settings,
         session_id=session_id,
         title="确认开始持续改进",
         text=text,
-        buttons=[
-            {
-                "label": "开始",
-                "action": "confirm_start_timed_goal",
-                "style": "primary",
-                "client_payload": {},
-                "server_payload": {
-                    "repo_id": repo_id,
-                    "duration_minutes": int(duration_minutes),
-                    "goal_text": goal_display,
-                },
-            },
-            {
-                "label": "改一改",
-                "action": "edit_timed_goal",
-                "style": "secondary",
-                "client_payload": {
-                    "view": "code",
-                    "tab": "goals",
-                    "repo_id": repo_id,
-                    "worktree_id": wt_id,
-                    "goal_outcome": goal_display,
-                    "duration_minutes": int(duration_minutes),
-                },
-                "server_payload": {},
-            },
-            {
-                "label": "取消",
-                "action": "cancel_action",
-                "style": "secondary",
-                "client_payload": {},
-                "server_payload": {"outcome": "已取消这次定时任务"},
-            },
-        ],
+        buttons=buttons,
     )
     return text, card
 
@@ -1369,6 +1401,8 @@ def _start_timed_goal_from_action(
     settings: Any,
     session_id: str,
     payload: dict[str, Any],
+    *,
+    enable_check_script: bool = True,
 ) -> tuple[str, str, dict[str, Any] | None]:
     """Start a continuous timed goal after explicit confirmation.
 
@@ -1420,6 +1454,8 @@ def _start_timed_goal_from_action(
         return "启动失败：执行者未就绪", executor_refusal, card
 
     try:
+        if enable_check_script and not _repo_has_validation(settings, str(repo["id"])):
+            supervisor_validation.set_repo_validation(settings, str(repo["id"]), ["check-script"])
         worktree = _ensure_ready_worktree(settings, repo)
         body: dict[str, Any] = {
             "repo_id": str(repo["id"]),
@@ -1702,6 +1738,15 @@ def execute_action(
             settings,
             session_id,
             server_payload,
+            enable_check_script=True,
+        )
+    elif action == "confirm_start_timed_goal_manual":
+        outcome, follow_up_text, follow_up_card = _start_timed_goal_from_action(
+            server,
+            settings,
+            session_id,
+            server_payload,
+            enable_check_script=False,
         )
     elif action == "edit_timed_goal":
         outcome = "已转到「项目 › 目标」修改"

@@ -1636,6 +1636,51 @@ class SupervisorGoalTests(unittest.TestCase):
         self.assertEqual([n["text"] for n in notes], ["单条有效经验"])
         self.assertEqual(notes[0]["source"], "untrusted")
 
+    def test_round_prompts_include_check_script_note_only_when_configured(self) -> None:
+        from conveyor.agents import supervisor_validation
+
+        goal = self._create_goal()
+
+        # 1. No validation configured -> no check.sh instruction in any round prompt.
+        for prompt in (
+            goals._first_iteration_prompt(goal, settings=self.settings),
+            goals._continuation_prompt(goal, 2, "继续优化", settings=self.settings),
+            goals._continuous_next_prompt(goal, 2, [], next_suggestion="继续优化", settings=self.settings),
+            goals._reply_prompt(goal, 2, "继续", "补充说明", settings=self.settings),
+            goals._extend_prompt(goal, 2, "继续", "再试一轮", settings=self.settings),
+        ):
+            self.assertNotIn("scripts/check.sh", prompt)
+            self.assertNotIn(goals.CHECK_SCRIPT_PROMPT_NOTE, prompt)
+
+        # 2. Other validation configured (Makefile -> make-test) -> still no check.sh instruction.
+        (self.repo_dir / "Makefile").write_text("test:\n\t@true\n", encoding="utf-8")
+        supervisor_validation.set_repo_validation(self.settings, self.repo_id, ["make-test"])
+        for prompt in (
+            goals._first_iteration_prompt(goal, settings=self.settings),
+            goals._continuation_prompt(goal, 2, "继续优化", settings=self.settings),
+            goals._continuous_next_prompt(goal, 2, [], next_suggestion="继续优化", settings=self.settings),
+        ):
+            self.assertNotIn("scripts/check.sh", prompt)
+
+        # 3. check-script configured -> all round prompts include the instruction.
+        supervisor_validation.set_repo_validation(self.settings, self.repo_id, ["check-script"])
+        for prompt in (
+            goals._first_iteration_prompt(goal, settings=self.settings),
+            goals._continuation_prompt(goal, 2, "继续优化", settings=self.settings),
+            goals._continuous_next_prompt(goal, 2, [], next_suggestion="继续优化", settings=self.settings),
+            goals._reply_prompt(goal, 2, "继续", "补充说明", settings=self.settings),
+            goals._extend_prompt(goal, 2, "继续", "再试一轮", settings=self.settings),
+        ):
+            self.assertIn("scripts/check.sh", prompt)
+            self.assertIn("set -e", prompt)
+            self.assertIn(goals.CHECK_SCRIPT_PROMPT_NOTE, prompt)
+
+        # 4. Dispatched iteration 1 via _advance_one_goal carries the instruction.
+        self._advance()
+        iters = goals.get_goal(self.settings, goal["id"])["iterations"]
+        self.assertEqual(len(iters), 1)
+        self.assertIn(goals.CHECK_SCRIPT_PROMPT_NOTE, iters[0]["prompt"])
+
 
 if __name__ == "__main__":
     unittest.main()

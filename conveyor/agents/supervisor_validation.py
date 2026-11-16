@@ -226,6 +226,12 @@ def detect_candidates(repo_path: str) -> list[dict[str, Any]]:
     candidates.extend(_detect_makefile(root))
     candidates.extend(_detect_go(root))
     candidates.extend(_detect_rust(root))
+    candidates.append(_candidate(
+        cid="check-script",
+        label="项目自己的检查脚本（scripts/check.sh）",
+        argv=["sh", "scripts/check.sh"],
+        reason="由执行者维护：运行这个项目真正的测试",
+    ))
     return candidates
 
 

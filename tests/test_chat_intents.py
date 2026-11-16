@@ -334,9 +334,13 @@ class ChatIntentsFlowTests(unittest.TestCase):
         payload = port.events[0][1]
         self.assertIn(f"准备在 todo-app 上持续改进 10 小时：{long_outcome}", payload["text"])
         self.assertIn("时间到或者模型额度用完会自动停。", payload["text"])
+        self.assertIn(
+            "这个项目还没有自动检查：会让执行者先写一个 scripts/check.sh 跑真正的测试，之后每一轮都用它来验证。",
+            payload["text"],
+        )
         self.assertNotIn("执行者：", payload["text"])
         card = payload["action_card"]
-        self.assertEqual([b["label"] for b in card["buttons"]], ["开始", "改一改", "取消"])
+        self.assertEqual([b["label"] for b in card["buttons"]], ["开始", "每轮等我确认", "改一改", "取消"])
 
         captured: dict[str, object] = {}
         orig_create_goal = goals_mod.create_goal
@@ -375,11 +379,22 @@ class ChatIntentsFlowTests(unittest.TestCase):
         self.assertEqual(replay_status, HTTPStatus.CONFLICT)
         self.assertEqual(replay_body["error_code"], "action_already_used")
 
-        # Edit AND Cancel buttons on the same already-used card -> 409 rejected.
-        edit_btn_id = card["buttons"][1]["id"]
+        # Clicking 开始 on a no-checks repo automatically stores ["check-script"].
+        from conveyor.agents import supervisor_validation
+
+        repos = svc.list_repositories(self.settings)
+        val_state = supervisor_validation.get_repo_validation(self.settings, repos[0]["id"])
+        self.assertEqual(val_state["selected"], ["check-script"])
+        self.assertEqual(val_state["source"], "repo")
+
+        # Manual, Edit AND Cancel buttons on the same already-used card -> 409 rejected.
+        manual_btn_id = card["buttons"][1]["id"]
+        manual_status, _ = chat_intents.execute_action(None, self.settings, manual_btn_id)
+        self.assertEqual(manual_status, HTTPStatus.CONFLICT)
+        edit_btn_id = card["buttons"][2]["id"]
         edit_status, _ = chat_intents.execute_action(None, self.settings, edit_btn_id)
         self.assertEqual(edit_status, HTTPStatus.CONFLICT)
-        cancel_btn_id = card["buttons"][2]["id"]
+        cancel_btn_id = card["buttons"][3]["id"]
         cancel_status, _ = chat_intents.execute_action(None, self.settings, cancel_btn_id)
         self.assertEqual(cancel_status, HTTPStatus.CONFLICT)
 
@@ -473,7 +488,10 @@ class ChatIntentsFlowTests(unittest.TestCase):
         # 2. Timed goal card: claiming 改一改 marks whole card used -> 开始 and 取消 return 409.
         goal_port = self._send("持续改进 2 小时，整理页面")
         goal_card = goal_port.events[0][1]["action_card"]
-        start_btn, edit_btn, cancel_btn = goal_card["buttons"]
+        by_label = {b["label"]: b for b in goal_card["buttons"]}
+        start_btn = by_label["开始"]
+        edit_btn = by_label["改一改"]
+        cancel_btn = by_label["取消"]
         edit_status, edit_res = chat_intents.execute_action(None, self.settings, edit_btn["id"])
         self.assertEqual(edit_status, HTTPStatus.OK)
         self.assertTrue(edit_res["card"]["used"])
@@ -571,6 +589,50 @@ class ChatIntentsFlowTests(unittest.TestCase):
                 res["follow_up_message"]["action_card"]["deadline_at"],
                 "2026-11-15T18:30:00+00:00",
             )
+
+    def test_timed_goal_manual_confirm_leaves_validation_empty(self) -> None:
+        from conveyor.agents import supervisor_validation
+
+        created = svc.create_managed_project(self.settings, name="manual-proj")
+        repo_id = created["repository"]["id"]
+        port = self._send("在 manual-proj 上持续改进 2 小时，整理代码")
+        payload = port.events[0][1]
+        self.assertIn("scripts/check.sh", payload["text"])
+        card = payload["action_card"]
+        self.assertEqual([b["label"] for b in card["buttons"]], ["开始", "每轮等我确认", "改一改", "取消"])
+
+        manual_btn = next(b for b in card["buttons"] if b["label"] == "每轮等我确认")
+        status, res = chat_intents.execute_action(None, self.settings, manual_btn["id"])
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(goals_mod.list_goals(self.settings)), 1)
+        val_state = supervisor_validation.get_repo_validation(self.settings, repo_id)
+        self.assertEqual(val_state["selected"], [])
+        self.assertEqual(val_state["source"], "none")
+
+    def test_timed_goal_repo_with_checks_keeps_unchanged_card(self) -> None:
+        from conveyor.agents import supervisor_validation
+
+        created = svc.create_managed_project(self.settings, name="checked-proj")
+        repo_id = created["repository"]["id"]
+        repo_path = Path(created["repository"]["path"])
+        (repo_path / "Makefile").write_text("test:\n\t@true\n", encoding="utf-8")
+        supervisor_validation.set_repo_validation(self.settings, repo_id, ["make-test"])
+
+        port = self._send("在 checked-proj 上持续改进 2 小时，修好接口")
+        payload = port.events[0][1]
+        self.assertNotIn("scripts/check.sh", payload["text"])
+        self.assertNotIn("还没有自动检查", payload["text"])
+        card = payload["action_card"]
+        self.assertEqual([b["label"] for b in card["buttons"]], ["开始", "改一改", "取消"])
+
+        start_btn = card["buttons"][0]
+        status, res = chat_intents.execute_action(None, self.settings, start_btn["id"])
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertTrue(res["ok"])
+        # Existing validation selection must remain intact.
+        val_state = supervisor_validation.get_repo_validation(self.settings, repo_id)
+        self.assertEqual(val_state["selected"], ["make-test"])
 
 
 class ChatActionsHttpTests(unittest.TestCase):

@@ -106,6 +106,16 @@ MAX_LESSON_ITEMS = 3
 MAX_LESSON_CHARS = 200
 
 FIRST_ITERATION_NOTE = "这是目标的第 1 轮。"
+CHECK_SCRIPT_PROMPT_NOTE = (
+    "自动检查要求（scripts/check.sh）：创建或维护 `scripts/check.sh`（POSIX sh，`set -e`），"
+    "在里面运行这个项目真正的测试/构建；代码有问题时必须失败。"
+    "禁止敷衍脚本（禁止只写 `exit 0`、`true`、`echo ok`）。"
+    "如果项目还没有测试，请为本轮改动补一个最小真实测试，并在 `scripts/check.sh` 中运行它。\n"
+    "Validation requirement: Create or maintain `scripts/check.sh` (POSIX `sh`, `set -e`) "
+    "to run this project's real tests/build; it must fail when the code is broken. "
+    "Never make it a no-op (`exit 0`, `true`, `echo ok`). "
+    "If the project has no tests yet, add a minimal real test for this round's changes and run it from `scripts/check.sh`."
+)
 
 # Hard-coded Chinese operator question for the zero-validation-commands case:
 # the supervisor never fabricates completion, so the human must judge.
@@ -1107,7 +1117,7 @@ def reply_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) -
             )
 
         base_prompt = str(goal.get("last_next_prompt") or "").strip()
-        prompt = _reply_prompt(goal, next_n, base_prompt, message)
+        prompt = _reply_prompt(goal, next_n, base_prompt, message, settings=settings)
 
         now = _utc_now()
         conn = _connect(settings)
@@ -1252,7 +1262,7 @@ def extend_goal(server: Any, settings: Any, goal_id: str, body: dict[str, Any]) 
     next_n = len(iterations) + 1
     new_max_iterations = int(goal["max_iterations"]) + rounds
     base_prompt = str(goal.get("last_next_prompt") or "").strip()
-    prompt = _extend_prompt(goal, next_n, base_prompt, message)
+    prompt = _extend_prompt(goal, next_n, base_prompt, message, settings=settings)
 
     now = _utc_now()
     conn = _connect(settings)
@@ -1531,13 +1541,57 @@ def _waiting_quota_goals(settings: Any) -> list[dict[str, Any]]:
 # Task creation / dispatch through the existing service functions
 # ---------------------------------------------------------------------------
 
-def _first_iteration_prompt(goal: dict[str, Any]) -> str:
-    return f"{goal['outcome']}\n\n{FIRST_ITERATION_NOTE}"
+def _repo_uses_check_script(settings: Any, goal: dict[str, Any] | None) -> bool:
+    if settings is None or not isinstance(goal, dict):
+        return False
+    repo_id = str(goal.get("repo_id") or "").strip()
+    if not repo_id:
+        return False
+    try:
+        from conveyor.agents import supervisor_validation
+
+        info = supervisor_validation.get_repo_validation(settings, repo_id)
+    except Exception:
+        return False
+    effective = info.get("effective") or []
+    return any(
+        isinstance(item, dict)
+        and (
+            item.get("name") == "check-script"
+            or tuple(item.get("argv") or ()) == ("sh", "scripts/check.sh")
+        )
+        for item in effective
+    )
 
 
-def _continuation_prompt(goal: dict[str, Any], n: int, next_prompt: str) -> str:
+def _append_check_script_note(
+    raw: str,
+    *,
+    settings: Any = None,
+    goal: dict[str, Any] | None = None,
+) -> str:
+    if not _repo_uses_check_script(settings, goal):
+        return truncate(raw, svc.MAX_GOAL_CHARS)
+    suffix = f"\n\n{CHECK_SCRIPT_PROMPT_NOTE}"
+    body_budget = max(0, svc.MAX_GOAL_CHARS - len(suffix))
+    body = truncate(raw, body_budget) if len(raw) > body_budget else raw
+    return truncate(f"{body}{suffix}", svc.MAX_GOAL_CHARS)
+
+
+def _first_iteration_prompt(goal: dict[str, Any], *, settings: Any = None) -> str:
+    raw = f"{goal['outcome']}\n\n{FIRST_ITERATION_NOTE}"
+    return _append_check_script_note(raw, settings=settings, goal=goal)
+
+
+def _continuation_prompt(
+    goal: dict[str, Any],
+    n: int,
+    next_prompt: str,
+    *,
+    settings: Any = None,
+) -> str:
     raw = f"这是目标「{goal['title']}」的第 {n} 轮。目标：{goal['outcome']}\n\n本轮要做：{next_prompt}"
-    return truncate(raw, svc.MAX_GOAL_CHARS)
+    return _append_check_script_note(raw, settings=settings, goal=goal)
 
 
 def _continuous_next_prompt(
@@ -1545,6 +1599,8 @@ def _continuous_next_prompt(
     n: int,
     iterations: list[dict[str, Any]],
     next_suggestion: str = "",
+    *,
+    settings: Any = None,
 ) -> str:
     """Build next-round prompt in continuous mode, listing passed improvements."""
     passed_items = [
@@ -1577,15 +1633,23 @@ def _continuous_next_prompt(
         if lines
         else ""
     )
-    # Keep header + done_block + footer within svc.MAX_GOAL_CHARS while preserving footer.
-    budget_for_done = svc.MAX_GOAL_CHARS - len(header) - len(footer)
+    suffix = f"\n\n{CHECK_SCRIPT_PROMPT_NOTE}" if _repo_uses_check_script(settings, goal) else ""
+    # Keep header + done_block + footer + suffix within svc.MAX_GOAL_CHARS while preserving footer and suffix.
+    budget_for_done = svc.MAX_GOAL_CHARS - len(header) - len(footer) - len(suffix)
     if len(done_block) > max(0, budget_for_done):
         done_block = truncate(done_block, max(0, budget_for_done - 2)) + "\n\n"
-    raw = f"{header}{done_block}{footer}"
+    raw = f"{header}{done_block}{footer}{suffix}"
     return truncate(raw, svc.MAX_GOAL_CHARS)
 
 
-def _reply_prompt(goal: dict[str, Any], n: int, base_next_prompt: str, message: str) -> str:
+def _reply_prompt(
+    goal: dict[str, Any],
+    n: int,
+    base_next_prompt: str,
+    message: str,
+    *,
+    settings: Any = None,
+) -> str:
     """Prompt for the iteration started by an operator reply: the evaluator's last
     `next_prompt` (when there is one) plus the operator's own clarification."""
     header = f"这是目标「{goal['title']}」的第 {n} 轮。目标：{goal['outcome']}\n\n"
@@ -1593,10 +1657,17 @@ def _reply_prompt(goal: dict[str, Any], n: int, base_next_prompt: str, message: 
         raw = f"{header}本轮要做：{base_next_prompt}\n\n用户补充：{message}"
     else:
         raw = f"{header}本轮要做：请按用户下面的补充继续。\n\n用户补充：{message}"
-    return truncate(raw, svc.MAX_GOAL_CHARS)
+    return _append_check_script_note(raw, settings=settings, goal=goal)
 
 
-def _extend_prompt(goal: dict[str, Any], n: int, base_next_prompt: str, message: str) -> str:
+def _extend_prompt(
+    goal: dict[str, Any],
+    n: int,
+    base_next_prompt: str,
+    message: str,
+    *,
+    settings: Any = None,
+) -> str:
     """Prompt for the iteration started by `extend_goal`: builds on the evaluator's
     last `next_prompt` (if any) plus `用户补充：<message>` when given."""
     header = f"这是目标「{goal['title']}」的第 {n} 轮。目标：{goal['outcome']}\n\n"
@@ -1608,7 +1679,7 @@ def _extend_prompt(goal: dict[str, Any], n: int, base_next_prompt: str, message:
         raw = f"{header}本轮要做：请按用户下面的补充继续。\n\n用户补充：{message}"
     else:
         raw = f"{header}本轮要做：请基于前面的进展继续推进，完成目标。"
-    return truncate(raw, svc.MAX_GOAL_CHARS)
+    return _append_check_script_note(raw, settings=settings, goal=goal)
 
 
 def _adopt_orphan_task(settings: Any, worktree_path: str, prompt: str) -> str:
@@ -2564,10 +2635,10 @@ def _advance_to_next_iteration_or_stop(
     is_continuous = str(fresh_goal.get("mode") or GOAL_MODE_OUTCOME) == GOAL_MODE_CONTINUOUS
     if is_continuous and round_passed:
         prompt = _continuous_next_prompt(
-            fresh_goal, next_n, iterations, next_suggestion=next_prompt
+            fresh_goal, next_n, iterations, next_suggestion=next_prompt, settings=settings
         )
     else:
-        prompt = _continuation_prompt(fresh_goal, next_n, next_prompt)
+        prompt = _continuation_prompt(fresh_goal, next_n, next_prompt, settings=settings)
 
     updates: dict[str, Any] = {
         "summary": truncate(redact_text(summary), MAX_SUMMARY_CHARS),
@@ -3039,7 +3110,14 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
         if _deadline_passed(goal):
             await asyncio.to_thread(_finish_deadline, settings, goal, iterations)
             return
-        await asyncio.to_thread(_start_iteration, server, settings, goal, 1, _first_iteration_prompt(goal))
+        await asyncio.to_thread(
+            _start_iteration,
+            server,
+            settings,
+            goal,
+            1,
+            _first_iteration_prompt(goal, settings=settings),
+        )
         return
 
     current = iterations[-1]
