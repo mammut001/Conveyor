@@ -1,12 +1,21 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type FormEvent } from 'react';
 import { BAD_SHAPE_MESSAGE, techDetail, useLoadingTimeout } from '../ux/knowledgeKit';
 
-type Secret = { name: string; set: boolean; updated_at: string | null };
+type Secret = { name: string; set: boolean; updated_at: string | null; hint?: string };
 type Problem = { message: string; detail?: string };
 
 const NAME_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/;
 const MAX_VALUE_BYTES = 8192;
 const BROWSER_LOGIN_PREFIX = 'BROWSER_LOGIN_';
+const SECRET_IN_NAME_WARNING = '这看起来像密钥本身，应该填到下面的“值”里';
+
+function looksLikeSecretInName(raw: string, fromPaste: boolean): boolean {
+  if (!raw) return false;
+  if (raw.length > 30) return true;
+  if (/[.\-/]/.test(raw)) return true;
+  if (fromPaste && /[a-z]/.test(raw)) return true;
+  return false;
+}
 
 const pad = (value: number) => String(value).padStart(2, '0');
 
@@ -62,9 +71,13 @@ export function SecretsPanel({ token }: { token: string }) {
   const [deleting, setDeleting] = useState('');
   const [listNotice, setListNotice] = useState('');
   const [listProblem, setListProblem] = useState<Problem | null>(null);
+  const [nameLooksLikeSecret, setNameLooksLikeSecret] = useState(false);
+  const [savedHints, setSavedHints] = useState<Record<string, string>>({});
   const formRef = useRef<HTMLFormElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const valueRef = useRef<HTMLInputElement>(null);
+  const justPastedRef = useRef(false);
+  const pastedLowerRef = useRef(false);
   const deleteButtons = useRef(new Map<string, HTMLButtonElement>());
 
   useLoadingTimeout(!loaded, () => { setLoadProblem({ message: '加载太久了，请重试。' }); setLoaded(true); });
@@ -102,20 +115,44 @@ export function SecretsPanel({ token }: { token: string }) {
     }
   }
 
+  function handleNamePaste(_event: ClipboardEvent<HTMLInputElement>) {
+    justPastedRef.current = true;
+  }
+
   function changeName(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
+    const raw = input.value;
     const caret = input.selectionStart;
-    const next = input.value.toUpperCase();
+    const nativeInputType = (event.nativeEvent as InputEvent | undefined)?.inputType;
+    const isPaste = justPastedRef.current || nativeInputType === 'insertFromPaste';
+    justPastedRef.current = false;
+
+    if (!raw || !/[a-z]/.test(raw) || (!isPaste && name.length > 1 && raw.length === 1)) {
+      pastedLowerRef.current = false;
+    } else if (isPaste && /[a-z]/.test(raw)) {
+      pastedLowerRef.current = true;
+    }
+
+    const secretLike = looksLikeSecretInName(raw, isPaste || pastedLowerRef.current);
+    setNameLooksLikeSecret(secretLike);
+    if (secretLike) {
+      setName(raw);
+      setNameError(SECRET_IN_NAME_WARNING);
+      editing();
+      return;
+    }
+
+    const next = raw.toUpperCase();
     setName(next);
     setNameError('');
     editing();
     // Upper-casing rewrites the value; keep the caret where the user was typing.
-    if (next !== input.value && caret !== null) requestAnimationFrame(() => input.setSelectionRange(caret, caret));
+    if (next !== raw && caret !== null) requestAnimationFrame(() => input.setSelectionRange(caret, caret));
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (saveState === 'saving') return;
+    if (saveState === 'saving' || nameLooksLikeSecret) return;
     if (saveState === 'saved' && !name.trim() && !value) return;
     const trimmedName = name.trim();
     const badName = !trimmedName
@@ -144,6 +181,14 @@ export function SecretsPanel({ token }: { token: string }) {
         setSaveState('error');
         return;
       }
+      const savedBody = await response.json().catch(() => null) as { hint?: unknown } | null;
+      if (typeof savedBody?.hint === 'string' && savedBody.hint) {
+        const hintStr = savedBody.hint;
+        setSavedHints(prev => ({ ...prev, [trimmedName]: hintStr }));
+      }
+      pastedLowerRef.current = false;
+      justPastedRef.current = false;
+      setNameLooksLikeSecret(false);
       setValue('');
       setName('');
       setNameError('');
@@ -159,6 +204,9 @@ export function SecretsPanel({ token }: { token: string }) {
   }
 
   function replace(secretName: string) {
+    pastedLowerRef.current = false;
+    justPastedRef.current = false;
+    setNameLooksLikeSecret(false);
     setName(secretName);
     setNameError('');
     setValue('');
@@ -186,6 +234,11 @@ export function SecretsPanel({ token }: { token: string }) {
         setListProblem(describeServerError(await readError(response), `删除 ${secretName} 失败，请稍后重试。`));
       } else {
         setListNotice(`已删除 ${secretName}。`);
+        setSavedHints(prev => {
+          const next = { ...prev };
+          delete next[secretName];
+          return next;
+        });
       }
       setConfirming('');
       await load();
@@ -216,6 +269,7 @@ export function SecretsPanel({ token }: { token: string }) {
               id="secret-name"
               className="guard-input guard-input-mono"
               value={name}
+              onPaste={handleNamePaste}
               onChange={changeName}
               placeholder="例如 DEEPSEEK_API_KEY"
               autoCapitalize="characters"
@@ -258,7 +312,7 @@ export function SecretsPanel({ token }: { token: string }) {
             {valueError && <p id="secret-value-error" className="guard-field-error">{valueError}</p>}
           </div>
           <div className="guard-form-footer">
-            <button type="submit" className="guard-btn guard-btn-primary" disabled={saving} aria-busy={saving || undefined}>
+            <button type="submit" className="guard-btn guard-btn-primary" disabled={saving || nameLooksLikeSecret} aria-busy={saving || undefined}>
               {saving ? '保存中…' : '保存'}
             </button>
             <div className="guard-form-feedback" aria-live="polite">
@@ -297,12 +351,14 @@ export function SecretsPanel({ token }: { token: string }) {
             {ordered.map(item => {
               const when = formatTime(item.updated_at);
               const isConfirming = confirming === item.name;
+              const hint = item.set ? (item.hint || savedHints[item.name] || '') : '';
               return <li key={item.name} className={`guard-secret-row${item.set ? '' : ' is-removed'}`}>
                 <div className="guard-secret-main">
                   <code className="guard-secret-name">{item.name}</code>
                   {item.set
                     ? <span className="guard-badge guard-badge-ok">已保存</span>
                     : <span className="guard-badge guard-badge-muted">已删除</span>}
+                  {hint && <code className="guard-secret-hint">{hint}</code>}
                   {item.name.startsWith(BROWSER_LOGIN_PREFIX) && <span className="guard-badge guard-badge-muted">网站登录</span>}
                 </div>
                 {when && <span className="guard-secret-time">{when} {item.set ? '更新' : '删除'}</span>}

@@ -84,12 +84,31 @@ def _valid_name(name: Any) -> str:
     return name
 
 
+def secret_hint(value: Any) -> str:
+    """Return a masked suffix hint (at most the last 4 characters)."""
+    if not isinstance(value, str) or not value:
+        return ""
+    if len(value) <= 4:
+        return "…"
+    return f"…{value[-4:]}"
+
+
 def list_secrets(settings: Any) -> list[dict[str, Any]]:
     with _LOCK:
         entries = _load(path_for(settings))
-    return [{"name": name, "set": isinstance(item.get("value"), str),
-             "updated_at": item.get("updated_at")}
-            for name, item in sorted(entries.items())]
+    items: list[dict[str, Any]] = []
+    for name, item in sorted(entries.items()):
+        val = item.get("value")
+        is_set = isinstance(val, str)
+        entry: dict[str, Any] = {
+            "name": name,
+            "set": is_set,
+            "updated_at": item.get("updated_at"),
+        }
+        if is_set:
+            entry["hint"] = secret_hint(val)
+        items.append(entry)
+    return items
 
 
 def set_secret(settings: Any, name: Any, value: Any) -> dict[str, Any]:

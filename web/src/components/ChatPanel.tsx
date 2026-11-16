@@ -565,10 +565,16 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     }
   };
 
-  const handleSend = async (e?: FormEvent, audio?: Blob, retry?: FailedSend) => {
+  const handleSend = async (
+    e?: FormEvent,
+    audio?: Blob,
+    retry?: FailedSend,
+    options?: { overrideText?: string; skipUserBubble?: boolean },
+  ) => {
     if (e) e.preventDefault();
     const voice = retry ? retry.audio : audio;
-    const text = retry ? retry.text : voice ? VOICE_PLACEHOLDER : input.trim();
+    const text = retry ? retry.text : options?.overrideText ? options.overrideText : voice ? VOICE_PLACEHOLDER : input.trim();
+    const skipUserBubble = Boolean(options?.skipUserBubble);
     if (!text || sendingRef.current) return;
     sendingRef.current = true;
     historyVersionRef.current++;
@@ -589,14 +595,14 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       setMessages(prev => prev.length && prev[prev.length - 1].id === retry.messageId ? prev.slice(0, -1) : prev);
       // The failed text was put back in the box for editing; retrying sends it, so clear that copy.
       if (!voice) setInput(current => current.trim() === retry.text.trim() ? '' : current);
-    } else if (!voice) {
+    } else if (!voice && !skipUserBubble) {
       setInput('');
     }
     setBusy(true);
     onBusyChange?.(true);
     setError(null);
     setNotice('');
-    if (!voice) {
+    if (!voice && !skipUserBubble) {
       try { sessionStorage.setItem(inflightKey, text); } catch { /* optional safety net */ }
     }
     setStatusText('');
@@ -610,9 +616,11 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       text,
       created_at: new Date().toISOString(),
     };
-    setMessages(prev => [...prev, userMsg]);
-    // The owner has now sent a message: checklist step ③ ticks without waiting for a poll.
-    onMessageSent?.();
+    if (!skipUserBubble) {
+      setMessages(prev => [...prev, userMsg]);
+      // The owner has now sent a message: checklist step ③ ticks without waiting for a poll.
+      onMessageSent?.();
+    }
 
     try {
       const res = await fetch(
@@ -787,8 +795,10 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       // A message that got no reply at all is not left in the transcript as if it had been answered:
       // the bubble goes away, the words return to the box, and 重试 sends them exactly once.
       if (!controller.signal.aborted && unanswered && failure && !partialText) {
-        setMessages(prev => prev.filter(m => m.id !== userMsg.id));
-        if (!voice) setInput(draft => draft || text);
+        if (!skipUserBubble) {
+          setMessages(prev => prev.filter(m => m.id !== userMsg.id));
+          if (!voice) setInput(draft => draft || text);
+        }
       }
       sendingRef.current = false;
       requestRef.current = null;
@@ -878,6 +888,11 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       if (data.client_action?.type === 'prefill_chat' && typeof data.client_action.text === 'string') {
         setInput(data.client_action.text);
         window.setTimeout(() => textareaRef.current?.focus(), 0);
+      } else if (data.client_action?.type === 'normal_chat' && typeof data.client_action.text === 'string') {
+        const rawText = data.client_action.text;
+        window.setTimeout(() => {
+          void handleSend(undefined, undefined, undefined, { overrideText: rawText, skipUserBubble: true });
+        }, 0);
       } else if (data.client_action?.type === 'edit_timed_goal') {
         const navPayload = (
           data.client_action.payload && typeof data.client_action.payload === 'object'

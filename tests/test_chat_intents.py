@@ -755,3 +755,230 @@ class ChatIntentsFailSafeTests(unittest.TestCase):
                     handled = asyncio.run(chat_intents.maybe_handle_web_chat(msg, port, settings, "你好"))
             self.assertFalse(handled)
             self.assertEqual(port.events, [])
+
+
+class ChatIntentsDeciderTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="conveyor-ci-decider-")
+        self.root = Path(self._tmp.name)
+        self.settings = _make_settings(self.root / "env")
+        self.session_id = "web:web-console:decider-session"
+        _start_available_executor_patches(self)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _run(self, text: str) -> tuple[bool, _MemoryPort]:
+        port = _MemoryPort(self.settings, self.session_id)
+        msg = InboundMessage(
+            channel="web",
+            operator_id="web-console",
+            chat_id="decider-session",
+            message_id="m1",
+            text=text,
+            chat_type="p2p",
+        )
+        handled = asyncio.run(chat_intents.maybe_handle_web_chat(msg, port, self.settings, text))
+        return handled, port
+
+    def test_deterministic_pattern_wins_over_decider(self) -> None:
+        with patch.object(chat_intents.intent_decider, "decide_intent") as spy_decide:
+            handled, port = self._run("帮我创建一个 repo 叫 pattern-wins")
+        self.assertTrue(handled)
+        spy_decide.assert_not_called()
+        self.assertIn("pattern-wins", port.events[0][1]["text"])
+
+    def test_decider_none_or_chat_or_low_confidence_falls_back_to_normal_chat(self) -> None:
+        from conveyor.agents.intent_decider import Decision
+
+        with patch.object(chat_intents.intent_decider, "is_configured", return_value=True), \
+             patch.object(chat_intents.intent_decider, "decide_intent", return_value=None):
+            handled, port = self._run("帮我看下这个项目")
+        self.assertFalse(handled)
+        self.assertEqual(port.events, [])
+
+        with patch.object(chat_intents.intent_decider, "decide_intent", return_value=Decision("chat", 0.95, {"chat": 0.95}, "gemini", 120)):
+            handled, port = self._run("今天天气不错")
+        self.assertFalse(handled)
+
+        with patch.object(chat_intents.intent_decider, "decide_intent", return_value=Decision("progress", 0.49, {"progress": 0.49}, "gemini", 120)):
+            handled, port = self._run("随便说点什么")
+        self.assertFalse(handled)
+
+    def test_questions_never_act_directly_and_clarifying_card_yes_no(self) -> None:
+        from conveyor.agents.intent_decider import Decision
+
+        # Create a running goal so progress has something to show when confirmed.
+        created = svc.create_managed_project(self.settings, name="alpha-app")
+        repo = created["repository"]
+        wt = next(w for w in repo["worktrees"] if w["managed"] and not w["is_main"])
+        goals_mod.create_goal(None, self.settings, {
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+            "outcome": "把首页做好",
+            "duration_minutes": 120,
+            "mode": "continuous",
+        })
+
+        for q in ("进度怎么样了？", "进度怎么样了?", "现在能停吗", "做到哪了呢", "怎么查看进度", "如何停止", "为什么停了", "什么是目标"):
+            with self.subTest(question=q):
+                with patch.object(
+                    chat_intents.intent_decider,
+                    "decide_intent",
+                    return_value=Decision("progress", 0.99, {"progress": 0.99}, "gemini", 100),
+                ):
+                    handled, port = self._run(q)
+                self.assertTrue(handled)
+                payload = port.events[0][1]
+                self.assertIn("你是想查看项目进度吗？", payload["text"])
+                card = payload["action_card"]
+                self.assertEqual([b["label"] for b in card["buttons"]], ["是", "不是"])
+
+        # Confidence 0.5-0.8 on non-question -> clarifying card
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("progress", 0.65, {"progress": 0.65}, "gemini", 100),
+        ):
+            handled, port = self._run("看下状况")
+        self.assertTrue(handled)
+        card_yes = port.events[0][1]["action_card"]
+        yes_btn, _no_btn = card_yes["buttons"]
+        status, res = chat_intents.execute_action(None, self.settings, yes_btn["id"])
+        self.assertEqual(status, HTTPStatus.OK)
+        follow = res["follow_up_message"]
+        self.assertIn("alpha-app", follow["text"])
+        self.assertEqual(follow["action_card"]["buttons"][0]["label"], "查看进度")
+
+        # Click 不是 -> returns client_action normal_chat and next call skips decider
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("progress", 0.65, {"progress": 0.65}, "gemini", 100),
+        ):
+            handled2, port2 = self._run("这是普通问题吗")
+        self.assertTrue(handled2)
+        no_btn2 = port2.events[0][1]["action_card"]["buttons"][1]
+        status2, res2 = chat_intents.execute_action(None, self.settings, no_btn2["id"])
+        self.assertEqual(status2, HTTPStatus.OK)
+        self.assertEqual(res2["client_action"], {"type": "normal_chat", "text": "这是普通问题吗"})
+        with patch.object(chat_intents.intent_decider, "decide_intent") as spy_decide:
+            handled_after, _ = self._run("这是普通问题吗")
+        self.assertFalse(handled_after)
+        spy_decide.assert_not_called()
+
+    def test_progress_stop_resume_create_and_timed_goal_flows(self) -> None:
+        from conveyor.agents.intent_decider import Decision
+
+        # 1. Progress with no goals -> 现在没有在跑的目标。
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("progress", 0.95, {"progress": 0.95}, "gemini", 110),
+        ):
+            handled, port = self._run("进度怎么样了")
+        self.assertTrue(handled)
+        self.assertEqual(port.events[0][1]["text"], "现在没有在跑的目标。")
+
+        # 2. Progress with two projects, named project wins, includes rounds + round_title + 查看进度 button.
+        c1 = svc.create_managed_project(self.settings, name="proj-one")
+        c2 = svc.create_managed_project(self.settings, name="proj-two")
+        r1, w1 = c1["repository"], next(w for w in c1["repository"]["worktrees"] if w["managed"] and not w["is_main"])
+        r2, w2 = c2["repository"], next(w for w in c2["repository"]["worktrees"] if w["managed"] and not w["is_main"])
+
+        g1 = goals_mod.create_goal(None, self.settings, {
+            "repo_id": r1["id"],
+            "worktree_id": w1["id"],
+            "outcome": "优化登录页",
+            "duration_minutes": 180,
+            "mode": "continuous",
+        })
+        goals_mod.create_goal(None, self.settings, {
+            "repo_id": r2["id"],
+            "worktree_id": w2["id"],
+            "outcome": "重构接口",
+            "duration_minutes": 180,
+            "mode": "continuous",
+        })
+        # Record a passed round on g1 directly in goals DB to verify round_title & counts
+        conn = goals_mod._connect(self.settings)
+        try:
+            conn.execute(
+                """INSERT INTO supervisor_goal_iterations
+                   (goal_id, n, task_id, prompt, decision, decision_reason, started_at, finished_at, task_final_state, passed, round_title)
+                   VALUES (?, 1, 't-1', 'p', 'continue', 'ok', '2026-11-16T00:00:00Z', '2026-11-16T00:05:00Z', 'completed', 1, '补齐了登录单元测试')""",
+                (g1["id"],),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("progress", 0.96, {"progress": 0.96}, "gemini", 95),
+        ):
+            handled, port = self._run("proj-one 进度怎么样了")
+        self.assertTrue(handled)
+        p_text = port.events[0][1]["text"]
+        self.assertIn("proj-one", p_text)
+        self.assertIn("还剩", p_text)
+        self.assertIn("已跑 1 轮 / 通过 1 轮", p_text)
+        self.assertIn("补齐了登录单元测试", p_text)
+        self.assertEqual(port.events[0][1]["action_card"]["buttons"][0]["label"], "查看进度")
+
+        # 3. Stop flow -> confirmation card -> 停止 calls goals_mod.stop_goal
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("stop", 0.92, {"stop": 0.92}, "gemini", 90),
+        ):
+            handled, stop_port = self._run("先停一下 proj-one")
+        self.assertTrue(handled)
+        stop_payload = stop_port.events[0][1]
+        self.assertEqual(stop_payload["text"], "要停止 proj-one 的目标吗？已经做好的改动会保留。")
+        stop_card = stop_payload["action_card"]
+        self.assertEqual([b["label"] for b in stop_card["buttons"]], ["停止", "先不停"])
+        status, res = chat_intents.execute_action(None, self.settings, stop_card["buttons"][0]["id"])
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(goals_mod.get_goal(self.settings, g1["id"])["state"], goals_mod.GOAL_STOPPED)
+
+        # 4. Resume flow -> asks duration 1 小时 / 3 小时 / 10 小时 -> timed-goal confirmation card -> starts new goal
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("resume", 0.91, {"resume": 0.91}, "gemini", 105),
+        ):
+            handled, res_port = self._run("把昨天那个 proj-one 接着做")
+        self.assertTrue(handled)
+        res_card = res_port.events[0][1]["action_card"]
+        self.assertEqual([b["label"] for b in res_card["buttons"]], ["1 小时", "3 小时", "10 小时", "取消"])
+        btn_3h = res_card["buttons"][1]
+        status, res_pick = chat_intents.execute_action(None, self.settings, btn_3h["id"])
+        self.assertEqual(status, HTTPStatus.OK)
+        confirm_card = res_pick["follow_up_message"]["action_card"]
+        self.assertIn("准备在 proj-one 上持续改进 3 小时：优化登录页", confirm_card["text"])
+
+        # 5. create_project without name -> asks for project name, next message creates it
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("create_project", 0.94, {"create_project": 0.94}, "gemini", 80),
+        ):
+            handled, cp_port = self._run("帮我开个新仓库")
+        self.assertTrue(handled)
+        self.assertEqual(cp_port.events[0][1]["text"], "项目叫什么名字？（英文字母、数字、短横线）")
+        handled_name, created_port = self._run("decider-new-proj")
+        self.assertTrue(handled_name)
+        self.assertIn("已创建项目 decider-new-proj", created_port.events[0][1]["text"])
+
+        # 6. timed_goal without duration -> asks duration
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("timed_goal", 0.90, {"timed_goal": 0.90}, "gemini", 85),
+        ):
+            handled, tg_port = self._run("给 proj-one 一直做性能优化")
+        self.assertTrue(handled)
+        tg_card = tg_port.events[0][1]["action_card"]
+        self.assertEqual([b["label"] for b in tg_card["buttons"]], ["1 小时", "3 小时", "10 小时", "取消"])

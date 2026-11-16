@@ -8,6 +8,7 @@ import { MemoryPanel } from './components/MemoryPanel'
 import { SkillsPanel } from './components/SkillsPanel'
 import { WorkflowPanel } from './components/WorkflowPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
+import { IntentDeciderSection } from './components/IntentDeciderSection'
 import { SecretsPanel } from './components/SecretsPanel'
 import { WorkersPanel } from './components/WorkersPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
@@ -2231,6 +2232,12 @@ export default function App() {
     {settingsOpen && <ProviderSettings
       config={providerConfig} loadError={providerConfig ? '' : error}
       system={system}
+      token={token}
+      onOpenSecrets={() => {
+        setSettingsOpen(false)
+        historyModeRef.current = 'push'
+        setView('secrets')
+      }}
       onRetry={() => void openSettings()} onClose={() => setSettingsOpen(false)}
       onSave={async payload => {
         const result = await api<{ config: ProviderConfig }>('/api/config/provider', { method: 'POST', body: JSON.stringify(payload) })
@@ -2496,8 +2503,8 @@ const PROVIDER_PRESETS = [
   },
 ] as const
 
-function ProviderSettings({ config, loadError, system, onClose, onRetry, onSave }: {
-  config: ProviderConfig | null; loadError: string; system: SystemStatus | null; onClose: () => void; onRetry: () => void
+function ProviderSettings({ config, loadError, system, token, onOpenSecrets, onClose, onRetry, onSave }: {
+  config: ProviderConfig | null; loadError: string; system: SystemStatus | null; token: string; onOpenSecrets: () => void; onClose: () => void; onRetry: () => void
   onSave: (payload: Record<string, string>) => Promise<void>
 }) {
   const [draft, setDraft] = useState<ProviderDraft>(() => providerDraft(config))
@@ -2849,6 +2856,7 @@ function ProviderSettings({ config, loadError, system, onClose, onRetry, onSave 
             <span>浏览器拿不到完整密钥。保存后，从下一个新任务开始生效。</span>
             <small>设置保存在服务器上。</small>
           </div>
+          <IntentDeciderSection token={token} onOpenSecrets={onOpenSecrets} />
           {system && (
             <section className="server-status-section" aria-labelledby="provider-server-title">
               <h3 id="provider-server-title">这台服务器</h3>

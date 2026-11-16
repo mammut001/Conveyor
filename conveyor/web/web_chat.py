@@ -478,6 +478,9 @@ async def run_web_chat(
     from runner.types import JobMode
     # The question is stored before the model call: a failed call, a dropped
     # stream or a reload must not lose what the owner sent.
+    from conveyor.agents import chat_intents
+    if chat_intents.has_pending_skip_decider(settings, port.durable_session_id, prompt):
+        port._user_persisted = True
     port.persist_request(msg)
     try:
         if await try_resolve_confirmation(msg, port, settings):
@@ -490,7 +493,6 @@ async def run_web_chat(
                 msg, settings, goal_command, goal_loop_web_driver(msg, settings, runner, port)))
             port.emit("done", {"outcome": "answered"})
             return
-        from conveyor.agents import chat_intents
         if await chat_intents.maybe_handle_web_chat(msg, port, settings, prompt):
             port.emit("done", {"outcome": "answered"})
             return

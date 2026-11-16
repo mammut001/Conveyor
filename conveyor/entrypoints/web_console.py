@@ -642,6 +642,13 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, self.server.control.system_status())
             elif path == "/api/config/provider":
                 self._json(HTTPStatus.OK, self.server.control.provider_config())
+            elif path == "/api/config/intent-decider":
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from conveyor.core.config import load_runtime_settings
+                    settings = load_runtime_settings()
+                from conveyor.agents.intent_decider import get_intent_decider_config
+                self._json(HTTPStatus.OK, get_intent_decider_config(settings))
             elif path == "/api/config/provider/models":
                 from conveyor.core.provider_config import fetch_provider_models, ProviderModelsError
                 try:
@@ -1614,6 +1621,26 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 except Exception:
                     logger.warning("Failed clearing worker checks after provider update", exc_info=True)
                 self._json(HTTPStatus.OK, {"ok": True, "config": result})
+            elif parsed.path == "/api/config/intent-decider":
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from conveyor.core.config import load_runtime_settings
+                    settings = load_runtime_settings()
+                from conveyor.agents.intent_decider import save_intent_decider_config
+                try:
+                    result = save_intent_decider_config(settings, body if isinstance(body, dict) else {})
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                    return
+                self._json(HTTPStatus.OK, {"ok": True, "config": result})
+            elif parsed.path == "/api/config/intent-decider/test":
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from conveyor.core.config import load_runtime_settings
+                    settings = load_runtime_settings()
+                from conveyor.agents.intent_decider import test_intent_decider
+                status, payload = test_intent_decider(settings, body if isinstance(body, dict) else None)
+                self._json(status, payload)
             elif len(parts) == 4 and parts[:2] == ["api", "sessions"] and parts[3] in ("archive", "delete"):
                 if parts[3] == "delete":
                     ok = self.server.control.delete_session(parts[2])
