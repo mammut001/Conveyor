@@ -30,8 +30,10 @@ from typing import Any
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import intent_decider
 from conveyor.agents import supervisor_goals as goals_mod
+from conveyor.agents import supervisor_merge as merge_mod
 from conveyor.agents import supervisor_service as svc
 from conveyor.agents import supervisor_validation
+from conveyor.agents.goal_notify import goal_status_label
 from conveyor.core.transcript_store import get_transcript_store
 
 logger = logging.getLogger(__name__)
@@ -46,7 +48,7 @@ MAX_DURATION_MINUTES = 1440
 DEFAULT_TIMED_GOAL_OUTCOME = "按你的项目笔记找最值得做的改进"
 
 _DB_INIT_LOCK = threading.Lock()
-_INITIALIZED_DBS: set[str] = set()
+_INITIALIZED_DBS: set[tuple[str, int, int]] = set()
 
 _EXECUTOR_ZH_LABELS: dict[str, str] = {
     "pool": "执行者池",
@@ -577,14 +579,21 @@ def _db_path(settings: Any) -> Path:
 
 def _connect(settings: Any) -> sqlite3.Connection:
     path = _db_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
     key = str(path.resolve())
+    st_before = path.stat() if path.exists() else None
+    key_before = (key, st_before.st_dev, st_before.st_ino) if st_before is not None else None
+    with _DB_INIT_LOCK:
+        need_init = key_before is None or key_before not in _INITIALIZED_DBS
     conn = sqlite3.connect(str(path), timeout=15.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 15000")
-    if key not in _INITIALIZED_DBS:
+    if need_init:
         with _DB_INIT_LOCK:
-            if key not in _INITIALIZED_DBS:
+            st = path.stat()
+            cur_key = (key, st.st_dev, st.st_ino)
+            if cur_key not in _INITIALIZED_DBS:
                 conn.execute("PRAGMA journal_mode = WAL")
                 conn.executescript(_SCHEMA_SQL)
                 cols = {
@@ -594,7 +603,7 @@ def _connect(settings: Any) -> sqlite3.Connection:
                 if "deadline_at" not in cols:
                     conn.execute("ALTER TABLE chat_action_cards ADD COLUMN deadline_at TEXT NOT NULL DEFAULT ''")
                 conn.commit()
-                _INITIALIZED_DBS.add(key)
+                _INITIALIZED_DBS.add(cur_key)
     return conn
 
 
@@ -1209,6 +1218,131 @@ def _persist_follow_up_message(
     return item
 
 
+def _resolve_merge_branches(
+    settings: Any,
+    worktree_id: str,
+    fallback_source: str,
+    fallback_target: str,
+) -> tuple[str, str]:
+    source_branch = fallback_source.strip()
+    target_branch = fallback_target.strip()
+    if worktree_id:
+        try:
+            scope = merge_mod._resolve_scope(settings, worktree_id)
+            live_source = merge_mod._current_branch(settings, str(scope["worktree_path"]))
+            live_target = merge_mod._target_branch(settings, scope)
+            if live_source:
+                source_branch = live_source
+            if live_target:
+                target_branch = live_target
+        except Exception:
+            pass
+    return source_branch or "当前工作分支", target_branch or "main"
+
+
+def _build_merge_confirmation_card(
+    settings: Any,
+    session_id: str,
+    *,
+    worktree_id: str,
+    repo_id: str,
+    source_branch: str,
+    target_branch: str,
+) -> tuple[str, dict[str, Any]]:
+    text = f"把 {source_branch} 合并到 {target_branch}？合并后不能自动撤销，确认要合并吗？"
+    card = create_action_card(
+        settings,
+        session_id=session_id,
+        title="确认合并到主分支",
+        text=text,
+        buttons=[
+            {
+                "label": "确认合并",
+                "action": "confirm_merge_worktree",
+                "style": "primary",
+                "client_payload": {},
+                "server_payload": {
+                    "worktree_id": worktree_id,
+                    "repo_id": repo_id,
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                },
+            },
+            {
+                "label": "取消",
+                "action": "cancel_action",
+                "style": "secondary",
+                "client_payload": {},
+                "server_payload": {"outcome": "已取消合并"},
+            },
+        ],
+    )
+    return text, card
+
+
+def post_goal_finish_report(
+    settings: Any,
+    *,
+    session_id: str,
+    report_text: str,
+    goal_id: str,
+    repo_id: str,
+    worktree_id: str,
+    source_branch: str,
+    target_branch: str,
+    outcome: str,
+) -> dict[str, Any]:
+    """Persist the goal finish report and its three-button action card into web chat."""
+    card = create_action_card(
+        settings,
+        session_id=session_id,
+        title="目标已结束",
+        text=report_text,
+        buttons=[
+            {
+                "label": "查看改动",
+                "action": "open_project",
+                "style": "secondary",
+                "client_payload": {
+                    "view": "code",
+                    "tab": "workspace",
+                    "repo_id": repo_id,
+                    "worktree_id": worktree_id,
+                },
+                "server_payload": {},
+            },
+            {
+                "label": "合并到主分支",
+                "action": "request_merge_worktree",
+                "style": "primary",
+                "client_payload": {},
+                "server_payload": {
+                    "goal_id": goal_id,
+                    "repo_id": repo_id,
+                    "worktree_id": worktree_id,
+                    "source_branch": source_branch,
+                    "target_branch": target_branch,
+                },
+            },
+            {
+                "label": "再跑 1 小时",
+                "action": "rerun_goal_one_hour",
+                "style": "secondary",
+                "client_payload": {},
+                "server_payload": {
+                    "goal_id": goal_id,
+                    "repo_id": repo_id,
+                    "worktree_id": worktree_id,
+                    "duration_minutes": 60,
+                    "goal_text": outcome,
+                },
+            },
+        ],
+    )
+    _persist_follow_up_message(settings, session_id, report_text, card)
+    return card
+
+
 # ---------------------------------------------------------------------------
 # Intent execution paths (chat message & server action endpoint)
 # ---------------------------------------------------------------------------
@@ -1459,7 +1593,20 @@ def _start_timed_goal_from_action(
     try:
         if enable_check_script and not _repo_has_validation(settings, str(repo["id"])):
             supervisor_validation.set_repo_validation(settings, str(repo["id"]), ["check-script"])
-        worktree = _ensure_ready_worktree(settings, repo)
+        requested_wt_id = str(payload.get("worktree_id") or "").strip()
+        if requested_wt_id:
+            worktree = next(
+                (w for w in (repo.get("worktrees") or []) if str(w.get("id") or "") == requested_wt_id),
+                None,
+            )
+            if worktree is None:
+                raise svc.SupervisorServiceError(
+                    HTTPStatus.NOT_FOUND,
+                    "找不到原来的工作目录，请到「项目」页面确认后再试。",
+                    code="worktree_not_found",
+                )
+        else:
+            worktree = _ensure_ready_worktree(settings, repo)
         body: dict[str, Any] = {
             "repo_id": str(repo["id"]),
             "worktree_id": str(worktree["id"]),
@@ -1467,6 +1614,8 @@ def _start_timed_goal_from_action(
             "outcome": goal_text,
             "role_overrides": role_overrides,
         }
+        if session_id:
+            body["origin_session_id"] = session_id
         if GOAL_TIMEBOX_SUPPORTED:
             body["duration_minutes"] = duration_minutes
             body["mode"] = "continuous"
@@ -1554,15 +1703,6 @@ _CLARIFY_ACTION_TEXT: dict[str, str] = {
 }
 
 _ACTIVE_GOAL_STATES = ("running", "waiting_user", "waiting_quota")
-_GOAL_STATE_ZH: dict[str, str] = {
-    "running": "进行中",
-    "waiting_user": "等待你回复",
-    "waiting_quota": "等待额度恢复",
-    "achieved": "已达成",
-    "stopped": "已停止",
-    "exhausted": "轮数用尽",
-    "failed": "已失败",
-}
 
 
 def _is_question_for_decider(text: str) -> bool:
@@ -1717,8 +1857,13 @@ def _handle_progress_intent(
         _set_recent_repo(settings, session_id, repo_id)
 
     state = str(detail.get("state") or "")
-    state_label = _GOAL_STATE_ZH.get(state, state or "进行中")
-    rem_text = _format_remaining_zh(detail.get("remaining_seconds"))
+    stop_reason = str(detail.get("stop_reason") or "")
+    state_label = goal_status_label(state, stop_reason)
+    rem_text = (
+        _format_remaining_zh(detail.get("remaining_seconds"))
+        if state in _ACTIVE_GOAL_STATES
+        else ""
+    )
     rounds_total = int(detail.get("rounds_total") or 0)
     rounds_passed = int(detail.get("rounds_passed") or 0)
 
@@ -2306,6 +2451,68 @@ def execute_action(
     elif action == "edit_timed_goal":
         outcome = "已转到「项目 › 目标」修改"
         client_action = {"type": "edit_timed_goal", "payload": client_payload}
+    elif action == "request_merge_worktree":
+        worktree_id = str(server_payload.get("worktree_id") or "")
+        repo_id = str(server_payload.get("repo_id") or "")
+        branch_display, target_display = _resolve_merge_branches(
+            settings,
+            worktree_id,
+            str(server_payload.get("source_branch") or ""),
+            str(server_payload.get("target_branch") or ""),
+        )
+        outcome = f"准备把 {branch_display} 合并到 {target_display}"
+        follow_up_text, follow_up_card = _build_merge_confirmation_card(
+            settings,
+            session_id,
+            worktree_id=worktree_id,
+            repo_id=repo_id,
+            source_branch=branch_display,
+            target_branch=target_display,
+        )
+    elif action == "confirm_merge_worktree":
+        worktree_id = str(server_payload.get("worktree_id") or "")
+        source_branch = str(server_payload.get("source_branch") or "当前分支")
+        target_branch = str(server_payload.get("target_branch") or "main")
+        try:
+            merge_res = merge_mod.merge_worktree(settings, worktree_id, {"confirm": True})
+        except svc.SupervisorServiceError as exc:
+            err_msg = str(exc.message or "合并失败，请到「项目」页面检查后再试。")
+            if isinstance(exc, merge_mod.SupervisorMergeError) and exc.extra.get("conflicts"):
+                conflicts = "、".join(str(p) for p in exc.extra["conflicts"][:5])
+                err_msg = f"{err_msg}（冲突文件：{conflicts}）"
+            outcome = f"合并失败：{exc.message}"
+            follow_up_text = err_msg
+        else:
+            merged_target = str(merge_res.get("target_branch") or target_branch)
+            files_changed = int(merge_res.get("files_changed") or 0)
+            outcome = f"已把 {source_branch} 合并到 {merged_target}"
+            follow_up_text = (
+                f"已经把 {source_branch} 合并到 {merged_target}（改了 {files_changed} 个文件）。"
+                if files_changed > 0
+                else f"已经把 {source_branch} 合并到 {merged_target}。"
+            )
+    elif action == "rerun_goal_one_hour":
+        goal_id = str(server_payload.get("goal_id") or "").strip()
+        rerun_payload = dict(server_payload)
+        rerun_payload["duration_minutes"] = 60
+        if goal_id:
+            try:
+                stored_goal = goals_mod._get_goal_row(settings, goal_id)
+                if stored_goal.get("repo_id"):
+                    rerun_payload["repo_id"] = str(stored_goal["repo_id"])
+                if stored_goal.get("worktree_id"):
+                    rerun_payload["worktree_id"] = str(stored_goal["worktree_id"])
+                if stored_goal.get("outcome"):
+                    rerun_payload["goal_text"] = str(stored_goal["outcome"])
+            except Exception:
+                pass
+        outcome, follow_up_text, follow_up_card = _start_timed_goal_from_action(
+            server,
+            settings,
+            session_id,
+            rerun_payload,
+            enable_check_script=False,
+        )
     else:
         outcome = f"已执行「{btn['label']}」"
 

@@ -326,6 +326,34 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const onSessionChangeRef = useRef(onSessionChange);
   onSessionChangeRef.current = onSessionChange;
 
+  const mapHistoryMessages = useCallback((raw: HistoryMessage[]): ChatMessage[] => (
+    raw.map((m, idx) => {
+      const base: ChatMessage = {
+        id: `hist-${idx}-${m.created_at || Date.now()}`,
+        role: m.role,
+        text: m.text,
+        failedReply: m.role === 'assistant' && !m.approval && !m.action_card && looksLikeRawError(m.text) ? m.text : undefined,
+        taskSuggestion: m.task_suggestion,
+        actionCard: m.action_card,
+        originChannel: m.origin_channel,
+        // No recorded time: show none rather than pretend it is "now".
+        created_at: m.created_at || '',
+      };
+      const appr = m.approval;
+      if (!appr) return base;
+      if (appr.status === 'pending' && appr.id) {
+        return {
+          ...base,
+          pendingApproval: {
+            id: appr.id, tool_name: appr.tool_name, arg: appr.arg, summary: '',
+            text: m.text, expires_in_seconds: appr.expires_in_seconds,
+          },
+        };
+      }
+      return { ...base, resolvedApproval: { tool_name: appr.tool_name, arg: appr.arg, status: appr.status } };
+    })
+  ), []);
+
   const loadHistory = useCallback(async (sid: string): Promise<HistoryMessage[] | null> => {
     if (!sid) {
       setMessages([]);
@@ -348,33 +376,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       const data = await res.json();
       if (version !== historyVersionRef.current) return null;
       if (Array.isArray(data.messages)) {
-        setMessages(
-          (data.messages as HistoryMessage[]).map((m, idx) => {
-            const base: ChatMessage = {
-              id: `hist-${idx}-${m.created_at || Date.now()}`,
-              role: m.role,
-              text: m.text,
-              failedReply: m.role === 'assistant' && !m.approval && !m.action_card && looksLikeRawError(m.text) ? m.text : undefined,
-              taskSuggestion: m.task_suggestion,
-              actionCard: m.action_card,
-              originChannel: m.origin_channel,
-              // No recorded time: show none rather than pretend it is "now".
-              created_at: m.created_at || '',
-            };
-            const appr = m.approval;
-            if (!appr) return base;
-            if (appr.status === 'pending' && appr.id) {
-              return {
-                ...base,
-                pendingApproval: {
-                  id: appr.id, tool_name: appr.tool_name, arg: appr.arg, summary: '',
-                  text: m.text, expires_in_seconds: appr.expires_in_seconds,
-                },
-              };
-            }
-            return { ...base, resolvedApproval: { tool_name: appr.tool_name, arg: appr.arg, status: appr.status } };
-          })
-        );
+        setMessages(mapHistoryMessages(data.messages as HistoryMessage[]));
         return data.messages as HistoryMessage[];
       }
     } catch (err) {
@@ -388,7 +390,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       if (version === historyVersionRef.current) setHistoryLoading(false);
     }
     return null;
-  }, [token]);
+  }, [token, mapHistoryMessages]);
 
   // Load history once for the session restored from localStorage. Sessions
   // assigned mid-request (SSE `session` event) must not trigger a reload:
@@ -435,6 +437,44 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     openedNonceRef.current = request.nonce;
     openConversation(request.id);
   }, [openSessionRequest, agentSessionId, busy, openConversation]);
+
+  // Quietly pick up background messages (e.g. goal finish reports) when returning
+  // to 对话 or while idle, without ever wiping in-memory messages on empty mocks.
+  const wasActiveRef = useRef(active);
+  useEffect(() => {
+    const becameActive = active && !wasActiveRef.current;
+    wasActiveRef.current = active;
+    if (!active || !sessionId || busy) return;
+    let alive = true;
+    const syncNewMessages = async () => {
+      if (!alive || sendingRef.current) return;
+      const versionAtStart = historyVersionRef.current;
+      try {
+        const res = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!alive || !res.ok || versionAtStart !== historyVersionRef.current || sendingRef.current) return;
+        const data = await res.json();
+        if (!alive || !Array.isArray(data.messages) || versionAtStart !== historyVersionRef.current) return;
+        const incoming = data.messages as HistoryMessage[];
+        setMessages(prev => (incoming.length > prev.length ? mapHistoryMessages(incoming) : prev));
+      } catch {
+        // background refresh never surfaces transient errors
+      }
+    };
+    if (becameActive) {
+      void syncNewMessages();
+    }
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') {
+        void syncNewMessages();
+      }
+    }, 15_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [active, sessionId, busy, token, mapHistoryMessages]);
 
   const scrollToLatest = useCallback(() => {
     const node = streamRef.current;
@@ -833,7 +873,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       onOpenSupervisorProject?.({
         repoId: typeof payload.repo_id === 'string' ? payload.repo_id : '',
         worktreeId: typeof payload.worktree_id === 'string' ? payload.worktree_id : undefined,
-        tab: payload.tab === 'goals' ? 'goals' : undefined,
+        tab: payload.tab === 'goals' ? 'goals' : payload.tab === 'workspace' ? 'workspace' : undefined,
         goalOutcome: typeof payload.goal_outcome === 'string' ? payload.goal_outcome : undefined,
       });
       return;

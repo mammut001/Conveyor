@@ -39,6 +39,7 @@ PUSH_KIND = "goal"
 NOTIFY_STATES = ("waiting_user", "achieved", "exhausted", "failed")
 
 OPEN_HINT = "打开 Conveyor 的「项目」页查看。"
+WEB_CHAT_HINT = "在网页 对话 里可以合并或再跑。"
 
 # The owner answers a `waiting_user` goal from the phone, so the message says how.
 # Both Telegram and Feishu serve the `/goal_reply` family through the shared
@@ -126,12 +127,36 @@ def _rounds(settings: Any, goal: dict) -> int:
         return 0
 
 
+def goal_status_label(state: str, stop_reason: str = "") -> str:
+    """Derive a plain Simplified-Chinese label from goal ``state`` + ``stop_reason``.
+
+    Shared by chat progress replies, finish reports, and Telegram/Feishu notifications.
+    """
+    st = str(state or "").strip().lower()
+    sr = str(stop_reason or "").strip().lower()
+    if st == "exhausted":
+        if sr == "deadline":
+            return "时间到了"
+        if sr == "quota":
+            return "额度用完了"
+        return "轮数用完了"
+    return {
+        "running": "进行中",
+        "waiting_user": "在等你回复",
+        "waiting_quota": "等额度恢复",
+        "achieved": "已达成",
+        "stopped": "已停止",
+        "failed": "没能完成",
+    }.get(st, str(state or "").strip() or "进行中")
+
+
 def notification_text(settings: Any, goal: dict, new_state: str, channel: str = "") -> str:
     """The Simplified-Chinese message for one goal transition ('' when not notifiable).
 
     `channel` is the channel the owner reads the message on ("telegram" /
     "feishu"); a `waiting_user` message then ends with the one-line `/goal_reply`
-    hint for that channel. Web Push gets no text, so it passes nothing.
+    hint for that channel. Terminal states (`achieved`, `exhausted`, `failed`)
+    use the shared finish report plus `WEB_CHAT_HINT`. Web Push gets no text.
     """
     if not isinstance(goal, dict):
         return ""
@@ -142,29 +167,19 @@ def notification_text(settings: Any, goal: dict, new_state: str, channel: str = 
     if state == "waiting_user":
         detail = _clip(goal.get("question")) or "请在「项目」里看看这个目标，然后告诉我下一步。"
         body = f"目标「{title}」需要你回复：{detail}"
-    elif state == "achieved":
-        rounds = _rounds(settings, goal)
-        body = f"目标「{title}」已达成（第 {rounds} 轮）。" if rounds else f"目标「{title}」已达成。"
-    elif state == "exhausted":
-        stop_reason = str(goal.get("stop_reason") or "").strip().lower()
-        if stop_reason == "deadline":
-            detail = _clip(goal.get("summary"))
-            body = detail or f"目标「{title}」的时间到了，已自动停止。"
-        elif stop_reason == "quota":
-            detail = _clip(goal.get("summary"))
-            body = detail or f"目标「{title}」的模型额度用完了，先停在这里。"
-        else:
-            budget = _goal_int(settings, goal, "max_iterations")
-            body = f"目标「{title}」用完了 {budget} 轮还没达成。" if budget else f"目标「{title}」的迭代次数用完了，还没达成。"
-    else:  # failed
-        reason = _clip(goal.get("stop_reason")) or "具体原因没有记录下来。"
-        body = f"目标「{title}」没能完成：{reason}"
-    text = f"{body}\n\n{OPEN_HINT}"
-    if state == "waiting_user":
+        text = f"{body}\n\n{OPEN_HINT}"
         hint = reply_hint(_goal_id(goal), channel)
         if hint:
             text = f"{text}\n\n{hint}"
-    return text
+        return text
+
+    try:
+        from conveyor.agents.supervisor_goals import build_finish_report_text
+        report = build_finish_report_text(settings, goal, state=state)
+    except Exception:
+        label = goal_status_label(state, str(goal.get("stop_reason") or ""))
+        report = f"{title} 的目标结束了：{label}。"
+    return f"{report}\n\n{WEB_CHAT_HINT}"
 
 
 def reply_hint(goal_id: str, channel: str) -> str:

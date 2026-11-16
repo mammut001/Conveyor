@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import chat_intents
+from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_goals as goals_mod
 from conveyor.agents import supervisor_service as svc
 from conveyor.core.transcript_store import get_transcript_store
@@ -706,6 +707,7 @@ class ChatActionsHttpTests(unittest.TestCase):
                 conn.close()
             finally:
                 svc.stop_server_worker(h.server)
+                goal_notify.drain()
                 h.close()
 
 
