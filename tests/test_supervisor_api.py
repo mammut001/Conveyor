@@ -202,11 +202,18 @@ class _HttpHarness:
 
     def close(self) -> None:
         self.server.shutdown()
+        self.server_thread.join(timeout=3.0)
         self.server.server_close()
         if self.loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self.loop.shutdown_default_executor(),
+                    self.loop,
+                ).result(timeout=5.0)
+            except Exception:
+                pass
             self.loop.call_soon_threadsafe(self.loop.stop)
         self.loop_thread.join(timeout=3.0)
-        self.server_thread.join(timeout=3.0)
         if not self.loop.is_closed():
             self.loop.close()
 

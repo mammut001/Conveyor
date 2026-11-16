@@ -2868,6 +2868,27 @@ def _prepare_evaluator_call(
     return True, "", executor, coordinator, prompt, timeout
 
 
+async def _to_thread(func: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
+    """Run a synchronous goal/DB step in a worker thread.
+
+    If the caller task is cancelled while the thread step is in flight, wait for
+    it to finish before propagating ``CancelledError`` so ``SupervisorWorkerManager.stop()``
+    never returns while SQLite writes are still active.
+    """
+    fut = asyncio.ensure_future(asyncio.to_thread(func, *args, **kwargs))
+    try:
+        return await asyncio.shield(fut)
+    except asyncio.CancelledError:
+        while not fut.done():
+            try:
+                await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                pass
+            except BaseException:
+                break
+        raise
+
+
 async def _ask_evaluator(
     settings: Any,
     goal: dict[str, Any],
@@ -2880,7 +2901,7 @@ async def _ask_evaluator(
     """Ask the coordinator chat model for a decision. Never raises."""
     empty = _normalize_decision(None)
     try:
-        ok, reason, executor, coordinator, prompt, timeout = await asyncio.to_thread(
+        ok, reason, executor, coordinator, prompt, timeout = await _to_thread(
             _prepare_evaluator_call,
             settings,
             goal,
@@ -3403,20 +3424,20 @@ async def _evaluate_iteration(
     n = int(iteration["n"])
     task_id = str(iteration["task_id"])
 
-    claimed = await asyncio.to_thread(_claim_iteration, settings, goal_id, n)
+    claimed = await _to_thread(_claim_iteration, settings, goal_id, n)
     if not claimed:
         return  # another tick owns it, or it was already evaluated
 
-    handled_quota = await asyncio.to_thread(
+    handled_quota = await _to_thread(
         _maybe_handle_quota_failure, server, settings, goal, iteration, iterations, task
     )
     if handled_quota:
         return
 
     try:
-        repo_path, wt_path, _managed = await asyncio.to_thread(_scope_paths, settings, goal)
+        repo_path, wt_path, _managed = await _to_thread(_scope_paths, settings, goal)
     except svc.SupervisorServiceError as exc:
-        await asyncio.to_thread(_fail_goal, settings, goal, str(exc.message))
+        await _to_thread(_fail_goal, settings, goal, str(exc.message))
         return
 
     decision = await _ask_evaluator(
@@ -3428,7 +3449,7 @@ async def _evaluate_iteration(
         task_id=task_id,
     )
 
-    await asyncio.to_thread(
+    await _to_thread(
         _apply_evaluation_decision,
         server,
         settings,
@@ -3477,16 +3498,16 @@ def _recover_interrupted_iteration(
 
 async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) -> None:
     goal_id = goal["id"]
-    goal = await asyncio.to_thread(_get_goal_row, settings, goal_id)
+    goal = await _to_thread(_get_goal_row, settings, goal_id)
     if goal["state"] != GOAL_RUNNING:
         return
 
-    iterations = await asyncio.to_thread(_iterations, settings, goal_id)
+    iterations = await _to_thread(_iterations, settings, goal_id)
     if not iterations:
         if _deadline_passed(goal):
-            await asyncio.to_thread(_finish_deadline, settings, goal, iterations)
+            await _to_thread(_finish_deadline, settings, goal, iterations)
             return
-        await asyncio.to_thread(
+        await _to_thread(
             _start_iteration,
             server,
             settings,
@@ -3498,21 +3519,21 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
 
     current = iterations[-1]
     if current.get("decision") or current.get("task_final_state") == "cancelled":
-        await asyncio.to_thread(_reapply_decision, server, settings, goal, current, iterations)
+        await _to_thread(_reapply_decision, server, settings, goal, current, iterations)
         return
 
     if not current["task_id"]:
         # Crash between iteration insert and task creation, or resumed from waiting_quota:
         # enforce deadline before dispatching a new task.
         if _deadline_passed(goal):
-            await asyncio.to_thread(_finish_deadline, settings, goal, iterations)
+            await _to_thread(_finish_deadline, settings, goal, iterations)
             return
-        await asyncio.to_thread(_start_iteration, server, settings, goal, int(current["n"]), current["prompt"])
+        await _to_thread(_start_iteration, server, settings, goal, int(current["n"]), current["prompt"])
         return
 
-    task = await asyncio.to_thread(ags.get_task, settings, current["task_id"])
+    task = await _to_thread(ags.get_task, settings, current["task_id"])
     if task is None:
-        await asyncio.to_thread(
+        await _to_thread(
             _fail_goal,
             settings,
             goal,
@@ -3522,7 +3543,7 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
 
     task_state = str(task.get("state") or "")
     if task_state == "pending_dispatch":
-        await asyncio.to_thread(
+        await _to_thread(
             _redispatch_iteration_task,
             server,
             settings,
@@ -3536,7 +3557,7 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
         return  # still active (even if deadline passed, let running round finish)
 
     if task_state == "interrupted":
-        await asyncio.to_thread(_recover_interrupted_iteration, server, settings, goal, current, iterations, task)
+        await _to_thread(_recover_interrupted_iteration, server, settings, goal, current, iterations, task)
         return
 
     await _evaluate_iteration(server, settings, goal, current, iterations, task)
@@ -3548,14 +3569,14 @@ async def advance_goals(server: Any, settings: Any) -> None:
     if settings is None or not svc.is_enabled(settings):
         return
     try:
-        await asyncio.to_thread(_resume_due_waiting_quota, settings)
+        await _to_thread(_resume_due_waiting_quota, settings)
     except asyncio.CancelledError:
         raise
     except Exception:
         log.exception("failed to check waiting_quota goals")
 
     try:
-        goals = await asyncio.to_thread(_running_goals, settings)
+        goals = await _to_thread(_running_goals, settings)
     except Exception:
         log.exception("failed to list running goals")
         return
