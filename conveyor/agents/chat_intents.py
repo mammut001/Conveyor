@@ -567,9 +567,7 @@ async def classify_intent(
 # ---------------------------------------------------------------------------
 
 def _db_path(settings: Any) -> Path:
-    data_dir = Path(getattr(settings, "data_dir", None) or (Path.home() / ".conveyor" / "data"))
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir / "chat_intents.sqlite3"
+    return ags._root(settings) / "state" / "chat_intents.sqlite3"
 
 
 def _connect(settings: Any) -> sqlite3.Connection:
@@ -1473,8 +1471,11 @@ def _start_timed_goal_from_action(
 
 def has_pending_or_detected_intent(settings: Any, session_id: str, text: str) -> bool:
     """Return True if web chat can handle this message without requiring a chat model."""
-    if _has_active_pending(settings, session_id) is not None:
-        return True
+    try:
+        if _has_active_pending(settings, session_id) is not None:
+            return True
+    except Exception:
+        logger.exception("chat intent state unavailable")
     return detect_intent(text) is not None
 
 
@@ -1490,43 +1491,47 @@ async def maybe_handle_web_chat(
 
     Returns ``True`` when this module handled the turn and emitted the reply.
     """
-    session_id = str(getattr(port, "durable_session_id", "") or "")
-    raw = (prompt or "").strip()
-    if not raw:
-        return False
+    try:
+        session_id = str(getattr(port, "durable_session_id", "") or "")
+        raw = (prompt or "").strip()
+        if not raw:
+            return False
 
-    # 1. Check active pending follow-up state (e.g. awaiting project name).
-    pending = _has_active_pending(settings, session_id)
-    if pending is not None and pending["pending_kind"] == "awaiting_project_name":
-        _clear_pending_state(settings, session_id)
-        if raw in {"取消", "算了", "不用了", "不建了", "cancel"}:
-            _emit_plain_reply(port, msg, "好的，已取消创建项目。")
+        # 1. Check active pending follow-up state (e.g. awaiting project name).
+        pending = _has_active_pending(settings, session_id)
+        if pending is not None and pending["pending_kind"] == "awaiting_project_name":
+            _clear_pending_state(settings, session_id)
+            if raw in {"取消", "算了", "不用了", "不建了", "cancel"}:
+                _emit_plain_reply(port, msg, "好的，已取消创建项目。")
+                return True
+            candidate = raw.strip().strip("`\"'「『」』")
+            reply_text, card = _execute_create_project_now(settings, session_id, candidate)
+            if card is not None:
+                _emit_card_reply(port, msg, reply_text, card)
+            else:
+                _emit_plain_reply(port, msg, reply_text)
             return True
-        candidate = raw.strip().strip("`\"'「『」』")
-        reply_text, card = _execute_create_project_now(settings, session_id, candidate)
+
+        # 2. Deterministic pattern first; optional chat-tier LLM fallback on ambiguous inputs.
+        intent = await classify_intent(raw, settings, model=model)
+        if intent is None:
+            return False
+
+        if intent.kind == "create_project":
+            reply_text, card = _handle_create_project_intent(settings, session_id, intent)
+        elif intent.kind == "start_timed_goal":
+            reply_text, card = _handle_start_timed_goal_intent(settings, session_id, intent, raw)
+        else:
+            return False
+
         if card is not None:
             _emit_card_reply(port, msg, reply_text, card)
         else:
             _emit_plain_reply(port, msg, reply_text)
         return True
-
-    # 2. Deterministic pattern first; optional chat-tier LLM fallback on ambiguous inputs.
-    intent = await classify_intent(raw, settings, model=model)
-    if intent is None:
+    except Exception:
+        logger.exception("chat intent handling failed")
         return False
-
-    if intent.kind == "create_project":
-        reply_text, card = _handle_create_project_intent(settings, session_id, intent)
-    elif intent.kind == "start_timed_goal":
-        reply_text, card = _handle_start_timed_goal_intent(settings, session_id, intent, raw)
-    else:
-        return False
-
-    if card is not None:
-        _emit_card_reply(port, msg, reply_text, card)
-    else:
-        _emit_plain_reply(port, msg, reply_text)
-    return True
 
 
 def _decode_json_dict(raw: Any) -> dict[str, Any]:
