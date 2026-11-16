@@ -20,9 +20,23 @@ function createMockCapabilities(): SupervisorCapabilities {
   }
 }
 
-async function setupMockServer(page: Page) {
+async function setupMockServer(page: Page, options: { noChecksConfirmCard?: boolean } = {}) {
   const actionCalls: Array<{ action_id?: string }> = []
-  let repos: SupervisorRepo[] = []
+  let repos: SupervisorRepo[] = options.noChecksConfirmCard
+    ? [
+        {
+          id: 'repo-todo-app',
+          name: 'todo-app',
+          path: '/srv/projects/todo-app',
+          source_machine: 'dev-workstation',
+          validation_source: 'none',
+          worktrees: [
+            { id: 'wt-todo-main', path: '/srv/projects/todo-app', branch: 'main', head: '1111111', is_main: true, managed: false, locked: false },
+            { id: 'wt-todo-1', path: '/srv/projects/todo-app/.worktrees/wt-1', branch: 'sup/wt-1', head: '1111111', is_main: false, managed: true, locked: false, chat_session_id: 'web:web-console:supwt-todo-1' },
+          ],
+        },
+      ]
+    : []
   let createdActionCard = {
     id: 'card-create-todo',
     title: '项目已创建',
@@ -46,36 +60,54 @@ async function setupMockServer(page: Page) {
       },
     ],
   }
-  let confirmActionCard = {
-    id: 'card-confirm-goal',
-    title: '确认开始持续改进',
-    text: '准备在 todo-app 上持续改进 10 小时：把首页做好。由执行者池自动安排。时间到或者模型额度用完会自动停。',
-    used: false,
-    outcome: '',
-    buttons: [
+  const makeConfirmCard = (seq: number) => {
+    const baseButtons = [
       {
-        id: 'act-start-goal',
+        id: `act-start-goal${seq === 0 ? '' : `-${seq}`}`,
         label: '开始',
         action: 'confirm_start_timed_goal',
         style: 'primary',
         payload: {},
       },
+      ...(options.noChecksConfirmCard
+        ? [
+            {
+              id: `act-manual-goal${seq === 0 ? '' : `-${seq}`}`,
+              label: '每轮等我确认',
+              action: 'confirm_start_timed_goal_manual',
+              style: 'secondary',
+              payload: {},
+            },
+          ]
+        : []),
       {
-        id: 'act-edit-goal',
+        id: `act-edit-goal${seq === 0 ? '' : `-${seq}`}`,
         label: '改一改',
         action: 'edit_timed_goal',
         style: 'secondary',
         payload: { view: 'code', tab: 'goals', repo_id: 'repo-todo-app', worktree_id: 'wt-todo-1', goal_outcome: '把首页做好', duration_minutes: 600 },
       },
       {
-        id: 'act-cancel-goal',
+        id: `act-cancel-goal${seq === 0 ? '' : `-${seq}`}`,
         label: '取消',
         action: 'cancel_action',
         style: 'secondary',
         payload: {},
       },
-    ],
+    ]
+    return {
+      id: `card-confirm-goal${seq === 0 ? '' : `-${seq}`}`,
+      title: '确认开始持续改进',
+      text: options.noChecksConfirmCard
+        ? '准备在 todo-app 上持续改进 10 小时：把首页做好。由执行者池自动安排。时间到或者模型额度用完会自动停。这个项目还没有自动检查：会让执行者先写一个 scripts/check.sh 跑真正的测试，之后每一轮都用它来验证。'
+        : '准备在 todo-app 上持续改进 10 小时：把首页做好。由执行者池自动安排。时间到或者模型额度用完会自动停。',
+      used: false,
+      outcome: '',
+      buttons: baseButtons,
+    }
   }
+  let confirmSeq = 0
+  const confirmCards = new Map<string, ReturnType<typeof makeConfirmCard>>()
 
   await page.addInitScript(() => {
     localStorage.setItem('conveyor-token', 'a2-chat-intents-e2e-token')
@@ -141,9 +173,11 @@ async function setupMockServer(page: Page) {
         ].join('')
         return route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: sse })
       }
+      const confirmCard = makeConfirmCard(confirmSeq++)
+      confirmCards.set(confirmCard.id, confirmCard)
       const sse = [
         `event: session\ndata: ${JSON.stringify({ session_id: SESSION_ID })}\n\n`,
-        `event: message\ndata: ${JSON.stringify({ text: confirmActionCard.text, kind: 'action_card', action_card: confirmActionCard })}\n\n`,
+        `event: message\ndata: ${JSON.stringify({ text: confirmCard.text, kind: 'action_card', action_card: confirmCard })}\n\n`,
         'event: done\ndata: {"outcome":"answered"}\n\n',
       ].join('')
       return route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: sse })
@@ -151,7 +185,8 @@ async function setupMockServer(page: Page) {
     if (path === '/api/chat/actions' && method === 'POST') {
       const body = req.postDataJSON() as { action_id?: string }
       actionCalls.push(body)
-      if (body.action_id === 'act-prefill-todo') {
+      const actionId = String(body.action_id || '')
+      if (actionId === 'act-prefill-todo') {
         if (createdActionCard.used) {
           return json({ error: '这个操作已经处理过了，不能重复使用' }, 409)
         }
@@ -164,63 +199,78 @@ async function setupMockServer(page: Page) {
           client_action: { type: 'prefill_chat', text: '在 todo-app 上持续改进 2 小时：' },
         })
       }
-      if (body.action_id === 'act-edit-goal') {
-        if (confirmActionCard.used) {
+      const matchedConfirm = Array.from(confirmCards.values()).find(c =>
+        c.buttons.some(b => b.id === actionId),
+      )
+      if (matchedConfirm) {
+        if (matchedConfirm.used) {
           return json({ error: '这个操作已经处理过了，不能重复使用' }, 409)
         }
-        confirmActionCard = { ...confirmActionCard, used: true, outcome: '已转到「项目 › 目标」修改' }
-        return json({
-          ok: true,
-          card_id: confirmActionCard.id,
-          outcome: confirmActionCard.outcome,
-          card: confirmActionCard,
-          client_action: {
-            type: 'edit_timed_goal',
-            payload: {
-              view: 'code',
-              tab: 'goals',
-              repo_id: 'repo-todo-app',
-              worktree_id: 'wt-todo-1',
-              goal_outcome: '把首页做好',
-              duration_minutes: 600,
+        const clicked = matchedConfirm.buttons.find(b => b.id === actionId)!
+        if (clicked.action === 'edit_timed_goal') {
+          const updated = { ...matchedConfirm, used: true, outcome: '已转到「项目 › 目标」修改' }
+          confirmCards.set(matchedConfirm.id, updated)
+          return json({
+            ok: true,
+            card_id: updated.id,
+            outcome: updated.outcome,
+            card: updated,
+            client_action: {
+              type: 'edit_timed_goal',
+              payload: {
+                view: 'code',
+                tab: 'goals',
+                repo_id: 'repo-todo-app',
+                worktree_id: 'wt-todo-1',
+                goal_outcome: '把首页做好',
+                duration_minutes: 600,
+              },
             },
-          },
-        })
-      }
-      if (body.action_id === 'act-start-goal') {
-        if (confirmActionCard.used) {
-          return json({ error: '这个操作已经处理过了，不能重复使用' }, 409)
+          })
         }
-        confirmActionCard = { ...confirmActionCard, used: true, outcome: '已开始持续改进「todo-app」（10 小时）' }
-        return json({
-          ok: true,
-          card_id: confirmActionCard.id,
-          outcome: confirmActionCard.outcome,
-          card: confirmActionCard,
-          follow_up_message: {
-            role: 'assistant',
-            text: '已经开始了，大约 10 小时后结束。随时在 项目 › 目标 里看进度或停止。',
-            kind: 'action_card',
-            created_at: new Date().toISOString(),
-            action_card: {
-              id: 'card-goal-started',
-              title: '已开始持续改进',
+        if (clicked.action === 'cancel_action') {
+          const updated = { ...matchedConfirm, used: true, outcome: '已取消这次定时任务' }
+          confirmCards.set(matchedConfirm.id, updated)
+          return json({
+            ok: true,
+            card_id: updated.id,
+            outcome: updated.outcome,
+            card: updated,
+          })
+        }
+        if (clicked.action === 'confirm_start_timed_goal' || clicked.action === 'confirm_start_timed_goal_manual') {
+          const updated = { ...matchedConfirm, used: true, outcome: '已开始持续改进「todo-app」（10 小时）' }
+          confirmCards.set(matchedConfirm.id, updated)
+          return json({
+            ok: true,
+            card_id: updated.id,
+            outcome: updated.outcome,
+            card: updated,
+            follow_up_message: {
+              role: 'assistant',
               text: '已经开始了，大约 10 小时后结束。随时在 项目 › 目标 里看进度或停止。',
-              deadline_at: GOAL_DEADLINE_ISO,
-              used: false,
-              outcome: '',
-              buttons: [
-                {
-                  id: 'act-view-progress',
-                  label: '查看进度',
-                  action: 'open_goal_progress',
-                  style: 'primary',
-                  payload: { view: 'code', tab: 'goals', repo_id: 'repo-todo-app', worktree_id: 'wt-todo-1' },
-                },
-              ],
+              kind: 'action_card',
+              created_at: new Date().toISOString(),
+              action_card: {
+                id: `card-goal-started-${updated.id}`,
+                title: '已开始持续改进',
+                text: '已经开始了，大约 10 小时后结束。随时在 项目 › 目标 里看进度或停止。',
+                deadline_at: GOAL_DEADLINE_ISO,
+                used: false,
+                outcome: '',
+                buttons: [
+                  {
+                    id: `act-view-progress-${updated.id}`,
+                    label: '查看进度',
+                    action: 'open_goal_progress',
+                    style: 'primary',
+                    payload: { view: 'code', tab: 'goals', repo_id: 'repo-todo-app', worktree_id: 'wt-todo-1' },
+                  },
+                ],
+              },
             },
-          },
-        })
+          })
+        }
       }
       return json({ error: 'unknown action' }, 404)
     }
@@ -333,4 +383,62 @@ test('改一改 disables confirmation card and 打开项目 stays enabled after 
   await expect(startBtn).toBeDisabled()
   await expect(editBtn).toBeDisabled()
   await expect(cancelBtn).toBeDisabled()
+})
+
+test('no-checks repo timed-goal card renders 每轮等我确认 and each button posts its action', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 860 })
+  const { actionCalls } = await setupMockServer(page, { noChecksConfirmCard: true })
+  await page.goto('/')
+  await page.getByRole('button', { name: /对话/ }).first().click()
+
+  const composer = page.getByRole('textbox', { name: '给 Conveyor 发消息', exact: true })
+  await expect(composer).toBeVisible()
+
+  // 1. First card: click 开始
+  await composer.fill('你来迭代十个小时，把首页做好')
+  await composer.press('Enter')
+
+  const cards = page.locator('.chat-action-card', { hasText: '确认开始持续改进' })
+  const firstCard = cards.nth(0)
+  await expect(firstCard).toBeVisible()
+  const firstMessage = page.locator('.transcript-message.role-assistant', { has: cards }).nth(0)
+  await expect(firstMessage).toContainText('这个项目还没有自动检查：会让执行者先写一个 scripts/check.sh 跑真正的测试，之后每一轮都用它来验证。')
+  await expect(firstCard.getByRole('button', { name: '开始', exact: true })).toBeVisible()
+  await expect(firstCard.getByRole('button', { name: '每轮等我确认', exact: true })).toBeVisible()
+  await expect(firstCard.getByRole('button', { name: '改一改', exact: true })).toBeVisible()
+  await expect(firstCard.getByRole('button', { name: '取消', exact: true })).toBeVisible()
+
+  await firstCard.getByRole('button', { name: '开始', exact: true }).click()
+  await expect(firstCard.getByRole('button', { name: '每轮等我确认', exact: true })).toBeDisabled()
+
+  // 2. Second card: click 每轮等我确认
+  await composer.fill('你来迭代十个小时，把首页做好')
+  await composer.press('Enter')
+  const secondCard = cards.nth(1)
+  await expect(secondCard).toBeVisible()
+  await secondCard.getByRole('button', { name: '每轮等我确认', exact: true }).click()
+  await expect(secondCard.getByRole('button', { name: '开始', exact: true })).toBeDisabled()
+
+  // 3. Third card: click 取消
+  await composer.fill('你来迭代十个小时，把首页做好')
+  await composer.press('Enter')
+  const thirdCard = cards.nth(2)
+  await expect(thirdCard).toBeVisible()
+  await thirdCard.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(thirdCard.getByRole('status')).toContainText('已取消这次定时任务')
+
+  // 4. Fourth card: click 改一改
+  await composer.fill('你来迭代十个小时，把首页做好')
+  await composer.press('Enter')
+  const fourthCard = cards.nth(3)
+  await expect(fourthCard).toBeVisible()
+  await fourthCard.getByRole('button', { name: '改一改', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'todo-app / sup/wt-1' })).toBeVisible()
+
+  await expect.poll(() => actionCalls).toEqual([
+    { action_id: 'act-start-goal' },
+    { action_id: 'act-manual-goal-1' },
+    { action_id: 'act-cancel-goal-2' },
+    { action_id: 'act-edit-goal-3' },
+  ])
 })

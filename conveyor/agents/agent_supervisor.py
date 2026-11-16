@@ -5652,12 +5652,16 @@ async def run_operator_validations(
         )
         if no_unittest_tests:
             combined_output = truncate(combined_output + "\n未发现任何 unittest 测试，检查未通过。", 4000)
+        is_check_script = check_name == "check-script" or tuple(check_argv) == ("sh", "scripts/check.sh")
+        missing_check_script = is_check_script and not (Path(canon_wp) / "scripts" / "check.sh").is_file()
+        if missing_check_script:
+            combined_output = "还没有 scripts/check.sh"
         results.append({
             "name": check_name,
             "argv": list(check_argv),
             "command": " ".join(check_argv),
             "exit_code": int(rc) if isinstance(rc, int) else -1,
-            "passed": bool(res.success and rc == 0 and not no_unittest_tests),
+            "passed": bool(res.success and rc == 0 and not no_unittest_tests and not missing_check_script),
             "output": combined_output,
             "execution_id": res.execution_id,
             "evidence_path": str(res.evidence.get("evidence_path") or ""),
@@ -6195,6 +6199,10 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                 raise SupervisorCancelledError("cancelled before review")
             rev_cfg = roles["reviewer"]
             rev_executor = get_executor(settings, rev_cfg.executor)
+            uses_check_script = any(
+                name == "check-script" or tuple(argv) == ("sh", "scripts/check.sh")
+                for name, argv in val_specs
+            )
             reviewer_prompt = build_reviewer_prompt(
                 goal=goal,
                 worktree_path=wp,
@@ -6207,6 +6215,7 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                 validation_results=executed_checks,
                 discussion_context=discussion_context,
                 project_notes=project_notes_context,
+                uses_check_script=uses_check_script,
             )
             rev_ctx = ExecutionContext(
                 task_id=task_id,
@@ -6661,17 +6670,38 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
                           implementer_summary: str, acceptance_criteria: str,
                           validation_results: list[dict[str, Any]] | None = None,
                           discussion_context: str = "",
-                          project_notes: str = "") -> str:
+                          project_notes: str = "",
+                          uses_check_script: bool | None = None) -> str:
     """Independent reviewer gets actual acceptance criteria, analysis plan,
     the real diff from captured ``base_sha`` through committed + uncommitted
     candidate changes, base SHA, fingerprint, and supervisor-executed operator
     validation results — not just the implementer's own summary."""
+    if uses_check_script is None:
+        uses_check_script = bool(validation_results) and any(
+            isinstance(vc, dict)
+            and (vc.get("name") == "check-script" or tuple(vc.get("argv") or ()) == ("sh", "scripts/check.sh"))
+            for vc in validation_results
+        )
+    check_sh_exists = False
+    if uses_check_script and worktree_path:
+        try:
+            check_sh_exists = (Path(worktree_path) / "scripts" / "check.sh").is_file()
+        except OSError:
+            check_sh_exists = False
+
     instruction = (
         "You are an INDEPENDENT code reviewer. Verify the implementation ACTUALLY works.\n"
         "Inspect the repository files and candidate diff yourself using read-only file access "
         "(do not create, modify, or delete files, and do not attempt mutation channels).\n"
         "You have strict read-only permissions; any write attempt is a review violation.\n"
     )
+    if uses_check_script and check_sh_exists:
+        instruction += (
+            "Check-script validation rule: Inspect `scripts/check.sh`. "
+            "Reject this round (`passed: false`) if `scripts/check.sh` is a no-op "
+            "(such as only `exit 0`, `true`, or `echo ok`) or does not actually exercise "
+            "the project, and state the reason in Chinese in `issues`.\n"
+        )
     envelope = (
         "When done, reply with ONLY this exact JSON object (no prose outside it):\n"
         "{\n"
