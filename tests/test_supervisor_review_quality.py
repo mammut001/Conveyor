@@ -40,6 +40,9 @@ def _make_settings(
         codex_memory_root=tmp / "memory",
         user_timezone="UTC",
         agent_supervisor_enabled=True,
+        agent_supervisor_analyst_executor="fake",
+        agent_supervisor_implementer_executor="fake",
+        agent_supervisor_reviewer_executor="fake",
         agent_supervisor_task_timeout_seconds=30,
         agent_supervisor_validation_commands=validation_commands,
         agent_supervisor_validation_timeout_seconds=15,
@@ -56,7 +59,7 @@ def _git(*argv: str, cwd: Path) -> str:
 def _make_repo_and_worktree(tmp: Path) -> tuple[Path, Path, str]:
     repo = tmp / "projects" / "demo-repo"
     repo.mkdir(parents=True, exist_ok=True)
-    _git("init", "-q", cwd=repo)
+    _git("init", "-q", "-b", "main", cwd=repo)
     _git("config", "user.email", "g1@test.local", cwd=repo)
     _git("config", "user.name", "G1 Test", cwd=repo)
     (repo / "README.md").write_text("# Demo\n", encoding="utf-8")
@@ -302,6 +305,12 @@ class ReviewerPromptAndFlowTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="sup-g1-flow-"))
         self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
         self.repo, self.wt, self.head = _make_repo_and_worktree(self.tmp)
+        self._active_executor: _LeakFlowExecutor = _LeakFlowExecutor(self.wt)
+        self._executor_patch = patch.object(
+            ags, "get_executor", lambda _settings, _name: self._active_executor
+        )
+        self._executor_patch.start()
+        self.addCleanup(self._executor_patch.stop)
 
     def test_reviewer_prompt_includes_server_date_and_quality_rules(self) -> None:
         ident = ags.target_identity(str(self.wt))
@@ -325,6 +334,7 @@ class ReviewerPromptAndFlowTests(unittest.TestCase):
         val_cmd = ("check-readme", (sys.executable, "-c", "import pathlib; assert pathlib.Path('README.md').is_file()"))
         settings = _make_settings(self.tmp, validation_commands=(val_cmd,))
         executor = _LeakFlowExecutor(self.wt, fix_on_repair=True)
+        self._active_executor = executor
         task = ags.create_task(
             settings,
             goal="给 README 加一段项目介绍",
@@ -334,8 +344,7 @@ class ReviewerPromptAndFlowTests(unittest.TestCase):
         )
         ags.queue_task(settings, task["id"], worktree_path=str(self.wt))
         ags.claim_task(settings)
-        with patch.object(ags, "get_executor", return_value=executor):
-            final = asyncio.run(ags.run_supervisor_flow(settings, task["id"], max_repairs=1))
+        final = asyncio.run(ags.run_supervisor_flow(settings, task["id"], max_repairs=1))
 
         self.assertEqual(final["state"], "completed")
         self.assertEqual(final["repair_round"], 1)
@@ -352,6 +361,7 @@ class ReviewerPromptAndFlowTests(unittest.TestCase):
     def test_leak_without_repair_budget_fails_without_calling_model_reviewer(self) -> None:
         settings = _make_settings(self.tmp, validation_commands=())
         executor = _LeakFlowExecutor(self.wt, fix_on_repair=False, untracked_only=True)
+        self._active_executor = executor
         task = ags.create_task(
             settings,
             goal="给 README 加一段项目介绍",
@@ -361,8 +371,7 @@ class ReviewerPromptAndFlowTests(unittest.TestCase):
         )
         ags.queue_task(settings, task["id"], worktree_path=str(self.wt))
         ags.claim_task(settings)
-        with patch.object(ags, "get_executor", return_value=executor):
-            final = asyncio.run(ags.run_supervisor_flow(settings, task["id"], max_repairs=0))
+        final = asyncio.run(ags.run_supervisor_flow(settings, task["id"], max_repairs=0))
 
         self.assertEqual(final["state"], "failed")
         self.assertEqual(final["stage"], "repair_limit_exceeded")
