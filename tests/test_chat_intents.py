@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -580,3 +581,51 @@ class ChatActionsHttpTests(unittest.TestCase):
             finally:
                 svc.stop_server_worker(h.server)
                 h.close()
+
+
+class ChatIntentsFailSafeTests(unittest.TestCase):
+    def test_db_path_uses_codex_memory_root_state(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="conveyor-ci-dbpath-") as tmp:
+            settings = SimpleNamespace(codex_memory_root=Path(tmp))
+            db_path = chat_intents._db_path(settings)
+            expected_state = Path(tmp).resolve() / "state"
+            self.assertEqual(db_path, expected_state / "chat_intents.sqlite3")
+            self.assertTrue(expected_state.is_dir())
+
+    def test_has_pending_or_detected_intent_fails_safe_on_db_error(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="conveyor-ci-ro1-") as tmp:
+            settings = SimpleNamespace(codex_memory_root=Path(tmp))
+            with patch.object(
+                chat_intents,
+                "_connect",
+                side_effect=OSError(30, "Read-only file system"),
+            ):
+                with self.assertLogs(chat_intents.logger, level="ERROR") as logs:
+                    self.assertFalse(chat_intents.has_pending_or_detected_intent(settings, "s", "你好"))
+                self.assertTrue(any("chat intent state unavailable" in entry for entry in logs.output))
+                with self.assertLogs(chat_intents.logger, level="ERROR"):
+                    self.assertTrue(
+                        chat_intents.has_pending_or_detected_intent(settings, "s", "帮我创建一个 repo 叫 x")
+                    )
+
+    def test_maybe_handle_web_chat_returns_false_on_db_error(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="conveyor-ci-ro2-") as tmp:
+            settings = SimpleNamespace(codex_memory_root=Path(tmp))
+            port = _MemoryPort(settings, "web:web-console:s")
+            msg = InboundMessage(
+                channel="web",
+                operator_id="web-console",
+                chat_id="s",
+                message_id="m1",
+                text="你好",
+                chat_type="p2p",
+            )
+            with patch.object(
+                chat_intents,
+                "_connect",
+                side_effect=OSError(30, "Read-only file system"),
+            ):
+                with self.assertLogs(chat_intents.logger, level="ERROR"):
+                    handled = asyncio.run(chat_intents.maybe_handle_web_chat(msg, port, settings, "你好"))
+            self.assertFalse(handled)
+            self.assertEqual(port.events, [])
