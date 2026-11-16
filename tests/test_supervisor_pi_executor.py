@@ -462,6 +462,177 @@ print(json.dumps({"type": "message_end", "message": {"role": "assistant",
         self.assertEqual(result.evidence.get("return_code"), 0)
         self.assertIn("final pi result", result.error)
 
+    def test_pi_stdout_line_filter_drops_streaming_updates_and_keeps_diagnostics(self) -> None:
+        self.assertFalse(ags._pi_stdout_line_filter(b'{"type":"message_update","delta":"x"}\n'))
+        self.assertFalse(ags._pi_stdout_line_filter(b'{"type":"tool_execution_update","partialResult":{}}\n'))
+        for kept in (
+            b'{"type":"message_end","message":{"role":"assistant"}}\n',
+            b'{"type":"agent_end","messages":[]}\n',
+            b'{"type":"tool_execution_start","toolName":"read"}\n',
+            b'{"type":"tool_execution_end","toolCallId":"t1"}\n',
+            b'{"type":"error","message":"boom"}\n',
+            b"plain text error from cli\n",
+            b"{broken json\n",
+        ):
+            self.assertTrue(ags._pi_stdout_line_filter(kept), kept)
+
+    def test_six_mib_message_update_lines_succeed_and_parse_result(self) -> None:
+        fake_pi = _write_fake_pi(self.tmp / "fake-pi-6mib-updates", r'''#!__PY__
+import json, sys
+sys.stdin.read()
+pad = "tok " * 500
+line = json.dumps({
+    "type": "message_update",
+    "assistantMessageEvent": {"type": "text_delta", "delta": "x", "partial": pad},
+})
+target = 6 * 1024 * 1024 + 65536
+written = 0
+while written < target:
+    sys.stdout.write(line + "\n")
+    written += len(line) + 1
+sys.stdout.flush()
+text = "readme intro ready"
+print(json.dumps({"type": "message_end", "message": {"role": "assistant",
+    "usage": {"input": 10, "output": 5, "cacheRead": 0},
+    "content": [{"type": "text", "text": text}]}}), flush=True)
+print(json.dumps({"type": "agent_end", "messages": [
+    {"role": "assistant", "content": [{"type": "text", "text": text}]}]}), flush=True)
+''')
+        task = ags.create_task(self.settings, goal="analyze", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        ags.dispatch_task(self.settings, task["id"], worktree_path=str(self.wt))
+        with patch.dict(os.environ, _clean_env(CONVEYOR_PI_BIN=str(fake_pi)), clear=True):
+            result = asyncio.run(PiExecutor(self.settings).run(
+                role=ANALYST, prompt="analyze", worktree_path=str(self.wt),
+                timeout_seconds=30, task_id=task["id"]))
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(result.output, "readme intro ready")
+        self.assertEqual(result.error, "")
+        self.assertNotIn("message_update", result.evidence.get("stdout_excerpt", ""))
+        evidence_data = json.loads(Path(result.evidence["evidence_path"]).read_text(encoding="utf-8"))
+        self.assertGreater(evidence_data.get("output_bytes", 0), 6 * 1024 * 1024)
+        self.assertEqual(result.evidence.get("meta", {}).get("usage"), {
+            "input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 5,
+        })
+
+    def test_six_mib_non_filtered_lines_fail_with_retained_limit(self) -> None:
+        fake_pi = _write_fake_pi(self.tmp / "fake-pi-6mib-retained", r'''#!__PY__
+import json, sys
+sys.stdin.read()
+pad = "z" * 2048
+line = json.dumps({"type": "tool_execution_start", "toolName": "read", "args": {"path": pad}})
+target = 6 * 1024 * 1024
+written = 0
+while written < target:
+    try:
+        sys.stdout.write(line + "\n")
+        written += len(line) + 1
+    except BrokenPipeError:
+        break
+''')
+        task = ags.create_task(self.settings, goal="analyze", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        ags.dispatch_task(self.settings, task["id"], worktree_path=str(self.wt))
+        with patch.dict(os.environ, _clean_env(CONVEYOR_PI_BIN=str(fake_pi)), clear=True):
+            result = asyncio.run(PiExecutor(self.settings).run(
+                role=ANALYST, prompt="analyze", worktree_path=str(self.wt),
+                timeout_seconds=30, task_id=task["id"]))
+        self.assertFalse(result.success)
+        self.assertIn("retained output byte limit", result.error)
+        self.assertIn(str(ags.OUTPUT_BYTE_LIMIT), result.error)
+
+    def test_single_five_mib_line_fails_with_limit(self) -> None:
+        fake_pi = _write_fake_pi(self.tmp / "fake-pi-5mib-line", r'''#!__PY__
+import json, sys
+sys.stdin.read()
+line = json.dumps({"type": "message_update", "big": "a" * (5 * 1024 * 1024)})
+try:
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+except BrokenPipeError:
+    pass
+''')
+        task = ags.create_task(self.settings, goal="analyze", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        ags.dispatch_task(self.settings, task["id"], worktree_path=str(self.wt))
+        with patch.dict(os.environ, _clean_env(CONVEYOR_PI_BIN=str(fake_pi)), clear=True):
+            result = asyncio.run(PiExecutor(self.settings).run(
+                role=ANALYST, prompt="analyze", worktree_path=str(self.wt),
+                timeout_seconds=30, task_id=task["id"]))
+        self.assertFalse(result.success)
+        self.assertIn("exceeded output byte limit", result.error)
+        self.assertIn(str(ags.OUTPUT_BYTE_LIMIT), result.error)
+
+    def test_raw_cap_kills_flood_of_filtered_lines(self) -> None:
+        fake_pi = _write_fake_pi(self.tmp / "fake-pi-raw-flood", r'''#!__PY__
+import json, sys
+sys.stdin.read()
+line = json.dumps({"type": "message_update", "delta": "x" * 1024}) + "\n"
+while True:
+    try:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        break
+''')
+        task = ags.create_task(self.settings, goal="analyze", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        ags.dispatch_task(self.settings, task["id"], worktree_path=str(self.wt))
+        with patch.object(ags, "PI_RAW_STDOUT_LIMIT", 256 * 1024):
+            with patch.dict(os.environ, _clean_env(CONVEYOR_PI_BIN=str(fake_pi)), clear=True):
+                result = asyncio.run(PiExecutor(self.settings).run(
+                    role=ANALYST, prompt="analyze", worktree_path=str(self.wt),
+                    timeout_seconds=30, task_id=task["id"]))
+        self.assertFalse(result.success)
+        self.assertIn("raw output byte limit", result.error)
+        self.assertIn(str(256 * 1024), result.error)
+
+    def test_non_json_error_lines_remain_visible_on_failure(self) -> None:
+        fake_pi = _write_fake_pi(self.tmp / "fake-pi-nonjson-err", r'''#!__PY__
+import json, sys
+sys.stdin.read()
+print(json.dumps({"type": "message_update", "delta": "hi"}))
+print("fatal: upstream provider rejected request")
+sys.exit(1)
+''')
+        task = ags.create_task(self.settings, goal="analyze", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        ags.dispatch_task(self.settings, task["id"], worktree_path=str(self.wt))
+        with patch.dict(os.environ, _clean_env(CONVEYOR_PI_BIN=str(fake_pi)), clear=True):
+            result = asyncio.run(PiExecutor(self.settings).run(
+                role=ANALYST, prompt="analyze", worktree_path=str(self.wt),
+                timeout_seconds=30, task_id=task["id"]))
+        self.assertFalse(result.success)
+        self.assertIn("upstream provider rejected request", result.error)
+
+    def test_other_executor_keeps_unfiltered_byte_limit_behaviour(self) -> None:
+        fake_claude = _write_fake_pi(self.tmp / "fake-claude-flood", r'''#!__PY__
+import json, sys
+sys.stdin.read()
+line = json.dumps({"type": "message_update", "delta": "x" * 2048}) + "\n"
+written = 0
+target = 5 * 1024 * 1024
+while written < target:
+    try:
+        sys.stdout.write(line)
+        written += len(line)
+    except BrokenPipeError:
+        sys.exit(0)
+print(json.dumps({"type": "result", "result": "done", "is_error": False}))
+''')
+        claude_role = RoleConfig(name="analyst", executor="claude", tools=["read"], location="worktree")
+        task = ags.create_task(self.settings, goal="analyze", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        ags.dispatch_task(self.settings, task["id"], worktree_path=str(self.wt))
+        with patch.dict(os.environ, _clean_env(CONVEYOR_CLAUDE_BIN=str(fake_claude)), clear=True):
+            result = asyncio.run(ags.ClaudeExecutor(self.settings).run(
+                role=claude_role, prompt="analyze", worktree_path=str(self.wt),
+                timeout_seconds=30, task_id=task["id"]))
+        self.assertFalse(result.success)
+        self.assertIn("stdout exceeded output byte limit", result.error)
+        self.assertNotIn("retained", result.error)
+        self.assertNotIn("raw", result.error)
+
 
 if __name__ == "__main__":
     unittest.main()

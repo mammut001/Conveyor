@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Protocol
+from typing import Any, Callable, Iterator, Protocol
 
 from conveyor.core.redaction import redact_text, truncate
 
@@ -88,6 +88,7 @@ _INITIALIZED_DBS: dict[tuple[str, int, int], int] = {}
 MAX_STORED_OUTPUT_CHARS = 16_000
 MAX_EVIDENCE_OUTPUT_CHARS = 512_000
 OUTPUT_BYTE_LIMIT = 4 * 1024 * 1024
+PI_RAW_STDOUT_LIMIT = 512 * 1024 * 1024
 MAX_REPAIR_ROUNDS_DEFAULT = 3
 
 RECOVERY_LIMITATIONS = (
@@ -4024,7 +4025,8 @@ class PiExecutor:
             self.settings, role=role, prompt=prompt,
             worktree_path=worktree_path, timeout_seconds=timeout_seconds,
             argv_builder=self._argv, executors="pi",
-            parser=_parse_pi_stream, task_id=task_id, context=context)
+            parser=_parse_pi_stream, task_id=task_id, context=context,
+            stdout_line_filter=_pi_stdout_line_filter)
 
     async def cancel(self, execution_id: str) -> bool:
         return cancel_execution(self.settings, execution_id)
@@ -4343,6 +4345,29 @@ def _parse_ndjson_result(stdout: str) -> tuple[str, dict[str, Any]]:
     }
 
 
+_PI_STREAM_DROP_TYPES = frozenset({"message_update", "tool_execution_update"})
+
+
+def _pi_stdout_line_filter(raw_line: bytes) -> bool:
+    """Keep Pi stdout lines needed by ``_parse_pi_stream`` and diagnostics.
+
+    Drops per-token/per-chunk streaming events (``message_update``,
+    ``tool_execution_update``) that are not consumed by ``_parse_pi_stream``.
+    Non-JSON lines and all other event types (including ``message_end``,
+    ``agent_end``, ``tool_execution_start``/``end``, and ``error``) are kept.
+    """
+    stripped = raw_line.strip()
+    if not stripped.startswith(b"{"):
+        return True
+    try:
+        obj = json.loads(stripped)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return True
+    if not isinstance(obj, dict):
+        return True
+    return obj.get("type") not in _PI_STREAM_DROP_TYPES
+
+
 def _parse_pi_stream(stdout: str) -> tuple[str, dict[str, Any]]:
     """Parse Pi ``-p --mode json`` NDJSON output.
 
@@ -4545,6 +4570,37 @@ async def _pump_stdin(stdin: asyncio.StreamWriter | None, payload: bytes) -> Non
             await asyncio.wait_for(stdin.wait_closed(), timeout=0.05)
 
 
+def _record_stream_limit(
+    limit_info: dict[str, Any],
+    limit_event: asyncio.Event,
+    *,
+    stream_name: str,
+    byte_count: int,
+    limit_kind: str,
+    limit_bytes: int,
+) -> None:
+    if not limit_info.get("exceeded"):
+        limit_info["exceeded"] = True
+        limit_info["stream"] = stream_name
+        limit_info["bytes"] = byte_count
+        limit_info["limit_kind"] = limit_kind
+        limit_info["limit_bytes"] = limit_bytes
+    limit_event.set()
+
+
+def _format_output_limit_error(limit_info: dict[str, Any], byte_cap: int) -> str:
+    stream = str(limit_info.get("stream") or "output")
+    kind = str(limit_info.get("limit_kind") or "output")
+    limit_bytes = int(limit_info.get("limit_bytes") or byte_cap)
+    if kind == "raw":
+        return f"{stream} exceeded raw output byte limit ({limit_bytes} bytes); process group killed"
+    if kind == "retained":
+        return f"{stream} exceeded retained output byte limit ({limit_bytes} bytes); process group killed"
+    if kind == "line":
+        return f"{stream} line exceeded output byte limit ({limit_bytes} bytes); process group killed"
+    return f"{stream} exceeded output byte limit ({limit_bytes} bytes); process group killed"
+
+
 async def _read_stream_bounded(
     stream: asyncio.StreamReader | None,
     *,
@@ -4552,26 +4608,94 @@ async def _read_stream_bounded(
     limit_event: asyncio.Event,
     limit_info: dict[str, Any],
     stream_name: str,
+    line_filter: Callable[[bytes], bool] | None = None,
+    raw_byte_limit: int | None = None,
 ) -> tuple[bytes, int]:
-    """Incrementally read a stream and enforce a strict byte cap while running."""
+    """Incrementally read a stream and enforce a strict byte cap while running.
+
+    When ``line_filter`` is provided, reads NDJSON line by line (with a per-line
+    ceiling matching the active byte limit), retains only lines for which
+    ``line_filter(line)`` returns True under ``byte_limit``, and enforces an
+    optional ``raw_byte_limit`` safety cap on total raw bytes read.
+    """
     if stream is None:
         return b"", 0
     buf = bytearray()
     total_read = 0
+    if line_filter is None:
+        while True:
+            chunk = await stream.read(65_536)
+            if not chunk:
+                break
+            total_read += len(chunk)
+            remaining_cap = byte_limit - len(buf)
+            if remaining_cap > 0:
+                buf.extend(chunk[:remaining_cap])
+            if total_read > byte_limit:
+                _record_stream_limit(
+                    limit_info,
+                    limit_event,
+                    stream_name=stream_name,
+                    byte_count=total_read,
+                    limit_kind="output",
+                    limit_bytes=byte_limit,
+                )
+                break
+        return bytes(buf), total_read
+
+    retained_read = 0
+    line_limit = byte_limit if raw_byte_limit is None else min(byte_limit, raw_byte_limit)
     while True:
-        chunk = await stream.read(65_536)
-        if not chunk:
+        try:
+            line = await stream.readline()
+        except (ValueError, asyncio.LimitOverrunError):
+            _record_stream_limit(
+                limit_info,
+                limit_event,
+                stream_name=stream_name,
+                byte_count=total_read + line_limit + 1,
+                limit_kind="raw" if raw_byte_limit is not None and raw_byte_limit < byte_limit else "line",
+                limit_bytes=line_limit,
+            )
             break
-        total_read += len(chunk)
-        remaining_cap = byte_limit - len(buf)
-        if remaining_cap > 0:
-            buf.extend(chunk[:remaining_cap])
-        if total_read > byte_limit:
-            limit_info["exceeded"] = True
-            limit_info["stream"] = stream_name
-            limit_info["bytes"] = total_read
-            limit_event.set()
+        if not line:
             break
+        total_read += len(line)
+        if len(line) > line_limit:
+            _record_stream_limit(
+                limit_info,
+                limit_event,
+                stream_name=stream_name,
+                byte_count=total_read,
+                limit_kind="raw" if raw_byte_limit is not None and raw_byte_limit < byte_limit else "line",
+                limit_bytes=line_limit,
+            )
+            break
+        if raw_byte_limit is not None and total_read > raw_byte_limit:
+            _record_stream_limit(
+                limit_info,
+                limit_event,
+                stream_name=stream_name,
+                byte_count=total_read,
+                limit_kind="raw",
+                limit_bytes=raw_byte_limit,
+            )
+            break
+        if line_filter(line):
+            retained_read += len(line)
+            remaining_cap = byte_limit - len(buf)
+            if remaining_cap > 0:
+                buf.extend(line[:remaining_cap])
+            if retained_read > byte_limit:
+                _record_stream_limit(
+                    limit_info,
+                    limit_event,
+                    stream_name=stream_name,
+                    byte_count=retained_read,
+                    limit_kind="retained",
+                    limit_bytes=byte_limit,
+                )
+                break
     return bytes(buf), total_read
 
 
@@ -4652,6 +4776,8 @@ async def _spawn_cli(
     pass_stdin: bool = True,
     stdin_bytes: bytes | None = None,
     allow_empty_output: bool = False,
+    stdout_line_filter: Callable[[bytes], bool] | None = None,
+    raw_byte_limit: int | None = None,
 ) -> ExecutionResult:
     """Genuine subprocess execution: explicit argv, allowlist child env, own
     process group, incremental byte-capped streams, end-to-end deadline covering
@@ -4734,6 +4860,9 @@ async def _spawn_cli(
     payload_stdin = stdin_bytes if stdin_bytes is not None else (prompt_bytes if use_stdin else None)
 
     byte_cap = max(1024, int(OUTPUT_BYTE_LIMIT))
+    raw_cap: int | None = None
+    if stdout_line_filter is not None:
+        raw_cap = max(1024, int(PI_RAW_STDOUT_LIMIT if raw_byte_limit is None else raw_byte_limit))
     handle = _LiveHandle(execution_id, None, effective_task_id, cwd or "", role.name)
     _LIVE[execution_id] = handle
 
@@ -4893,6 +5022,8 @@ async def _spawn_cli(
                 stderr=asyncio.subprocess.PIPE,
                 start_new_session=True,
             )
+            if stdout_line_filter is not None:
+                kwargs["limit"] = min(byte_cap, raw_cap) if raw_cap is not None else byte_cap
             if pass_fds_tuple:
                 kwargs["pass_fds"] = pass_fds_tuple
 
@@ -4972,6 +5103,8 @@ async def _spawn_cli(
                 limit_event=limit_event,
                 limit_info=limit_info,
                 stream_name="stdout",
+                line_filter=stdout_line_filter,
+                raw_byte_limit=raw_cap,
             )
         )
         stderr_task = asyncio.create_task(
@@ -5172,9 +5305,7 @@ async def _spawn_cli(
             primary_reason = f"timed out after {timeout_seconds}s; process group killed"
             err_reap = f"{primary_reason}; {cleanup_diag}"
         elif limit_info.get("exceeded"):
-            primary_reason = (
-                f"{limit_info.get('stream', 'output')} exceeded output byte limit ({byte_cap} bytes); process group killed"
-            )
+            primary_reason = _format_output_limit_error(limit_info, byte_cap)
             err_reap = f"{primary_reason}; {cleanup_diag}"
         elif lingering_descendant:
             primary_reason = (
@@ -5238,9 +5369,7 @@ async def _spawn_cli(
         error_text = reason_or(f"timed out after {timeout_seconds}s; process group killed")
     elif limit_info["exceeded"]:
         status = "failed"
-        error_text = reason_or(
-            f"{limit_info['stream']} exceeded output byte limit ({byte_cap} bytes); process group killed"
-        )
+        error_text = reason_or(_format_output_limit_error(limit_info, byte_cap))
     elif lingering_descendant:
         status = "failed"
         error_text = reason_or(
@@ -5261,7 +5390,10 @@ async def _spawn_cli(
                 non_json = [ln.strip() for ln in stdout_text.splitlines() if ln.strip() and not ln.strip().startswith("{")]
                 if non_json:
                     stdout_tail = " | ".join(non_json[-3:])
-            if meta_error and meta_error != "missing final result envelope":
+            if meta_error and meta_error not in (
+                "missing final result envelope",
+                "missing unambiguous final pi result",
+            ):
                 if stderr_clean and meta_error not in stderr_clean:
                     error_text = reason_or(f"{meta_error} | {stderr_clean}")
                 else:
