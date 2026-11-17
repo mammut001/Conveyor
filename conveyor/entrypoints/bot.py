@@ -609,6 +609,31 @@ async def agent_switcher_callback(update: Update, context: ContextTypes.DEFAULT_
     await agent_switcher.handle(settings, _inbound(update), make_outbound(update), query.data)
 
 
+async def chat_intent_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Owner pressed a chat-intent action button (callback_data = ``ci:<action_id>``).
+
+    Owner + private-chat only (reuses goal_commands.owner_private); the action id
+    is run once via chat_intents.execute_action and its follow-up is relayed. A
+    replay or a button from another chat is refused by the phone handler.
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    inbound = _inbound(update)
+    data = query.data or ""
+    action_id = data[3:] if data.startswith("ci:") else ""
+    from handlers.goal_commands import owner_private
+    if not owner_private(inbound, settings):
+        await query.answer("只有老板本人能在私聊里用。", show_alert=True)
+        return
+    if not action_id:
+        await query.answer("无效的操作。", show_alert=True)
+        return
+    await query.answer()
+    from handlers import chat_intents_phone
+    await chat_intents_phone.run_action(settings, inbound, make_outbound(update), action_id)
+
+
 def _navigation_markup(screen):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(text, callback_data=data) for text, data in row]
@@ -1063,6 +1088,7 @@ def main() -> None:
     application.add_handler(CallbackQueryHandler(task_status_callback, pattern=r"^task:status:[0-9a-f]{6,32}$"))
     application.add_handler(CallbackQueryHandler(relay_callback, pattern=r"^relay:"))
     application.add_handler(CallbackQueryHandler(deep_callback, pattern=r"^deep$"))
+    application.add_handler(CallbackQueryHandler(chat_intent_callback, pattern=r"^ci:"))
     # Catch-all for COMMAND_TABLE entries without explicit CommandHandler above.
     application.add_handler(MessageHandler(filters.COMMAND, generic_command_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_cmd))

@@ -98,8 +98,12 @@ async def dispatch(
     if await try_resolve_confirmation(msg, port, settings):
         return
 
-    # TODO(chat-intents): hook owner-only Telegram/Feishu create_project / start_timed_goal
-    # intents here when channel interactive action buttons are supported outside web chat.
+    # Owner-only phone (Telegram/Feishu) chat intents, run exactly like the web
+    # 对话 (patterns → decider → cards). No-op for groups and non-owners, so it
+    # only intercepts when the owner drives Conveyor from a private chat.
+    from handlers import chat_intents_phone
+    if await chat_intents_phone.maybe_handle(msg, port, settings, msg.text):
+        return
 
     parsed = parse_command(msg.text)
     if parsed is None and msg.reply_to is None and not msg.attachments:
