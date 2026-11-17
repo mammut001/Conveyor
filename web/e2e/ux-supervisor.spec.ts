@@ -525,11 +525,11 @@ test('mock fixture: repo/worktree tree selection, register repo, create managed 
   await expect(page.locator('.sup-repo-tree').getByText('fix/console')).toHaveCount(0)
   await search.fill('')
 
-  // Selecting main worktree shows read-only notice and disables dispatch
+  // Selecting main worktree shows the read-only card instead of a disabled dispatch form
   await page.locator('.sup-worktree-item').filter({ hasText: 'main' }).first().click()
   await expect(page.getByRole('heading', { name: 'Conveyor / main' })).toBeVisible()
-  await expect(page.getByText(/当前为只读工作目录/)).toBeVisible()
-  await expect(page.getByRole('button', { name: '开始执行' })).toBeDisabled()
+  await expect(page.getByRole('region', { name: '只读工作目录' })).toContainText('这是只读的主分支，不能直接在这里改。')
+  await expect(page.getByRole('button', { name: '开始执行' })).toHaveCount(0)
 
   // Create a new managed worktree from the read-only CTA (scoped to this repo's group:
   // every expanded repository renders its own 「+ 新建工作目录」 button).
@@ -540,7 +540,7 @@ test('mock fixture: repo/worktree tree selection, register repo, create managed 
   await createWtForm.getByLabel('分支名称（可选）').fill('feat/supervisor-e2e')
   await createWtForm.getByRole('button', { name: '创建工作目录' }).click()
   await expect(page.getByRole('heading', { name: 'Conveyor / feat/supervisor-e2e' })).toBeVisible()
-  await expect(page.getByText(/当前为只读工作目录/)).toHaveCount(0)
+  await expect(page.getByRole('region', { name: '只读工作目录' })).toHaveCount(0)
 
   // Enter a draft goal in feat/supervisor-e2e, then rapidly click wt-no-chat (delayed 700ms) -> wt-fix-console
   const goalBox = page.getByRole('textbox', { name: '任务目标' })

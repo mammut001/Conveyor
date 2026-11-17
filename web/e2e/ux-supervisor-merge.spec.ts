@@ -575,13 +575,13 @@ test('mock fixture: the entry never shows on the main checkout or an unmanaged w
   // 主分支（主工作目录）：只读，没有入口。
   await page.locator('.sup-worktree-item').filter({ hasText: 'main' }).first().click()
   await expect(page.getByRole('heading', { name: 'Conveyor / main' })).toBeVisible()
-  await expect(page.getByText('当前为只读工作目录（主分支）')).toBeVisible()
+  await expect(page.getByRole('region', { name: '只读工作目录' })).toContainText('这是只读的主分支，不能直接在这里改。')
   await expect(page.getByRole('button', { name: '合并到主分支…' })).toHaveCount(0)
 
   // 未托管目录：同样没有入口。
   await page.locator('.sup-worktree-item').filter({ hasText: 'plain-branch' }).first().click()
   await expect(page.getByRole('heading', { name: 'Conveyor / plain-branch' })).toBeVisible()
-  await expect(page.getByText('当前为只读工作目录（未托管目录）')).toBeVisible()
+  await expect(page.getByRole('region', { name: '只读工作目录' })).toContainText('这是只读的未托管目录，不能直接在这里改。')
   await expect(page.getByRole('button', { name: '合并到主分支…' })).toHaveCount(0)
   expect(fixture.previewRequests).toHaveLength(0)
 })

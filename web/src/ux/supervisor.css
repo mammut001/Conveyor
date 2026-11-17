@@ -691,6 +691,41 @@
   color: #344054;
 }
 
+/* 只读工作目录（主分支 / 未托管目录）：一句话 + 一个主按钮 + 已有的工作目录。 */
+.sup-readonly-card {
+  gap: 12px;
+}
+
+.sup-readonly-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sup-readonly-card-text strong {
+  color: #1f2328;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.sup-readonly-card-text span {
+  color: #667085;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.sup-readonly-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.sup-readonly-card-actions .shell-button {
+  min-height: 40px;
+}
+
 .sup-banner--locked,
 .sup-banner--warning {
   border: 1px solid #fedf89;
@@ -2486,8 +2521,11 @@
   gap: 12px;
 }
 
+/* 放在「运行方式」这个竖排组里时，flex-basis 会变成高度：
+   180px 的基准会让「最多尝试几轮」下面空一大块。这里显式按内容高、固定宽排。 */
 .sup-goal-rounds-field {
-  flex: 0 1 180px;
+  flex: 0 0 auto;
+  width: 180px;
 }
 
 .sup-goal-budget-row {
