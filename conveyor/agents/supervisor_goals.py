@@ -1737,9 +1737,19 @@ def _build_finish_report_bundle(
     scope = _resolve_report_scope(settings, goal, iterations)
     elapsed_zh = _format_elapsed_zh(goal.get("created_at"), goal.get("updated_at"))
 
+    usage = goal.get("usage")
+    if not isinstance(usage, dict):
+        # Older callers (and terminal snapshots taken before usage was attached)
+        # may not carry it; never invent a zero in that case, just read it.
+        usage = _goal_usage(settings, iterations)
+    usage_phrase = ags.usage_summary_phrase(usage)
+    rounds_line = f"跑了 {rounds_total} 轮，通过 {rounds_passed} 轮，{elapsed_zh}"
+    if usage_phrase:
+        rounds_line += f"，{usage_phrase}"
+
     lines: list[str] = [
         f"{scope['repo_name']} 的目标结束了：{label}。",
-        f"跑了 {rounds_total} 轮，通过 {rounds_passed} 轮，{elapsed_zh}。",
+        f"{rounds_line}。",
     ]
 
     passed_titles: list[str] = []

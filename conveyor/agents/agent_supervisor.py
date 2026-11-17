@@ -2903,6 +2903,73 @@ def empty_usage() -> dict[str, int]:
     }
 
 
+def format_tokens(n: Any) -> str:
+    """Owner-facing token count: 「约 8,500 token」/「约 3.4 万 token」/「0 token」.
+
+    The count is rounded FIRST (nearest hundred), and only then is the unit
+    chosen: below 10,000 it stays a plain number with a thousands separator,
+    from 10,000 up it is 万 with one decimal while under 10 万 (a trailing
+    ".0" is dropped) and a whole number of 万 above that. Cached input tokens
+    already live inside ``input_tokens``, so callers never add them twice.
+
+    Exactly zero (or anything that is not a number) is 「0 token」; a positive
+    count that rounds down to zero is 「不到 100 token」 instead, so a run that
+    spent 1..49 tokens never reads as "nothing".
+    """
+    try:
+        value = int(n)
+    except (TypeError, ValueError):
+        return "0 token"
+    if value <= 0:
+        return "0 token"
+    hundreds = value // 100
+    if value - hundreds * 100 >= 50:
+        hundreds += 1
+    rounded = hundreds * 100
+    if rounded <= 0:
+        # 1..49 round to zero, but something was spent: say so instead of "0 token".
+        return "不到 100 token"
+    if rounded < 10_000:
+        return f"约 {rounded:,} token"
+    # 万 with one decimal under 10 万 (a trailing ".0" is dropped), whole 万 above.
+    wan = rounded / 10_000
+    if wan < 10:
+        text = f"{wan:.1f}".rstrip("0").rstrip(".")
+        return f"约 {text} 万 token"
+    return f"约 {int(wan + 0.5)} 万 token"
+
+
+def usage_total_tokens(usage: Any) -> int:
+    """input + output tokens of a usage dict (cached input is already inside input)."""
+    if not isinstance(usage, dict):
+        return 0
+    try:
+        return int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def usage_summary_phrase(usage: Any) -> str:
+    """「用了约 3.4 万 token」plus the partial-reporting note, or "" with no usage.
+
+    Empty means "nobody reported usage", which is different from "cost nothing";
+    the caller then shows nothing at all instead of a fabricated zero.
+    """
+    if not isinstance(usage, dict):
+        return ""
+    try:
+        with_usage = int(usage.get("runs_with_usage") or 0)
+        without_usage = int(usage.get("runs_without_usage") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if with_usage <= 0:
+        return ""
+    phrase = f"用了{format_tokens(usage_total_tokens(usage))}"
+    if without_usage > 0:
+        phrase += "（部分执行者没有报告用量）"
+    return phrase
+
+
 def _store_execution_usage(conn: sqlite3.Connection, *, execution_id: str, task_id: str,
                            role: str, executor: str, model: str, usage: Any) -> dict[str, int]:
     """Upsert one run's usage inside the caller's open transaction.

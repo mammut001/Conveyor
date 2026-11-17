@@ -2126,6 +2126,14 @@
   overflow-wrap: anywhere;
 }
 
+/* 这个目标已经花了多少 token：一行小字，没有用量时不渲染。 */
+.sup-goal-usage {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .sup-goal-summary {
   margin: 0;
   padding: 10px 12px;

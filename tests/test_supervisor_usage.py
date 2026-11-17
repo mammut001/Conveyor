@@ -29,6 +29,7 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("CONVEYOR_AGENT_SUPERVISOR_ENABLED", "true")
 
 from conveyor.agents import agent_supervisor as ags
+from conveyor.agents import chat_intents
 from conveyor.agents import supervisor_goals as goals
 from conveyor.agents import supervisor_service as svc
 from conveyor.agents.agent_supervisor import PiExecutor, RoleConfig
@@ -130,6 +131,15 @@ class _UsageCase(unittest.TestCase):
         self.wt = self.tmp / "wt"
         _git("worktree", "add", "--detach", str(self.wt), self.head, cwd=self.repo)
         self._task_ids: list[str] = []
+
+    def _create_goal(self) -> dict[str, object]:
+        repo, _created = svc.register_repository(self.settings, path=str(self.repo))
+        wt = svc.create_managed_worktree(self.settings, repo["id"], branch="feat/usage")
+        return goals.create_goal(None, self.settings, {
+            "outcome": "在 managed worktree 里新增 feature.txt，内容为 hello-usage，并干净提交",
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+        })
 
     def _new_task(self) -> dict[str, object]:
         # One active supervisor task per worktree: park the previous one in a
@@ -270,15 +280,6 @@ class TaskUsagePersistenceTests(_UsageCase):
 
 
 class GoalUsageTests(_UsageCase):
-    def _create_goal(self) -> dict[str, object]:
-        repo, _created = svc.register_repository(self.settings, path=str(self.repo))
-        wt = svc.create_managed_worktree(self.settings, repo["id"], branch="feat/usage")
-        return goals.create_goal(None, self.settings, {
-            "outcome": "在 managed worktree 里新增 feature.txt，内容为 hello-usage，并干净提交",
-            "repo_id": repo["id"],
-            "worktree_id": wt["id"],
-        })
-
     def test_goal_usage_sums_the_tasks_of_its_rounds(self) -> None:
         goal = self._create_goal()
         first = self._new_task()
@@ -308,6 +309,135 @@ class GoalUsageTests(_UsageCase):
         self.assertEqual(goal["usage"], ags.empty_usage())
         self.assertEqual(goals.get_goal(self.settings, str(goal["id"]))["usage"],
                          ags.empty_usage())
+
+
+class FormatTokensTests(unittest.TestCase):
+    """Owner-facing token copy: same rounding the TS twin implements."""
+
+    def test_boundaries(self) -> None:
+        self.assertEqual(ags.format_tokens(0), "0 token")
+        self.assertEqual(ags.format_tokens(8549), "约 8,500 token")
+        # 9999 rounds up to 10,000, so it is shown in 万, not as "10,000 token".
+        self.assertEqual(ags.format_tokens(9999), "约 1 万 token")
+        self.assertEqual(ags.format_tokens(10000), "约 1 万 token")
+        self.assertEqual(ags.format_tokens(34000), "约 3.4 万 token")
+        self.assertEqual(ags.format_tokens(120000), "约 12 万 token")
+        self.assertEqual(ags.format_tokens(1234567), "约 123 万 token")
+
+    def test_rounding_rules(self) -> None:
+        # Below 10,000 after rounding: nearest hundred, half up, thousands separator.
+        self.assertEqual(ags.format_tokens(1), "不到 100 token")
+        self.assertEqual(ags.format_tokens(49), "不到 100 token")
+        self.assertEqual(ags.format_tokens(50), "约 100 token")
+        self.assertEqual(ags.format_tokens(8500), "约 8,500 token")
+        self.assertEqual(ags.format_tokens(8550), "约 8,600 token")
+        # From 10,000: 万 with one decimal under 10 万, whole 万 above it.
+        # Rounding happens first: 99999 rounds to 10 万, so it leaves the decimals.
+        self.assertEqual(ags.format_tokens(99999), "约 10 万 token")
+        self.assertEqual(ags.format_tokens(100000), "约 10 万 token")
+        self.assertEqual(ags.format_tokens(125000), "约 13 万 token")
+        # A trailing ".0" is dropped: 20000 is 2 万, not 2.0 万.
+        self.assertEqual(ags.format_tokens(20000), "约 2 万 token")
+
+    def test_junk_and_negatives_are_zero(self) -> None:
+        self.assertEqual(ags.format_tokens(-5), "0 token")
+        self.assertEqual(ags.format_tokens(None), "0 token")
+        self.assertEqual(ags.format_tokens("nope"), "0 token")
+
+
+class UsageSummaryPhraseTests(unittest.TestCase):
+    def test_phrase_with_and_without_partial_reporting(self) -> None:
+        self.assertEqual(
+            ags.usage_summary_phrase({"input_tokens": 30000, "output_tokens": 4000,
+                                      "runs_with_usage": 3, "runs_without_usage": 0}),
+            "用了约 3.4 万 token")
+        self.assertEqual(
+            ags.usage_summary_phrase({"input_tokens": 30000, "output_tokens": 4000,
+                                      "runs_with_usage": 3, "runs_without_usage": 1}),
+            "用了约 3.4 万 token（部分执行者没有报告用量）")
+
+    def test_no_usage_at_all_says_nothing(self) -> None:
+        # Nobody reported usage is not the same as "cost nothing": say nothing.
+        self.assertEqual(ags.usage_summary_phrase(ags.empty_usage()), "")
+        self.assertEqual(ags.usage_summary_phrase({"input_tokens": 10, "output_tokens": 1,
+                                                   "runs_with_usage": 0,
+                                                   "runs_without_usage": 2}), "")
+        self.assertEqual(ags.usage_summary_phrase(None), "")
+
+    def test_cached_input_is_not_counted_twice(self) -> None:
+        # cached_input_tokens already live inside input_tokens: total is in + out.
+        self.assertEqual(ags.usage_total_tokens({"input_tokens": 8000, "output_tokens": 549,
+                                                 "cached_input_tokens": 6000}), 8549)
+
+
+class UsageCopyTests(_UsageCase):
+    """The report / progress copy shows the goal's usage, or nothing at all."""
+
+    def _report(self, goal: dict[str, object]) -> str:
+        return goals.build_finish_report_text(self.settings, goal)
+
+    def test_finish_report_appends_usage_and_partial_note(self) -> None:
+        goal = self._create_goal()
+        goal["usage"] = {"input_tokens": 30000, "output_tokens": 4000,
+                         "cached_input_tokens": 0, "runs_with_usage": 3,
+                         "runs_without_usage": 1}
+        text = self._report(goal)
+        self.assertIn("用了约 3.4 万 token（部分执行者没有报告用量）", text)
+
+    def test_finish_report_without_partial_reporting_has_no_note(self) -> None:
+        goal = self._create_goal()
+        goal["usage"] = {"input_tokens": 30000, "output_tokens": 4000,
+                         "cached_input_tokens": 0, "runs_with_usage": 3,
+                         "runs_without_usage": 0}
+        text = self._report(goal)
+        self.assertIn("用了约 3.4 万 token", text)
+        self.assertNotIn("部分执行者没有报告用量", text)
+
+    def test_finish_report_without_any_usage_says_nothing(self) -> None:
+        goal = self._create_goal()
+        goal["usage"] = ags.empty_usage()
+        self.assertNotIn("token", self._report(goal))
+
+    def test_finish_report_reads_usage_when_the_goal_dict_lacks_it(self) -> None:
+        # Older callers hand over a goal without "usage": the report still finds
+        # the real numbers instead of printing nothing (or a fabricated zero).
+        goal = self._create_goal()
+        goal.pop("usage", None)  # 老调用方交过来的目标不带 usage
+        task = self._new_task()
+        self.assertTrue(self._run_pi(str(task["id"]), ANALYST,
+                                     {"input": 30000, "output": 4000,
+                                      "cacheRead": 0}).success)
+        with patch.object(goals, "_iterations",
+                          lambda *_a, **_kw: [{"n": 1, "task_id": str(task["id"])}]):
+            text = self._report(goal)
+        self.assertIn("用了约 3.4 万 token", text)
+
+    def _progress_reply(self, detail: dict[str, object]) -> str:
+        with patch.object(goals, "list_goals", lambda *_a, **_kw: [detail]), \
+                patch.object(goals, "get_goal", lambda *_a, **_kw: detail):
+            text, _card = chat_intents._handle_progress_intent(
+                self.settings, "usage-progress-session", "目标进度怎么样")
+        return text
+
+    def test_progress_reply_appends_usage_and_partial_note(self) -> None:
+        goal = self._create_goal()
+        detail = dict(goal)
+        detail.update({"state": "running", "rounds_total": 3, "rounds_passed": 2,
+                       "usage": {"input_tokens": 30000, "output_tokens": 4000,
+                                  "cached_input_tokens": 0, "runs_with_usage": 3,
+                                  "runs_without_usage": 1}})
+        text = self._progress_reply(detail)
+        self.assertIn("已跑 3 轮 / 通过 2 轮", text)
+        self.assertIn("用了约 3.4 万 token（部分执行者没有报告用量）", text)
+
+    def test_progress_reply_without_usage_says_nothing(self) -> None:
+        goal = self._create_goal()
+        detail = dict(goal)
+        detail.update({"state": "running", "rounds_total": 1, "rounds_passed": 0,
+                       "usage": ags.empty_usage()})
+        text = self._progress_reply(detail)
+        self.assertIn("已跑 1 轮 / 通过 0 轮", text)
+        self.assertNotIn("token", text)
 
 
 if __name__ == "__main__":
