@@ -181,6 +181,148 @@ class IntentDeciderTests(unittest.TestCase):
                 )
                 self.assertNotIn(secret, "\n".join(logs.output))
 
+    def _decider_health_after(self, status_code: int, body: dict | str) -> dict:
+        """Run one failing decider call and return the persisted health record."""
+        self.fake.next_status = status_code
+        self.fake.next_body = body
+        self.assertIsNone(
+            intent_decider.decide_intent(self.settings, "进度怎么样了", intent_decider.INTENT_OPTIONS)
+        )
+        return intent_decider.get_decider_health(self.settings)
+
+    def test_health_error_kind_mapping(self) -> None:
+        secret = "AIzaSyKindMappingKey0001"
+        console_secrets.set_secret(self.settings, "GEMINI_API_KEY", secret)
+        cases = [
+            (401, {"error": {"code": 401, "status": "UNAUTHENTICATED", "message": "no key"}}, "auth"),
+            (403, {"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "denied"}}, "auth"),
+            (429, {"error": {"code": 429, "message": "Too Many Requests"}}, "rate_limit"),
+            # Google answers an exhausted quota with 429 + RESOURCE_EXHAUSTED: the body wins.
+            (429, {"error": {"code": 429, "status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded"}}, "quota"),
+            (400, {"error": {"code": 400, "status": "INVALID_ARGUMENT", "message": "bad shape"}}, "bad_request"),
+            (408, {"error": {"code": 408, "status": "DEADLINE_EXCEEDED", "message": "slow"}}, "timeout"),
+            (503, {"error": {"code": 503, "status": "UNAVAILABLE", "message": "later"}}, "other"),
+        ]
+        with patch.object(intent_decider, "GEMINI_ENDPOINT", self.fake.url):
+            for status_code, body, expected_kind in cases:
+                with self.subTest(status=status_code, expected=expected_kind):
+                    health = self._decider_health_after(status_code, body)
+                    self.assertEqual(health["last_error_kind"], expected_kind)
+                    self.assertTrue(health["last_error_message"])
+                    self.assertGreaterEqual(health["consecutive_failures"], 1)
+                    self.assertNotIn(secret, json.dumps(health, ensure_ascii=False))
+
+            # A transport timeout is its own kind, never an HTTP error.
+            self.fake.next_status = 200
+            self.fake.delay_seconds = 0.35
+            with patch.object(intent_decider, "TIMEOUT_SECONDS", 0.08):
+                self.assertIsNone(
+                    intent_decider.decide_intent(self.settings, "进度怎么样了", intent_decider.INTENT_OPTIONS)
+                )
+            timeout_health = intent_decider.get_decider_health(self.settings)
+            self.assertEqual(timeout_health["last_error_kind"], "timeout")
+            self.fake.delay_seconds = 0.0
+
+    def test_health_persists_and_resets_on_success(self) -> None:
+        secret = "AIzaSyHealthPersistKey01"
+        console_secrets.set_secret(self.settings, "GEMINI_API_KEY", secret)
+        rejected = {
+            "error": {
+                "code": 401,
+                "status": "PERMISSION_DENIED",
+                "message": "The bound service account is deleted or disabled",
+                "details": [{"@type": "reason", "reason": "ACCOUNT_STATE_INVALID"}],
+            }
+        }
+        with patch.object(intent_decider, "GEMINI_ENDPOINT", self.fake.url):
+            for _ in range(3):
+                self._decider_health_after(401, rejected)
+
+            health = intent_decider.get_decider_health(self.settings)
+            self.assertEqual(health["last_error_kind"], "auth")
+            self.assertEqual(health["consecutive_failures"], 3)
+            self.assertTrue(health["unhealthy"])
+            self.assertIn("密钥被拒绝了", health["last_error_message"])
+            self.assertIn("绑定的账号已删除或停用", health["last_error_message"])
+
+            # The record lives beside the decider config and never holds the key.
+            stored = provider_config.config_path(self.settings).read_text(encoding="utf-8")
+            self.assertIn("[intent_decider_health.gemini]", stored)
+            self.assertIn("consecutive_failures = \"3\"", stored)
+            self.assertNotIn(secret, stored)
+
+            # One success clears the failure streak and records 上次成功.
+            self.fake.next_status = 200
+            self.fake.next_body = {
+                "answers": {
+                    "intent": {
+                        "choice": "progress",
+                        "confidence": 0.9,
+                        "probabilities": {"progress": 0.9, "chat": 0.1},
+                    }
+                }
+            }
+            self.assertIsNotNone(
+                intent_decider.decide_intent(self.settings, "进度怎么样了", intent_decider.INTENT_OPTIONS)
+            )
+            healthy = intent_decider.get_decider_health(self.settings)
+            self.assertEqual(healthy["consecutive_failures"], 0)
+            self.assertIsNone(healthy["last_error_kind"])
+            self.assertFalse(healthy["unhealthy"])
+            self.assertTrue(healthy["last_ok_at"])
+
+    def test_health_write_is_throttled_for_repeated_identical_errors(self) -> None:
+        console_secrets.set_secret(self.settings, "GEMINI_API_KEY", "AIzaSyThrottleKey0001")
+        rejected = {"error": {"code": 401, "status": "UNAUTHENTICATED", "message": "nope"}}
+        with patch.object(intent_decider, "GEMINI_ENDPOINT", self.fake.url):
+            self.fake.next_status = 401
+            self.fake.next_body = rejected
+            for _ in range(5):
+                self.assertIsNone(
+                    intent_decider.decide_intent(self.settings, "进度怎么样了", intent_decider.INTENT_OPTIONS)
+                )
+            # Failures 1-3 are state changes (climbing to the unhealthy line); the
+            # identical 4th and 5th must not rewrite the record every time.
+            self.assertEqual(intent_decider.get_decider_health(self.settings)["consecutive_failures"], 3)
+
+            # Once the minute is over the same error refreshes the record again.
+            key = "gemini:" + intent_decider._config_fingerprint(
+                intent_decider.resolve_decider_config(self.settings)
+            )
+            with patch.dict(intent_decider._HEALTH_LAST_WRITE, {key: time.time() - 61.0}):
+                self.assertIsNone(
+                    intent_decider.decide_intent(self.settings, "进度怎么样了", intent_decider.INTENT_OPTIONS)
+                )
+            self.assertEqual(intent_decider.get_decider_health(self.settings)["consecutive_failures"], 4)
+
+    def test_http_endpoint_returns_decider_health(self) -> None:
+        secret = "AIzaSyHealthApiKey0001"
+        console_secrets.set_secret(self.settings, "GEMINI_API_KEY", secret)
+        with patch.object(intent_decider, "GEMINI_ENDPOINT", self.fake.url):
+            self._decider_health_after(
+                401,
+                {"error": {"code": 401, "status": "PERMISSION_DENIED", "message": "deleted"}},
+            )
+            h = _HttpHarness(self.settings)
+            try:
+                conn = http.client.HTTPConnection("127.0.0.1", h.port, timeout=10)
+                headers = {"Authorization": f"Bearer {TOKEN}"}
+                conn.request("GET", "/api/config/intent-decider", headers=headers)
+                resp = conn.getresponse()
+                data = json.loads(resp.read().decode("utf-8"))
+                self.assertEqual(resp.status, 200)
+                health = data["health"]
+                self.assertEqual(health["provider"], "gemini")
+                self.assertEqual(health["last_error_kind"], "auth")
+                self.assertTrue(health["unhealthy"])
+                self.assertTrue(health["last_error_message"])
+                self.assertNotIn(secret, json.dumps(data, ensure_ascii=False))
+                conn.close()
+            finally:
+                from conveyor.agents import supervisor_service as svc
+                svc.stop_server_worker(h.server)
+                h.close()
+
     def test_jev_and_custom_providers_and_config_coexistence(self) -> None:
         # Save model provider config first, then intent_decider, then model provider again -> both preserved.
         provider_config.save_provider_config(

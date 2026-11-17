@@ -938,6 +938,19 @@
 }
 .primary-interface .chat-failed-reply .chat-open-settings-button:hover { border-color: #a94c34; background: #fdf3f0; }
 
+/* A system-style notice (理解指令 is down): smaller, muted, no avatar or footer. */
+.primary-interface .chat-system-notice { margin: 2px 0; }
+.primary-interface .chat-system-notice .transcript-content {
+  display: inline-block;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: #fef6f3;
+  color: #8a4b38;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.primary-interface .chat-system-notice .transcript-content p { margin: 0; }
+
 /* Phones and touch screens: the small chat controls get a 40px tap target, and the composer folds into one compact row when there is no keyboard hint. */
 @media (max-width: 600px), (pointer: coarse) {
   .primary-interface .chat-panel-container .chat-copy-button { min-height: 40px; min-width: 40px; }
