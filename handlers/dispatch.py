@@ -98,16 +98,16 @@ async def dispatch(
     if await try_resolve_confirmation(msg, port, settings):
         return
 
-    # Owner-only phone (Telegram/Feishu) chat intents, run exactly like the web
-    # 对话 (patterns → decider → cards). No-op for groups and non-owners, so it
-    # only intercepts when the owner drives Conveyor from a private chat.
-    from handlers import chat_intents_phone
-    if await chat_intents_phone.maybe_handle(msg, port, settings, msg.text):
-        return
-
     parsed = parse_command(msg.text)
     if parsed is None and msg.reply_to is None and not msg.attachments:
         parsed = parse_conversation_control(msg.text)
+    if parsed is None:
+        # Owner-only phone (Telegram/Feishu) chat intents, run exactly like the web
+        # 对话 (patterns → decider → cards). No-op for groups and non-owners, so it
+        # only intercepts when the owner drives Conveyor from a private chat.
+        from handlers import chat_intents_phone
+        if await chat_intents_phone.maybe_handle(msg, port, settings, msg.text):
+            return
     if parsed is not None:
         cmd_name, arg = parsed
         if cmd_name == "memo":
