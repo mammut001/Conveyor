@@ -84,7 +84,7 @@ _INFLIGHT_STAGE_STATES = ("dispatching", "analyzing", "implementing",
 _LOCK = threading.Lock()
 _SCHEMA_LOCK = threading.Lock()
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _INITIALIZED_DBS: dict[tuple[str, int, int], int] = {}
 
 MAX_STORED_OUTPUT_CHARS = 16_000
@@ -414,6 +414,22 @@ CREATE TABLE IF NOT EXISTS supervisor_executions (
 );
 CREATE INDEX IF NOT EXISTS idx_supervisor_executions_task ON supervisor_executions(task_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_supervisor_executions_status ON supervisor_executions(status);
+
+-- Per-executor-run model usage (I1): one row per run that reported usage.
+-- Executors that report no usage store nothing here, so an absent row means
+-- "unknown", never zero.
+CREATE TABLE IF NOT EXISTS supervisor_execution_usage (
+    execution_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT '',
+    executor TEXT NOT NULL DEFAULT '',
+    model TEXT NOT NULL DEFAULT '',
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_supervisor_execution_usage_task ON supervisor_execution_usage(task_id);
 
 CREATE TABLE IF NOT EXISTS supervisor_deployments (
     id TEXT PRIMARY KEY,
@@ -1729,7 +1745,11 @@ def get_task(settings: Any, task_id: str) -> dict[str, Any] | None:
     conn = _connect_ro(settings)
     try:
         row = conn.execute("SELECT * FROM supervisor_tasks WHERE id = ?", (task_id,)).fetchone()
-        return _row_to_dict(row)
+        task = _row_to_dict(row)
+        if task is None:
+            return None
+        task["usage"] = _usage_for_tasks(conn, [task_id]).get(str(task_id), empty_usage())
+        return task
     finally:
         conn.close()
 
@@ -1742,7 +1762,11 @@ def list_tasks(settings: Any, *, state: str | None = None, limit: int = 100) -> 
                                 (state, limit)).fetchall()
         else:
             rows = conn.execute("SELECT * FROM supervisor_tasks ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
-        return [_row_to_dict(r) for r in rows if r is not None]
+        tasks = [_row_to_dict(r) for r in rows if r is not None]
+        usage_by_task = _usage_for_tasks(conn, [str(t.get("id") or "") for t in tasks])
+        for task in tasks:
+            task["usage"] = usage_by_task.get(str(task.get("id") or ""), empty_usage())
+        return tasks
     finally:
         conn.close()
 
@@ -2767,12 +2791,21 @@ def _execution_row(settings: Any, execution_id: str) -> dict[str, Any] | None:
 def _update_execution(settings: Any, execution_id: str, *, status: str | None = None,
                       exit_code: int | None = None, error: str | None = None,
                       result_path: str | None = None, evidence_path: str | None = None,
-                      metadata: dict[str, Any] | None = None) -> None:
+                      metadata: dict[str, Any] | None = None,
+                      usage: Any = None) -> None:
+    """Finalize an execution row.
+
+    ``usage`` is the parsed per-run token usage (``meta['usage']`` from
+    ``_parse_pi_stream``). It is persisted in the SAME transaction as the status
+    update, so a recorded run always carries its cost. Runs whose executor
+    reported no usage store nothing (never a fabricated zero).
+    """
     conn = _connect(settings)
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT status, error, metadata_json, finished_at FROM supervisor_executions WHERE execution_id = ?",
+            "SELECT status, error, metadata_json, finished_at, task_id, role, executor, model"
+            " FROM supervisor_executions WHERE execution_id = ?",
             (execution_id,),
         ).fetchone()
         if row is None:
@@ -2817,10 +2850,238 @@ def _update_execution(settings: Any, execution_id: str, *, status: str | None = 
                 f"UPDATE supervisor_executions SET {assignments} WHERE execution_id = ?",
                 (*fields.values(), execution_id),
             )
+        _store_execution_usage(
+            conn,
+            execution_id=execution_id,
+            task_id=str(row["task_id"] or ""),
+            role=str(row["role"] or ""),
+            executor=str(row["executor"] or ""),
+            model=str(row["model"] or ""),
+            usage=usage,
+        )
         conn.commit()
     except Exception:
         conn.rollback()
         raise
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Per-run model usage (I1): what each executor run cost
+# ---------------------------------------------------------------------------
+
+_USAGE_KEYS = ("input_tokens", "output_tokens", "cached_input_tokens")
+
+
+def _normalize_usage(raw: Any) -> dict[str, int]:
+    """Keep only the three Codex-compatible counts that are real non-negative ints.
+
+    Anything else (missing key, bool, float, string, negative) is dropped, so a
+    payload with nothing usable normalizes to ``{}`` and the caller stores
+    nothing rather than inventing numbers.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    clean: dict[str, int] = {}
+    for key in _USAGE_KEYS:
+        value = raw.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            continue
+        clean[key] = int(value)
+    return clean
+
+
+def empty_usage() -> dict[str, int]:
+    """Stable zero shape so consumers never have to special-case "no runs yet"."""
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cached_input_tokens": 0,
+        "runs_with_usage": 0,
+        "runs_without_usage": 0,
+    }
+
+
+def format_tokens(n: Any) -> str:
+    """Owner-facing token count: 「约 8,500 token」/「约 3.4 万 token」/「0 token」.
+
+    The count is rounded FIRST (nearest hundred), and only then is the unit
+    chosen: below 10,000 it stays a plain number with a thousands separator,
+    from 10,000 up it is 万 with one decimal while under 10 万 (a trailing
+    ".0" is dropped) and a whole number of 万 above that. Cached input tokens
+    already live inside ``input_tokens``, so callers never add them twice.
+
+    Exactly zero (or anything that is not a number) is 「0 token」; a positive
+    count that rounds down to zero is 「不到 100 token」 instead, so a run that
+    spent 1..49 tokens never reads as "nothing".
+    """
+    try:
+        value = int(n)
+    except (TypeError, ValueError):
+        return "0 token"
+    if value <= 0:
+        return "0 token"
+    hundreds = value // 100
+    if value - hundreds * 100 >= 50:
+        hundreds += 1
+    rounded = hundreds * 100
+    if rounded <= 0:
+        # 1..49 round to zero, but something was spent: say so instead of "0 token".
+        return "不到 100 token"
+    if rounded < 10_000:
+        return f"约 {rounded:,} token"
+    # 万 with one decimal under 10 万 (a trailing ".0" is dropped), whole 万 above.
+    wan = rounded / 10_000
+    if wan < 10:
+        text = f"{wan:.1f}".rstrip("0").rstrip(".")
+        return f"约 {text} 万 token"
+    return f"约 {int(wan + 0.5)} 万 token"
+
+
+def usage_total_tokens(usage: Any) -> int:
+    """input + output tokens of a usage dict (cached input is already inside input)."""
+    if not isinstance(usage, dict):
+        return 0
+    try:
+        return int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def usage_summary_phrase(usage: Any) -> str:
+    """「用了约 3.4 万 token」plus the partial-reporting note, or "" with no usage.
+
+    Empty means "nobody reported usage", which is different from "cost nothing";
+    the caller then shows nothing at all instead of a fabricated zero.
+    """
+    if not isinstance(usage, dict):
+        return ""
+    try:
+        with_usage = int(usage.get("runs_with_usage") or 0)
+        without_usage = int(usage.get("runs_without_usage") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if with_usage <= 0:
+        return ""
+    phrase = f"用了{format_tokens(usage_total_tokens(usage))}"
+    if without_usage > 0:
+        phrase += "（部分执行者没有报告用量）"
+    return phrase
+
+
+def _store_execution_usage(conn: sqlite3.Connection, *, execution_id: str, task_id: str,
+                           role: str, executor: str, model: str, usage: Any) -> dict[str, int]:
+    """Upsert one run's usage inside the caller's open transaction.
+
+    Returns the normalized usage that was stored, or ``{}`` when the executor
+    reported nothing usable (in which case no row is written at all).
+    """
+    clean = _normalize_usage(usage)
+    if not clean or not execution_id:
+        return {}
+    conn.execute(
+        """INSERT OR REPLACE INTO supervisor_execution_usage
+           (execution_id, task_id, role, executor, model,
+            input_tokens, output_tokens, cached_input_tokens, created_at)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
+        (
+            execution_id,
+            task_id,
+            role,
+            executor,
+            model,
+            clean.get("input_tokens", 0),
+            clean.get("output_tokens", 0),
+            clean.get("cached_input_tokens", 0),
+            _utc_now(),
+        ),
+    )
+    return clean
+
+
+def _usage_for_tasks(conn: sqlite3.Connection,
+                     task_ids: list[str] | tuple[str, ...] | set[str]) -> dict[str, dict[str, int]]:
+    """Aggregate stored usage per task id (all requested ids present, zero-filled)."""
+    wanted = [str(t or "") for t in task_ids if str(t or "")]
+    result: dict[str, dict[str, int]] = {tid: empty_usage() for tid in dict.fromkeys(wanted)}
+    if not result:
+        return result
+    placeholders = ",".join("?" * len(result))
+    params = tuple(result.keys())
+    summed = conn.execute(
+        f"""SELECT task_id,
+                   COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                   COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                   COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+                   COUNT(*) AS runs_with_usage
+            FROM supervisor_execution_usage
+            WHERE task_id IN ({placeholders})
+            GROUP BY task_id""",
+        params,
+    ).fetchall()
+    for row in summed:
+        tid = str(row["task_id"] or "")
+        if tid not in result:
+            continue
+        entry = result[tid]
+        entry["input_tokens"] = int(row["input_tokens"] or 0)
+        entry["output_tokens"] = int(row["output_tokens"] or 0)
+        entry["cached_input_tokens"] = int(row["cached_input_tokens"] or 0)
+        entry["runs_with_usage"] = int(row["runs_with_usage"] or 0)
+    # Executor runs of this task that reported no usage at all (unknown, not zero).
+    # Operator validation commands are shell checks, not model runs, so they are
+    # never counted as "a run whose cost we do not know".
+    without = conn.execute(
+        f"""SELECT e.task_id AS task_id, COUNT(*) AS runs_without_usage
+            FROM supervisor_executions e
+            WHERE e.task_id IN ({placeholders})
+              AND e.executor <> 'operator-validation'
+              AND NOT EXISTS (SELECT 1 FROM supervisor_execution_usage u
+                              WHERE u.execution_id = e.execution_id)
+            GROUP BY e.task_id""",
+        params,
+    ).fetchall()
+    for row in without:
+        tid = str(row["task_id"] or "")
+        if tid in result:
+            result[tid]["runs_without_usage"] = int(row["runs_without_usage"] or 0)
+    return result
+
+
+def tasks_usage(settings: Any, task_ids: list[str] | tuple[str, ...] | set[str]) -> dict[str, dict[str, int]]:
+    """Usage for many tasks in one read (goal totals sum their rounds' tasks)."""
+    conn = _connect_ro(settings)
+    try:
+        return _usage_for_tasks(conn, task_ids)
+    finally:
+        conn.close()
+
+
+def task_usage(settings: Any, task_id: str) -> dict[str, int]:
+    """One task's model usage: summed runs plus with/without-usage run counts."""
+    if not task_id:
+        return empty_usage()
+    conn = _connect_ro(settings)
+    try:
+        return _usage_for_tasks(conn, [task_id]).get(str(task_id), empty_usage())
+    finally:
+        conn.close()
+
+
+def list_execution_usage(settings: Any, *, task_id: str | None = None,
+                         limit: int = 100) -> list[dict[str, Any]]:
+    """Per-run usage rows (newest first) for diagnostics."""
+    conn = _connect_ro(settings)
+    try:
+        sql = "SELECT * FROM supervisor_execution_usage"
+        params: list[Any] = []
+        if task_id:
+            sql += " WHERE task_id = ?"
+            params.append(task_id)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        return [dict(r) for r in conn.execute(sql, params).fetchall()]
     finally:
         conn.close()
 
@@ -5457,6 +5718,7 @@ async def _spawn_cli(
                 exit_code=rc,
                 error=error_text,
                 metadata=meta,
+                usage=meta.get("usage"),
             )
         db_finalized = True
         return ExecutionResult(
@@ -5481,6 +5743,7 @@ async def _spawn_cli(
         result_path=result_path,
         evidence_path=evidence_path,
         metadata=meta,
+        usage=meta.get("usage"),
     )
     db_finalized = True
 

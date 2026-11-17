@@ -45,6 +45,17 @@ export type Goal = {
   rounds_passed?: number
   rounds_total?: number
   remaining_seconds?: number | null
+  /** 这个目标已经花掉的模型用量；老服务器不会带这个字段，读的时候按没有处理。 */
+  usage?: GoalUsage | null
+}
+
+/** 模型用量：后端 conveyor/agents/agent_supervisor.py 里 usage 字典的原样拷贝。 */
+export type GoalUsage = {
+  input_tokens: number
+  output_tokens: number
+  cached_input_tokens: number
+  runs_with_usage: number
+  runs_without_usage: number
 }
 
 export type Iteration = {
@@ -355,6 +366,33 @@ export function goalRoundStepLabel(
   const stateLabel = supStateLabel(s)
   if (HAS_CHINESE.test(stateLabel)) return stateLabel
   return '正在进行'
+}
+
+/** 已经花了多少 token：和后端 format_tokens 同一套舍入规则（先舍入，再选单位）。
+ *  <10000 精确到百位并带千分位（约 8,500 token），>=10000 用「万」，
+ *  不到 10 万保留一位小数（约 3.4 万 token，末尾的 .0 省略），10 万以上只写整数万（约 12 万 token）。 */
+export function formatTokens(n?: number | null): string {
+  if (n == null || !Number.isFinite(n) || n <= 0) return '0 token'
+  const value = Math.floor(n)
+  // 先舍入到百位，再按舍入后的结果选单位：<1 万带千分位，>=1 万用「万」。
+  const rounded = (Math.floor(value / 100) + (value % 100 >= 50 ? 1 : 0)) * 100
+  // 1..49 舍入后是 0，但确实花了：说「不到 100 token」，而不是「0 token」。
+  if (rounded <= 0) return '不到 100 token'
+  if (rounded < 10000) return `约 ${rounded.toLocaleString('en-US')} token`
+  // 万：不到 10 万保留一位小数（99999 先进位成 10 万，就不再带小数），以上只写整数万。
+  const wan = rounded / 10000
+  if (wan < 10) return `约 ${wan.toFixed(1).replace(/\.0$/, '')} 万 token`
+  return `约 ${Math.floor(wan + 0.5)} 万 token`
+}
+
+/** 「已用约 3.4 万 token」+ 同样的备注；一条用量都没有时返回空串（不显示这一行）。 */
+export function goalUsageLine(goal?: { usage?: GoalUsage | null } | null): string {
+  // 老服务器可能只带一部分字段，读的时候一律按「没有」处理，不抛错。
+  const usage = goal?.usage as Partial<GoalUsage> | null | undefined
+  if (!usage || !(usage.runs_with_usage ?? 0)) return ''
+  const total = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+  const note = (usage.runs_without_usage ?? 0) > 0 ? '（部分执行者没有报告用量）' : ''
+  return `已用${formatTokens(total)}${note}`
 }
 
 // 每一步对应哪个角色：执行记录里找不到正在跑的那条时，用任务里登记的角色执行者。
@@ -933,6 +971,8 @@ export default function SupervisorGoals({
     && !(currentRound?.decision || '').trim()
   // 跑完之后的结果卡文案（标题 + 白话结论 + 补充说明）。
   const resultCopy = goalFinished && shownGoal ? goalResultCopy(shownGoal, shownDetail) : null
+  // 「已用约 3.4 万 token」：一条用量都没有时这一行不出现。
+  const usageLine = goalUsageLine(shownGoal)
   // 「查看改动」就地读这个目标的差异：只有点开了才请求。
   const goalDiff = useSupervisorDiff(apiCall, 'goal', shownGoal?.id || '', changesOpen && goalFinished)
   // 只有达成目标才给「合并到主分支」：主工作目录 / 未托管目录没有合并入口，还有任务或
@@ -1080,6 +1120,8 @@ export default function SupervisorGoals({
                 </span>
               </div>
             )}
+
+            {usageLine && <p className="sup-goal-usage">{usageLine}</p>}
 
             {shownGoal.state === 'waiting_quota' && (
               <div className="sup-banner sup-banner--waiting-quota" role="status">
