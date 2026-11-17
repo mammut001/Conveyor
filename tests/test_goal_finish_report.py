@@ -481,6 +481,198 @@ class GoalFinishReportTests(unittest.TestCase):
         self.assertEqual(newest["origin_session_id"], self.session_id)
         self.assertEqual(r_res["follow_up_message"]["action_card"]["title"], "已开始持续改进")
 
+    def test_stop_from_chat_persists_action_reply_before_finish_report(self) -> None:
+        from conveyor.agents.intent_decider import Decision
+
+        repo, wt = self._create_project("qa-todo-cli")
+        supervisor_validation.set_repo_validation(self.settings, repo["id"], ["check-script"])
+        goal = goals_mod.create_goal(None, self.settings, {
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+            "outcome": "完善 CLI",
+            "duration_minutes": 60,
+            "mode": "continuous",
+            "origin_session_id": self.session_id,
+        })
+        task = ags.create_task(
+            self.settings,
+            goal="第 1 轮",
+            repo_path=repo["path"],
+            worktree_path=wt["path"],
+        )
+        ags.transition(self.settings, task["id"], "implementing", stage="implement")
+        self._insert_iteration(
+            goal["id"],
+            1,
+            task_id=task["id"],
+            passed=False,
+            decision="",
+            task_final_state="",
+        )
+
+        with patch.object(
+            chat_intents.intent_decider,
+            "decide_intent",
+            return_value=Decision("stop", 0.95, {"stop": 0.95}, "gemini", 40),
+        ):
+            port = _MemoryPort(self.settings, self.session_id)
+            msg = InboundMessage(
+                channel="web",
+                operator_id="web-console",
+                chat_id="f1-origin-session",
+                message_id="m-stop",
+                text="先停一下",
+                chat_type="p2p",
+            )
+            handled = asyncio.run(chat_intents.maybe_handle_web_chat(msg, port, self.settings, msg.text))
+        self.assertTrue(handled)
+        stop_card = port.events[0][1]["action_card"]
+        stop_btn = next(b for b in stop_card["buttons"] if b["label"] == "停止")
+
+        status, res = chat_intents.execute_action(None, self.settings, stop_btn["id"])
+        self.assertEqual(status, HTTPStatus.OK)
+        self.assertEqual(
+            res["follow_up_message"]["text"],
+            "已停止 qa-todo-cli 的目标，已经做好的改动会保留。",
+        )
+
+        session = get_transcript_store(self.settings).get_session(self.session_id)
+        hist = build_history(session, settings=self.settings)
+        assistant_texts = [m["text"] for m in hist if m["role"] == "assistant"]
+        reply_idx = next(
+            i for i, txt in enumerate(assistant_texts)
+            if txt == "已停止 qa-todo-cli 的目标，已经做好的改动会保留。"
+        )
+        report_idx = next(
+            i for i, txt in enumerate(assistant_texts)
+            if "qa-todo-cli 的目标结束了：已停止。" in txt
+        )
+        self.assertLess(reply_idx, report_idx)
+        report_text = assistant_texts[report_idx]
+        self.assertIn("自动检查：scripts/check.sh（最后一轮没有跑到检查就停了）", report_text)
+        self.assertNotIn("最后一轮 没通过", report_text)
+
+        # Idempotency: calling post_finish_report / _on_goal_terminal again does not duplicate.
+        goals_mod.post_finish_report(self.settings, goals_mod.get_goal(self.settings, goal["id"]))
+        hist_after = build_history(
+            get_transcript_store(self.settings).get_session(self.session_id),
+            settings=self.settings,
+        )
+        reports = [m for m in hist_after if m["role"] == "assistant" and "的目标结束了：" in m["text"]]
+        self.assertEqual(len(reports), 1)
+
+    def test_check_script_wording_all_four_outcomes(self) -> None:
+        repo, wt = self._create_project("check-wording-proj")
+        supervisor_validation.set_repo_validation(self.settings, repo["id"], ["check-script"])
+        head_sha = _git_run(wt["path"], ["rev-parse", "HEAD"])
+        fp = ags.target_identity(wt["path"])["fingerprint"]
+
+        # 1) Never validated (0 rounds ran)
+        g_never = goals_mod.create_goal(None, self.settings, {
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+            "outcome": "还没跑检查",
+        })
+        g_never = goals_mod.stop_goal(None, self.settings, g_never["id"])
+        txt_never = goals_mod.build_finish_report_text(self.settings, g_never)
+        self.assertIn("自动检查：scripts/check.sh（还没有跑过检查）", txt_never)
+
+        # 2) Cancelled before validation on round 1 (stored validation absent)
+        g_cancel1 = goals_mod.create_goal(None, self.settings, {
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+            "outcome": "第一轮被停",
+        })
+        t1 = ags.create_task(
+            self.settings, goal="r1", repo_path=repo["path"], worktree_path=wt["path"], base_sha=head_sha,
+        )
+        ags.transition(self.settings, t1["id"], "cancelled", stage="cancelled", error="stopped")
+        self._insert_iteration(
+            g_cancel1["id"], 1, task_id=t1["id"], passed=False, decision="", task_final_state="cancelled",
+        )
+        g_cancel1 = goals_mod.stop_goal(None, self.settings, g_cancel1["id"])
+        txt_cancel1 = goals_mod.build_finish_report_text(self.settings, g_cancel1)
+        self.assertIn("自动检查：scripts/check.sh（最后一轮没有跑到检查就停了）", txt_cancel1)
+        self.assertNotIn("最后一轮 没通过", txt_cancel1)
+
+        # 3) Passed on last round (stored check-script passed=True)
+        g_pass = goals_mod.create_goal(None, self.settings, {
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+            "outcome": "检查通过",
+        })
+        t_pass = ags.create_task(
+            self.settings, goal="pass", repo_path=repo["path"], worktree_path=wt["path"], base_sha=head_sha,
+        )
+        ags.record_acceptance(
+            self.settings,
+            t_pass["id"],
+            passed=True,
+            sha=head_sha,
+            fingerprint=fp,
+            executed_checks=[{"name": "check-script", "argv": ["sh", "scripts/check.sh"], "passed": True}],
+            evidence_source="operator_validation+independent_review",
+            provenance_verified=True,
+        )
+        self._insert_iteration(
+            g_pass["id"], 1, task_id=t_pass["id"], passed=True, decision="achieved", task_final_state="completed",
+        )
+        g_pass = goals_mod._finish_goal(self.settings, g_pass, goals_mod.GOAL_ACHIEVED, summary="ok")
+        self.assertIn(
+            "自动检查：scripts/check.sh（最后一轮 通过）",
+            goals_mod.build_finish_report_text(self.settings, g_pass),
+        )
+
+        # 4) Failed on last round (stored check-script passed=False)
+        ags.record_acceptance(
+            self.settings,
+            t_pass["id"],
+            passed=False,
+            sha=head_sha,
+            fingerprint=fp,
+            executed_checks=[{"name": "check-script", "argv": ["sh", "scripts/check.sh"], "passed": False}],
+            evidence_source="operator_validation+independent_review",
+            provenance_verified=False,
+        )
+        self.assertIn(
+            "自动检查：scripts/check.sh（最后一轮 没通过）",
+            goals_mod.build_finish_report_text(self.settings, g_pass),
+        )
+
+        # 5) Round 1 passed validation, Round 2 cancelled before validation -> does not leak Round 1 result;
+        #    even if iteration row claims passed=True / completed, missing stored validation -> not_run.
+        g_two = goals_mod.create_goal(None, self.settings, {
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+            "outcome": "第二轮没跑到检查",
+        })
+        t_r1 = ags.create_task(
+            self.settings, goal="r1", repo_path=repo["path"], worktree_path=wt["path"], base_sha=head_sha,
+        )
+        ags.record_acceptance(
+            self.settings,
+            t_r1["id"],
+            passed=True,
+            sha=head_sha,
+            fingerprint=fp,
+            executed_checks=[{"name": "check-script", "argv": ["sh", "scripts/check.sh"], "passed": True}],
+            evidence_source="operator_validation+independent_review",
+            provenance_verified=True,
+        )
+        t_r2 = ags.create_task(
+            self.settings, goal="r2", repo_path=repo["path"], worktree_path=wt["path"], base_sha=head_sha,
+        )
+        self._insert_iteration(
+            g_two["id"], 1, task_id=t_r1["id"], passed=True, decision="continue", task_final_state="completed",
+        )
+        self._insert_iteration(
+            g_two["id"], 2, task_id=t_r2["id"], passed=True, decision="", task_final_state="completed",
+        )
+        g_two = goals_mod.stop_goal(None, self.settings, g_two["id"])
+        txt_two = goals_mod.build_finish_report_text(self.settings, g_two)
+        self.assertIn("自动检查：scripts/check.sh（最后一轮没有跑到检查就停了）", txt_two)
+        self.assertNotIn("最后一轮 通过", txt_two)
+
 
 if __name__ == "__main__":
     unittest.main()

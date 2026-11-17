@@ -2340,6 +2340,7 @@ def execute_action(
     follow_up_text = ""
     follow_up_card: dict[str, Any] | None = None
     client_action: dict[str, Any] | None = None
+    deferred_report_goal: dict[str, Any] | None = None
 
     if action == "cancel_action":
         outcome = str(server_payload.get("outcome") or "已取消")
@@ -2412,13 +2413,14 @@ def execute_action(
         goal_id = str(server_payload.get("goal_id") or "")
         repo_name = str(server_payload.get("repo_name") or "当前项目")
         try:
-            goals_mod.stop_goal(server, settings, goal_id)
+            stopped_goal = goals_mod.stop_goal(server, settings, goal_id, post_report=False)
         except svc.SupervisorServiceError as exc:
             outcome = f"停止失败：{exc.message}"
             follow_up_text = exc.message
         else:
             outcome = f"已停止「{repo_name}」的目标"
             follow_up_text = f"已停止 {repo_name} 的目标，已经做好的改动会保留。"
+            deferred_report_goal = stopped_goal
     elif action == "confirm_clarified_intent":
         intent_choice = str(server_payload.get("intent_choice") or "")
         raw_text = str(server_payload.get("raw_text") or "")
@@ -2528,6 +2530,8 @@ def execute_action(
     follow_up_msg = None
     if follow_up_text:
         follow_up_msg = _persist_follow_up_message(settings, session_id, follow_up_text, follow_up_card)
+    if deferred_report_goal is not None:
+        goals_mod.post_finish_report(settings, deferred_report_goal)
 
     resp: dict[str, Any] = {
         "ok": True,
