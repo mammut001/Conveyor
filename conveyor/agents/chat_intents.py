@@ -2012,7 +2012,8 @@ def _handle_progress_intent(
     if rem_text:
         parts.append(rem_text)
     parts.append(f"已跑 {rounds_total} 轮 / 通过 {rounds_passed} 轮")
-    # 已经花了多少 token：只有真的有执行者报告了用量才说，绝不编一个 0。
+    # 已经花了多少 token：只有真的有执行者报告了用量才说，绝不编一个 0；
+    # 轮次全都早于记录起点时，改成说明「那时候还没开始记录」。
     usage_phrase = ags.usage_summary_phrase(detail.get("usage"))
     if usage_phrase:
         parts.append(usage_phrase)
