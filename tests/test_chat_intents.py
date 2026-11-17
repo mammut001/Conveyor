@@ -5,6 +5,7 @@ import asyncio
 import http.client
 import json
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from datetime import datetime
@@ -808,6 +809,89 @@ class ChatIntentsDeciderTests(unittest.TestCase):
         with patch.object(chat_intents.intent_decider, "decide_intent", return_value=Decision("progress", 0.49, {"progress": 0.49}, "gemini", 120)):
             handled, port = self._run("随便说点什么")
         self.assertFalse(handled)
+
+    def _decider_health(self, *, kind: str | None, failures: int, unhealthy: bool) -> dict:
+        return {
+            "provider": "gemini",
+            "consecutive_failures": failures,
+            "last_error_kind": kind,
+            "last_error_at": "2026-11-17T00:00:00Z",
+            "last_ok_at": None,
+            "last_error_message": "密钥被拒绝了（谷歌说绑定的账号已删除或停用）" if kind else "",
+            "unhealthy": unhealthy,
+        }
+
+    def _run_with_health(self, text: str, health: dict) -> tuple[bool, _MemoryPort]:
+        with patch.object(chat_intents.intent_decider, "is_configured", return_value=True), \
+             patch.object(chat_intents.intent_decider, "decide_intent", return_value=None), \
+             patch.object(chat_intents.intent_decider, "get_decider_health", return_value=health):
+            return self._run(text)
+
+    def _notice_rows(self) -> list[tuple[float]]:
+        conn = chat_intents._connect(self.settings)
+        try:
+            rows = conn.execute(
+                "SELECT last_notice_at FROM chat_decider_notices WHERE session_id = ?",
+                (self.session_id,),
+            ).fetchall()
+            return [(float(row["last_notice_at"] or 0.0),) for row in rows]
+        finally:
+            conn.close()
+
+    def test_decider_unhealthy_posts_one_notice_per_six_hours(self) -> None:
+        rejected = self._decider_health(kind="auth", failures=3, unhealthy=True)
+
+        handled, port = self._run_with_health("帮我看下这个项目", rejected)
+        self.assertFalse(handled)
+        self.assertEqual(len(port.events), 1)
+        event, payload = port.events[0]
+        self.assertEqual(event, "message")
+        self.assertEqual(payload["kind"], "notice")
+        self.assertIn("理解指令暂时用不了（密钥被拒绝）", payload["text"])
+        self.assertIn("这次按普通聊天回答", payload["text"])
+        self.assertIn("设置 › 理解指令", payload["text"])
+        self.assertEqual(len(self._notice_rows()), 1)
+
+        # A second message in the same session stays quiet for six hours.
+        handled_again, port_again = self._run_with_health("帮我看下这个项目", rejected)
+        self.assertFalse(handled_again)
+        self.assertEqual(port_again.events, [])
+
+        # Once the six hours are over the owner hears about it again.
+        conn = chat_intents._connect(self.settings)
+        try:
+            conn.execute(
+                "UPDATE chat_decider_notices SET last_notice_at = ? WHERE session_id = ?",
+                (time.time() - 7 * 3600, self.session_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        handled_later, port_later = self._run_with_health("帮我看下这个项目", rejected)
+        self.assertFalse(handled_later)
+        self.assertEqual(len(port_later.events), 1)
+        self.assertEqual(port_later.events[0][1]["kind"], "notice")
+
+    def test_decider_healthy_or_single_failure_posts_no_notice(self) -> None:
+        for health in (
+            self._decider_health(kind=None, failures=0, unhealthy=False),
+            self._decider_health(kind="timeout", failures=1, unhealthy=False),
+        ):
+            with self.subTest(kind=health["last_error_kind"]):
+                handled, port = self._run_with_health("帮我看下这个项目", health)
+                self.assertFalse(handled)
+                self.assertEqual(port.events, [])
+        self.assertEqual(self._notice_rows(), [])
+
+    def test_decider_notice_uses_the_consecutive_failure_reason(self) -> None:
+        # Unhealthy through the counter (not auth) still tells the owner, with its own reason.
+        timing_out = self._decider_health(kind="timeout", failures=4, unhealthy=True)
+        handled, port = self._run_with_health("帮我看下这个项目", timing_out)
+        self.assertFalse(handled)
+        self.assertEqual(len(port.events), 1)
+        self.assertIn("理解指令暂时用不了（连接超时）", port.events[0][1]["text"])
+        # The fallback still returns to the caller: the normal answer is not blocked.
+        self.assertEqual([event for event, _payload in port.events], ["message"])
 
     def test_questions_never_act_directly_and_clarifying_card_yes_no(self) -> None:
         from conveyor.agents.intent_decider import Decision

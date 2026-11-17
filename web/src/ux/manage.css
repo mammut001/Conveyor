@@ -771,6 +771,27 @@
 .primary-interface .provider-settings .intent-decider-feedback.is-error {
   color: #b42318;
 }
+.primary-interface .provider-settings .intent-decider-health {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}.primary-interface .provider-settings .intent-decider-health.is-ok {
+  background: #ecfdf3;
+  color: #027a48;
+}
+.primary-interface .provider-settings .intent-decider-health.is-error {
+  background: #fef3f2;
+  color: #b42318;
+}
+.primary-interface .provider-settings .intent-decider-health.is-error .intent-decider-secret-link {
+  color: #b42318;
+}
 
 /* Phones: dialogs become full-screen sheets with a fixed header and footer. */
 @media (max-width: 620px) {

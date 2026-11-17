@@ -13,7 +13,66 @@ type IntentDeciderConfig = {
   available_secrets?: string[];
   ready?: boolean;
   error?: string;
+  health?: DeciderHealth;
 };
+
+type DeciderHealth = {
+  provider?: string;
+  consecutive_failures?: number;
+  last_error_kind?: string | null;
+  last_error_at?: string | null;
+  last_ok_at?: string | null;
+  last_error_message?: string;
+  unhealthy?: boolean;
+};
+
+type HealthLine = { unhealthy: boolean; text: string; kind: string };
+
+const HEALTH_KIND_TEXT: Record<string, string> = {
+  auth: '密钥被拒绝了',
+  quota: '额度用完了',
+  rate_limit: '请求太频繁',
+  timeout: '等回复超时',
+  network: '连不上服务商',
+  bad_request: '服务商认为请求格式不对',
+  other: '服务商返回了错误',
+};
+
+/** 上次成功：<相对时间> — short Chinese, no clock reading required. */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '';
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 60) return '刚刚';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} 个月前`;
+  return `${Math.floor(months / 12)} 年前`;
+}
+
+function healthLine(health: DeciderHealth | null | undefined, ready?: boolean): HealthLine | null {
+  if (!health || health.provider === 'off') return null;
+  const kind = health.last_error_kind || '';
+  const failures = Number(health.consecutive_failures || 0);
+  const unhealthy = Boolean(health.unhealthy) || kind === 'auth' || failures >= 3;
+  if (unhealthy) {
+    const detail = (health.last_error_message || '').trim() || HEALTH_KIND_TEXT[kind] || '服务商返回了错误';
+    return { unhealthy: true, text: `理解指令暂时用不了：${detail}。`, kind };
+  }
+  // Nothing configured yet: the 未添加 badge above already says what to do.
+  if (ready === false) return null;
+  const lastOk = (health.last_ok_at || '').trim();
+  return {
+    unhealthy: false,
+    text: lastOk ? `正常（上次成功：${relativeTime(lastOk)}）` : '正常（还没有成功用过）',
+    kind: '',
+  };
+}
 
 type TestResult = {
   choice: string;
@@ -51,6 +110,7 @@ export function IntentDeciderSection({
   const [secretName, setSecretName] = useState('');
   const [serverSnapshot, setServerSnapshot] = useState<IntentDeciderConfig | null>(null);
   const [availableSecrets, setAvailableSecrets] = useState<string[] | null>(null);
+  const health = healthLine(serverSnapshot?.health, serverSnapshot?.ready);
   const [saving, setSaving] = useState(false);
   const [saveNotice, setSaveNotice] = useState('');
   const [saveError, setSaveError] = useState('');
@@ -204,6 +264,26 @@ export function IntentDeciderSection({
         <h3 id="intent-decider-title">理解指令</h3>
         <p className="intent-decider-desc">用轻量判断模型理解更多日常口语（查进度、暂停、接着做等），超时会自动按普通对话回复。</p>
       </div>
+      {health && (
+        <p
+          className={health.unhealthy ? 'intent-decider-health is-error' : 'intent-decider-health is-ok'}
+          role={health.unhealthy ? 'alert' : 'status'}
+        >
+          <span>{health.text}</span>
+          {health.unhealthy && health.kind === 'auth' && (
+            <a
+              href="#secrets"
+              className="intent-decider-secret-link"
+              onClick={event => {
+                event.preventDefault();
+                onOpenSecrets();
+              }}
+            >
+              去密钥页面
+            </a>
+          )}
+        </p>
+      )}
       <div className="form-grid intent-decider-grid">
         <div className="dialog-field wide">
           <label htmlFor="intent-decider-provider">服务商</label>

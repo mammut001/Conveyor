@@ -5,6 +5,15 @@ const SESSION_ID = 'web:web-console:default'
 
 async function setupCommonMocks(page: Page) {
   const apiCalls: Array<{ method: string; path: string; body: unknown }> = []
+  let deciderHealth: Record<string, unknown> = {
+    provider: 'off',
+    consecutive_failures: 0,
+    last_error_kind: null,
+    last_error_at: null,
+    last_ok_at: null,
+    last_error_message: '',
+    unhealthy: false,
+  }
   let deciderConfig = {
     provider: 'off',
     configured_provider: 'off',
@@ -16,6 +25,7 @@ async function setupCommonMocks(page: Page) {
     available_secrets: ['OPENAI_API_KEY'],
     ready: false,
     error: '',
+    health: deciderHealth,
   }
   let secrets: Array<{ name: string; set: boolean; updated_at: string | null; hint?: string }> = [
     { name: 'OPENAI_API_KEY', set: true, updated_at: '2026-11-15T10:00:00Z', hint: '…9999' },
@@ -45,6 +55,14 @@ async function setupCommonMocks(page: Page) {
   let clarifyRejected = false
   let stopUsed = false
   const chatRequests: string[] = []
+
+  const setDeciderHealth = (health: Record<string, unknown>) => {
+    Object.assign(deciderHealth, health)
+    if (health.provider) {
+      deciderConfig.provider = String(health.provider)
+      deciderConfig.ready = health.provider !== 'off'
+    }
+  }
 
   await page.addInitScript(() => {
     localStorage.setItem('conveyor-token', 'e1-decider-e2e-token')
@@ -210,7 +228,7 @@ async function setupCommonMocks(page: Page) {
     return json({})
   })
 
-  return { apiCalls, chatRequests }
+  return { apiCalls, chatRequests, setDeciderHealth }
 }
 
 test('理解指令 settings: provider dropdown, secret link, and 测试 output', async ({ page }) => {
@@ -251,6 +269,79 @@ test('理解指令 settings: provider dropdown, secret link, and 测试 output',
   await section.getByRole('link', { name: '去密钥页面添加' }).click()
   await expect(dialog).toHaveCount(0)
   await expect(page.locator('.guard-page.guard-secrets')).toBeVisible()
+})
+
+test('理解指令 settings: red line when the provider stopped working, green when healthy', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 860 })
+  const { setDeciderHealth } = await setupCommonMocks(page)
+  await page.goto('/')
+
+  const openSection = async () => {
+    await page.getByRole('button', { name: '设置' }).click()
+    const dialog = page.getByRole('dialog', { name: '模型设置' })
+    await expect(dialog).toBeVisible()
+    const section = dialog.getByRole('region', { name: '理解指令' })
+    await expect(section).toBeVisible()
+    return { dialog, section }
+  }
+
+  // 关闭: no health line at all.
+  let { dialog, section } = await openSection()
+  await expect(section.locator('.intent-decider-health')).toHaveCount(0)
+  await dialog.locator('button.close-button').click()
+
+  // Healthy: green 「正常（上次成功：…）」.
+  setDeciderHealth({
+    provider: 'gemini',
+    consecutive_failures: 0,
+    last_error_kind: null,
+    last_error_at: null,
+    last_ok_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    last_error_message: '',
+    unhealthy: false,
+  })
+  await page.reload()
+  ;({ dialog, section } = await openSection())
+  await expect(section.locator('.intent-decider-health')).toHaveClass(/is-ok/)
+  await expect(section.locator('.intent-decider-health')).toHaveText(/正常（上次成功：(刚刚|\d+ 分钟前)）/)
+  await expect(section.locator('.intent-decider-health').getByRole('link')).toHaveCount(0)
+  await dialog.locator('button.close-button').click()
+
+  // Auth failure: red line plus a 去密钥页面 link.
+  setDeciderHealth({
+    provider: 'gemini',
+    consecutive_failures: 3,
+    last_error_kind: 'auth',
+    last_error_at: '2026-11-17T09:00:00Z',
+    last_ok_at: null,
+    last_error_message: '密钥被拒绝了（谷歌说绑定的账号已删除或停用）',
+    unhealthy: true,
+  })
+  await page.reload()
+  ;({ dialog, section } = await openSection())
+  await expect(section.locator('.intent-decider-health')).toHaveClass(/is-error/)
+  await expect(section.locator('.intent-decider-health')).toContainText('理解指令暂时用不了：密钥被拒绝了（谷歌说绑定的账号已删除或停用）。')
+  await expect(section.locator('.intent-decider-health').getByRole('link', { name: '去密钥页面' })).toBeVisible()
+  // The link opens the 密钥 page instead of leaving the owner in the dialog.
+  await section.locator('.intent-decider-health').getByRole('link', { name: '去密钥页面' }).click()
+  await expect(dialog).toHaveCount(0)
+  await expect(page.locator('.guard-page.guard-secrets')).toBeVisible()
+
+  // Three consecutive non-auth failures are red too, without the key link.
+  setDeciderHealth({
+    provider: 'gemini',
+    consecutive_failures: 3,
+    last_error_kind: 'timeout',
+    last_error_at: '2026-11-17T09:00:00Z',
+    last_ok_at: null,
+    last_error_message: '等回复超时',
+    unhealthy: true,
+  })
+  await page.reload()
+  ;({ dialog, section } = await openSection())
+  await expect(section.locator('.intent-decider-health')).toHaveClass(/is-error/)
+  await expect(section.locator('.intent-decider-health')).toContainText('理解指令暂时用不了：等回复超时。')
+  await expect(section.locator('.intent-decider-health').getByRole('link')).toHaveCount(0)
 })
 
 test('clarifying card 不是 falls back to normal chat and stop confirmation stops goal', async ({ page }) => {
