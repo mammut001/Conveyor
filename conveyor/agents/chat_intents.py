@@ -1227,23 +1227,27 @@ def _mark_decider_notice(settings: Any, session_id: str, kind: str) -> None:
         conn.close()
 
 
-def _maybe_emit_decider_notice(settings: Any, session_id: str, port: Any, msg: Any) -> None:
-    """Tell the owner once that 理解指令 is down and this answer is plain chat."""
-    # The cheap gate first: most messages arrive while a notice is still fresh.
+def _compute_decider_notice(settings: Any, session_id: str) -> str:
+    """Return (and record) the one-off 理解指令-down notice, or "" when none is due.
+
+    The cheap gate runs first: most messages arrive while a notice is still
+    fresh. Shared by the web and phone surfaces so both announce the outage
+    exactly once per six hours without blocking the fallback answer.
+    """
     if not _should_emit_decider_notice(settings, session_id):
-        return
+        return ""
     try:
         health = intent_decider.get_decider_health(settings)
     except Exception:
         logger.debug("intent decider health unavailable", exc_info=True)
-        return
+        return ""
     if not health.get("unhealthy"):
-        return
+        return ""
     text = intent_decider.decider_fallback_notice(health)
     if not text:
-        return
-    _emit_decider_notice(port, msg, text)
+        return ""
     _mark_decider_notice(settings, session_id, str(health.get("last_error_kind") or ""))
+    return text
 
 
 def _emit_card_reply(port: Any, msg: Any, text: str, card: dict[str, Any]) -> None:
@@ -2237,6 +2241,143 @@ def has_pending_or_detected_intent(settings: Any, session_id: str, text: str) ->
     return detect_intent(text) is not None
 
 
+def get_action_card_session(settings: Any, action_id: str) -> str | None:
+    """Return the session a stored action button belongs to, or ``None``.
+
+    Phone channels use this to refuse a button that was issued to a different
+    chat *before* the one-use claim in :func:`execute_action` runs, so a
+    forwarded or replayed callback cannot act on someone else's card.
+    """
+    if not settings or not action_id:
+        return None
+    conn = _connect(settings)
+    try:
+        row = conn.execute(
+            "SELECT c.session_id FROM chat_action_buttons b "
+            "JOIN chat_action_cards c ON c.id = b.card_id WHERE b.id = ?",
+            (str(action_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+    return str(row["session_id"]) if row is not None else None
+
+
+def store_pending_choice(
+    settings: Any,
+    session_id: str,
+    action_ids: list[str],
+    *,
+    ttl_seconds: int = PENDING_TTL_SECONDS,
+) -> None:
+    """Remember a numbered choice for a phone channel without live buttons.
+
+    Feishu renders action cards as numbered text; the owner's next message
+    (「1」/「2」…) is resolved against these ids within the TTL — the same
+    mechanism as the web pending-name flow.
+    """
+    _set_pending_state(
+        settings,
+        session_id,
+        "awaiting_choice",
+        {"action_ids": [str(a) for a in action_ids]},
+        ttl_seconds=ttl_seconds,
+    )
+
+
+def pop_pending_choice(settings: Any, session_id: str) -> list[str] | None:
+    """Return and clear an active numbered-choice pending, or ``None`` if none."""
+    pending = _has_active_pending(settings, session_id)
+    if pending is None or pending.get("pending_kind") != "awaiting_choice":
+        return None
+    payload = pending.get("pending_payload") or {}
+    action_ids = payload.get("action_ids")
+    _clear_pending_state(settings, session_id)
+    if isinstance(action_ids, list):
+        return [str(a) for a in action_ids]
+    return []
+
+
+async def resolve_intent_turn(
+    settings: Any,
+    session_id: str,
+    raw: str,
+    *,
+    model: Any = None,
+) -> tuple[bool, str, dict[str, Any] | None, str]:
+    """Resolve one chat turn to a reply; the single source shared by web & phone.
+
+    Returns ``(handled, reply_text, card, notice_text)``. When ``handled`` is
+    ``False`` the caller falls back to its normal chat path; ``notice_text``
+    may still carry a one-off 理解指令-down notice to surface first. Running
+    the same patterns → decider → cards here is what lets the phone bots answer
+    exactly like the web 对话.
+    """
+    if not raw:
+        return (False, "", None, "")
+
+    # 1. Active pending follow-up state (awaiting project name, or skip_decider_once).
+    pending = _has_active_pending(settings, session_id)
+    if pending is not None and pending["pending_kind"] == "skip_decider_once":
+        expected = str((pending.get("pending_payload") or {}).get("text") or "").strip()
+        _clear_pending_state(settings, session_id)
+        if expected == raw:
+            return (False, "", None, "")
+    elif pending is not None and pending["pending_kind"] == "awaiting_project_name":
+        _clear_pending_state(settings, session_id)
+        if raw in {"取消", "算了", "不用了", "不建了", "cancel"}:
+            return (True, "好的，已取消创建项目。", None, "")
+        candidate = raw.strip().strip("`\"'「『」』")
+        reply_text, card = _execute_create_project_now(settings, session_id, candidate)
+        return (True, reply_text, card, "")
+
+    # 2. Deterministic pattern first (always wins).
+    direct = detect_intent(raw)
+    if direct is not None:
+        if direct.kind == "create_project":
+            reply_text, card = _handle_create_project_intent(settings, session_id, direct)
+            return (True, reply_text, card, "")
+        if direct.kind == "start_timed_goal":
+            reply_text, card = _handle_start_timed_goal_intent(settings, session_id, direct, raw)
+            return (True, reply_text, card, "")
+        return (False, "", None, "")
+
+    # 3. Decision model (Gemini Decisions / Jev / custom) if configured.
+    if not raw.startswith("/"):
+        decider_configured = intent_decider.is_configured(settings)
+        decision = await asyncio.to_thread(
+            intent_decider.decide_intent,
+            settings,
+            raw,
+            intent_decider.INTENT_OPTIONS,
+        )
+        if decision is not None:
+            if decision.choice == "chat" or decision.confidence < DECIDER_CONFIDENCE_CLARIFY:
+                return (False, "", None, "")
+            if _is_question_for_decider(raw) or decision.confidence < DECIDER_CONFIDENCE_DIRECT:
+                reply_text, card = _build_clarifying_card(settings, session_id, decision.choice, raw)
+                return (True, reply_text, card, "")
+            reply_text, card = _dispatch_decider_choice(settings, session_id, decision.choice, raw)
+            if not reply_text and card is None:
+                return (False, "", None, "")
+            return (True, reply_text, card, "")
+        if decider_configured:
+            # Decider was configured and errored/timed out -> fall back to normal
+            # chat, saying so once when it is really unhealthy.
+            return (False, "", None, _compute_decider_notice(settings, session_id))
+
+    # 4. Legacy optional chat-tier LLM fallback when no decider is configured.
+    intent = await classify_intent(raw, settings, model=model)
+    if intent is None:
+        return (False, "", None, "")
+    if intent.kind == "create_project":
+        reply_text, card = _handle_create_project_intent(settings, session_id, intent)
+        return (True, reply_text, card, "")
+    if intent.kind == "start_timed_goal":
+        reply_text, card = _handle_start_timed_goal_intent(settings, session_id, intent, raw)
+        return (True, reply_text, card, "")
+    return (False, "", None, "")
+
+
 async def maybe_handle_web_chat(
     msg: Any,
     port: Any,
@@ -2252,86 +2393,13 @@ async def maybe_handle_web_chat(
     try:
         session_id = str(getattr(port, "durable_session_id", "") or "")
         raw = (prompt or "").strip()
-        if not raw:
+        handled, reply_text, card, notice = await resolve_intent_turn(
+            settings, session_id, raw, model=model,
+        )
+        if notice:
+            _emit_decider_notice(port, msg, notice)
+        if not handled:
             return False
-
-        # 1. Check active pending follow-up state (e.g. awaiting project name, or skip_decider_once).
-        pending = _has_active_pending(settings, session_id)
-        if pending is not None and pending["pending_kind"] == "skip_decider_once":
-            expected = str((pending.get("pending_payload") or {}).get("text") or "").strip()
-            _clear_pending_state(settings, session_id)
-            if expected == raw:
-                return False
-        elif pending is not None and pending["pending_kind"] == "awaiting_project_name":
-            _clear_pending_state(settings, session_id)
-            if raw in {"取消", "算了", "不用了", "不建了", "cancel"}:
-                _emit_plain_reply(port, msg, "好的，已取消创建项目。")
-                return True
-            candidate = raw.strip().strip("`\"'「『」』")
-            reply_text, card = _execute_create_project_now(settings, session_id, candidate)
-            if card is not None:
-                _emit_card_reply(port, msg, reply_text, card)
-            else:
-                _emit_plain_reply(port, msg, reply_text)
-            return True
-
-        # 2. Deterministic pattern first (always wins).
-        direct = detect_intent(raw)
-        if direct is not None:
-            if direct.kind == "create_project":
-                reply_text, card = _handle_create_project_intent(settings, session_id, direct)
-            elif direct.kind == "start_timed_goal":
-                reply_text, card = _handle_start_timed_goal_intent(settings, session_id, direct, raw)
-            else:
-                return False
-            if card is not None:
-                _emit_card_reply(port, msg, reply_text, card)
-            else:
-                _emit_plain_reply(port, msg, reply_text)
-            return True
-
-        # 3. Decision model (Gemini Decisions / Jev / custom) if configured.
-        if not raw.startswith("/"):
-            decider_configured = intent_decider.is_configured(settings)
-            decision = await asyncio.to_thread(
-                intent_decider.decide_intent,
-                settings,
-                raw,
-                intent_decider.INTENT_OPTIONS,
-            )
-            if decision is not None:
-                if decision.choice == "chat" or decision.confidence < DECIDER_CONFIDENCE_CLARIFY:
-                    return False
-                if _is_question_for_decider(raw) or decision.confidence < DECIDER_CONFIDENCE_DIRECT:
-                    reply_text, card = _build_clarifying_card(settings, session_id, decision.choice, raw)
-                    _emit_card_reply(port, msg, reply_text, card)
-                    return True
-                reply_text, card = _dispatch_decider_choice(settings, session_id, decision.choice, raw)
-                if not reply_text and card is None:
-                    return False
-                if card is not None:
-                    _emit_card_reply(port, msg, reply_text, card)
-                else:
-                    _emit_plain_reply(port, msg, reply_text)
-                return True
-            if decider_configured:
-                # Decider was configured and errored/timed out -> fall back to normal chat.
-                # Say so once when it is really unhealthy, without delaying the answer.
-                _maybe_emit_decider_notice(settings, session_id, port, msg)
-                return False
-
-        # 4. Legacy optional chat-tier LLM fallback when no decider is configured.
-        intent = await classify_intent(raw, settings, model=model)
-        if intent is None:
-            return False
-
-        if intent.kind == "create_project":
-            reply_text, card = _handle_create_project_intent(settings, session_id, intent)
-        elif intent.kind == "start_timed_goal":
-            reply_text, card = _handle_start_timed_goal_intent(settings, session_id, intent, raw)
-        else:
-            return False
-
         if card is not None:
             _emit_card_reply(port, msg, reply_text, card)
         else:
