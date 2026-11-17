@@ -1279,7 +1279,7 @@ class Round2CanonicalLocksSqliteAndRecoveryTests(unittest.TestCase):
     def test_schema_migration_from_v2_preserves_data_and_adds_writer_status(self) -> None:
         """Constructs an exact previous-v2 schema without writer_status, inserts
         representative task, execution, and lock rows with PRAGMA user_version=2,
-        then verifies that current runtime cleanly upgrades to v3, adds writer_status,
+        then verifies that current runtime cleanly upgrades to v4, adds writer_status,
         retains all pre-existing data, and subsequent read-only connections succeed
         without repeating writes."""
         mig_tmp = Path(tempfile.mkdtemp(prefix="sup-r2-mig-"))
@@ -1376,11 +1376,11 @@ class Round2CanonicalLocksSqliteAndRecoveryTests(unittest.TestCase):
         self.assertEqual(ver_before, 2)
         raw_conn.close()
 
-        # 2. Open via current runtime _connect(settings): triggers automatic migration to v3
+        # 2. Open via current runtime _connect(settings): triggers automatic migration to v4
         conn = ags._connect(s)
         try:
             ver_after = conn.execute("PRAGMA user_version").fetchone()[0]
-            self.assertEqual(ver_after, 3)
+            self.assertEqual(ver_after, 4)
 
             cols_after = [r[1] for r in conn.execute("PRAGMA table_info(supervisor_locks)").fetchall()]
             self.assertIn("writer_status", cols_after)
