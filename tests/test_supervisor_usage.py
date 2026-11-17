@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -178,7 +179,7 @@ class NormalizeUsageTests(unittest.TestCase):
     def test_empty_usage_shape_is_stable(self) -> None:
         self.assertEqual(ags.empty_usage(), {
             "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0,
-            "runs_with_usage": 0, "runs_without_usage": 0,
+            "runs_with_usage": 0, "runs_without_usage": 0, "runs_before_recording": 0,
         })
 
 
@@ -193,7 +194,7 @@ class TaskUsagePersistenceTests(_UsageCase):
         # cacheRead folds into input_tokens, exactly like _parse_pi_stream reports.
         self.assertEqual(usage, {
             "input_tokens": 120, "output_tokens": 10, "cached_input_tokens": 20,
-            "runs_with_usage": 1, "runs_without_usage": 0,
+            "runs_with_usage": 1, "runs_without_usage": 0, "runs_before_recording": 0,
         })
         rows = ags.list_execution_usage(self.settings, task_id=str(task["id"]))
         self.assertEqual(len(rows), 1)
@@ -219,7 +220,7 @@ class TaskUsagePersistenceTests(_UsageCase):
         self.assertEqual(ags.list_execution_usage(self.settings, task_id=str(task["id"])), [])
         self.assertEqual(ags.get_task(self.settings, str(task["id"]))["usage"], {
             "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0,
-            "runs_with_usage": 0, "runs_without_usage": 1,
+            "runs_with_usage": 0, "runs_without_usage": 1, "runs_before_recording": 0,
         })
 
     def test_usage_accumulates_across_runs_of_one_task(self) -> None:
@@ -239,7 +240,7 @@ class TaskUsagePersistenceTests(_UsageCase):
 
         self.assertEqual(ags.get_task(self.settings, task_id)["usage"], {
             "input_tokens": 125, "output_tokens": 17, "cached_input_tokens": 20,
-            "runs_with_usage": 2, "runs_without_usage": 1,
+            "runs_with_usage": 2, "runs_without_usage": 1, "runs_before_recording": 0,
         })
 
     def test_operator_validation_runs_are_not_usage_unknown(self) -> None:
@@ -299,7 +300,7 @@ class GoalUsageTests(_UsageCase):
 
         expected = {
             "input_tokens": 125, "output_tokens": 17, "cached_input_tokens": 20,
-            "runs_with_usage": 2, "runs_without_usage": 0,
+            "runs_with_usage": 2, "runs_without_usage": 0, "runs_before_recording": 0,
         }
         self.assertEqual(enriched["usage"], expected)
         self.assertEqual(listed["usage"], expected)
@@ -309,6 +310,146 @@ class GoalUsageTests(_UsageCase):
         self.assertEqual(goal["usage"], ags.empty_usage())
         self.assertEqual(goals.get_goal(self.settings, str(goal["id"]))["usage"],
                          ags.empty_usage())
+
+
+class UsageRecordingSinceTests(_UsageCase):
+    """The recording stamp splits "ran before recording" from "stayed silent"."""
+
+    def _stamp(self, settings: Settings | None = None) -> str:
+        conn = ags._connect(settings or self.settings)
+        try:
+            row = conn.execute(
+                "SELECT value FROM supervisor_meta WHERE key = ?",
+                (ags._USAGE_RECORDING_SINCE_KEY,),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertIsNotNone(row)
+        return str(row[0])
+
+    def _insert_execution(self, task_id: str, execution_id: str, started_at: str, *,
+                          usage: tuple[int, int, int] | None = None,
+                          executor: str = "pi") -> None:
+        conn = ags._connect(self.settings)
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """INSERT INTO supervisor_executions
+                   (execution_id, task_id, role, executor, status, started_at, finished_at)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (execution_id, task_id, "analyst", executor, "finished",
+                 started_at, started_at),
+            )
+            if usage is not None:
+                conn.execute(
+                    """INSERT INTO supervisor_execution_usage
+                       (execution_id, task_id, role, executor, model,
+                        input_tokens, output_tokens, cached_input_tokens, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (execution_id, task_id, "analyst", executor, "test-model",
+                     usage[0], usage[1], usage[2], started_at),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _around_stamp(self, settings: Settings | None = None) -> tuple[str, str, str]:
+        stamp = datetime.fromisoformat(self._stamp(settings))
+        return ((stamp - timedelta(hours=2)).isoformat(),
+                self._stamp(settings),
+                (stamp + timedelta(hours=2)).isoformat())
+
+    def test_stamp_is_written_once_and_never_rewritten(self) -> None:
+        self._new_task()
+        first = self._stamp()
+        self.assertTrue(first)
+        # A database that is already at this version still stamps on first open,
+        # and a second stamping call keeps the original value.
+        conn = ags._connect(self.settings)
+        try:
+            ags._stamp_usage_recording_since(conn, own_transaction=True)
+            ags._stamp_usage_recording_since(conn, own_transaction=True)
+        finally:
+            conn.close()
+        self.assertEqual(self._stamp(), first)
+
+    def test_already_migrated_database_without_the_stamp_gets_one(self) -> None:
+        # A v4 database created before the meta table existed: the next open
+        # recreates the table and stamps it, without redoing the migration.
+        other = _make_settings(self.tmp / "upgrade")
+        self.assertEqual(ags.tasks_usage(other, []), {})
+        first = self._stamp(other)
+        self.assertTrue(first)
+        conn = ags._connect(other)
+        try:
+            conn.execute("DROP TABLE supervisor_meta")
+            conn.execute("PRAGMA user_version = 4")
+            conn.commit()
+        finally:
+            conn.close()
+        ags._INITIALIZED_DBS.clear()
+        self.assertEqual(ags.tasks_usage(other, []), {})
+        stamped = self._stamp(other)
+        self.assertTrue(stamped)
+        ags._INITIALIZED_DBS.clear()
+        self.assertEqual(ags.tasks_usage(other, []), {})
+        self.assertEqual(self._stamp(other), stamped)
+
+    def test_unknown_runs_split_by_start_time(self) -> None:
+        task = self._new_task()
+        task_id = str(task["id"])
+        before, at_stamp, after = self._around_stamp()
+        self._insert_execution(task_id, "ex-old-1", before)
+        self._insert_execution(task_id, "ex-old-2", before)
+        # Exactly at the stamp counts as "recording was already on".
+        self._insert_execution(task_id, "ex-at-stamp", at_stamp)
+        self._insert_execution(task_id, "ex-new-1", after)
+        self._insert_execution(task_id, "ex-old-reported", before, usage=(100, 10, 20))
+        # Operator validation is a shell check, never a usage question.
+        self._insert_execution(task_id, "ex-val", before, executor="operator-validation")
+        self.assertEqual(ags.get_task(self.settings, task_id)["usage"], {
+            "input_tokens": 100, "output_tokens": 10, "cached_input_tokens": 20,
+            "runs_with_usage": 1, "runs_without_usage": 2,
+            "runs_before_recording": 2,
+        })
+
+    def test_goal_of_only_pre_recording_runs(self) -> None:
+        goal = self._create_goal()
+        first = self._new_task()
+        second = self._new_task()
+        before, _at, _after = self._around_stamp()
+        self._insert_execution(str(first["id"]), "ex-hist-1", before)
+        self._insert_execution(str(first["id"]), "ex-hist-2", before)
+        self._insert_execution(str(second["id"]), "ex-hist-3", before)
+        iterations = [{"n": 1, "task_id": str(first["id"])},
+                      {"n": 2, "task_id": str(second["id"])}]
+        with patch.object(goals, "_iterations", lambda *_a, **_kw: iterations):
+            detail = goals.get_goal(self.settings, str(goal["id"]))
+        self.assertEqual(detail["usage"], {
+            "input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0,
+            "runs_with_usage": 0, "runs_without_usage": 0,
+            "runs_before_recording": 3,
+        })
+        text = goals.build_finish_report_text(self.settings, detail)
+        self.assertIn("这个目标是在开始记录用量之前跑的", text)
+        self.assertNotIn("token", text)
+        # The silent-executor note stays reserved for runs that could report.
+        self.assertNotIn("部分执行者没有报告用量", text)
+
+    def test_goal_mixes_pre_recording_and_reported_rounds(self) -> None:
+        goal = self._create_goal()
+        task = self._new_task()
+        task_id = str(task["id"])
+        before, _at, after = self._around_stamp()
+        self._insert_execution(task_id, "ex-hist", before)
+        self._insert_execution(task_id, "ex-reported", after, usage=(30000, 4000, 0))
+        with patch.object(goals, "_iterations",
+                          lambda *_a, **_kw: [{"n": 1, "task_id": task_id}]):
+            detail = goals.get_goal(self.settings, str(goal["id"]))
+        self.assertEqual(detail["usage"]["runs_with_usage"], 1)
+        self.assertEqual(detail["usage"]["runs_before_recording"], 1)
+        text = goals.build_finish_report_text(self.settings, detail)
+        self.assertIn("用了约 3.4 万 token（更早的轮次还没开始记录用量）", text)
 
 
 class FormatTokensTests(unittest.TestCase):
@@ -364,6 +505,33 @@ class UsageSummaryPhraseTests(unittest.TestCase):
                                                    "runs_without_usage": 2}), "")
         self.assertEqual(ags.usage_summary_phrase(None), "")
 
+    def test_runs_that_predate_recording_are_not_missing_reports(self) -> None:
+        # A goal whose runs all started before recording began has no number to
+        # show: say that instead of blaming its executors (or printing a zero).
+        self.assertEqual(
+            ags.usage_summary_phrase({"runs_with_usage": 0, "runs_without_usage": 0,
+                                      "runs_before_recording": 3}),
+            "这个目标是在开始记录用量之前跑的")
+        # Runs that did record keep their number and gain the historical note.
+        self.assertEqual(
+            ags.usage_summary_phrase({"input_tokens": 30000, "output_tokens": 4000,
+                                      "runs_with_usage": 3, "runs_without_usage": 0,
+                                      "runs_before_recording": 2}),
+            "用了约 3.4 万 token（更早的轮次还没开始记录用量）")
+        # A genuinely silent executor still wins over the historical note.
+        self.assertEqual(
+            ags.usage_summary_phrase({"input_tokens": 30000, "output_tokens": 4000,
+                                      "runs_with_usage": 3, "runs_without_usage": 1,
+                                      "runs_before_recording": 2}),
+            "用了约 3.4 万 token（部分执行者没有报告用量）")
+
+    def test_older_usage_dicts_without_the_new_field_still_work(self) -> None:
+        # A payload from before the field existed reads as "nothing historical".
+        self.assertEqual(
+            ags.usage_summary_phrase({"input_tokens": 30000, "output_tokens": 4000,
+                                      "runs_with_usage": 3, "runs_without_usage": 0}),
+            "用了约 3.4 万 token")
+
     def test_cached_input_is_not_counted_twice(self) -> None:
         # cached_input_tokens already live inside input_tokens: total is in + out.
         self.assertEqual(ags.usage_total_tokens({"input_tokens": 8000, "output_tokens": 549,
@@ -392,6 +560,26 @@ class UsageCopyTests(_UsageCase):
         text = self._report(goal)
         self.assertIn("用了约 3.4 万 token", text)
         self.assertNotIn("部分执行者没有报告用量", text)
+
+    def test_finish_report_notes_rounds_that_predate_recording(self) -> None:
+        # Some rounds recorded, older ones simply ran before recording existed.
+        goal = self._create_goal()
+        goal["usage"] = {"input_tokens": 30000, "output_tokens": 4000,
+                         "cached_input_tokens": 0, "runs_with_usage": 3,
+                         "runs_without_usage": 0, "runs_before_recording": 2}
+        text = self._report(goal)
+        self.assertIn("用了约 3.4 万 token（更早的轮次还没开始记录用量）", text)
+        self.assertNotIn("部分执行者没有报告用量", text)
+
+    def test_finish_report_for_a_goal_that_predates_recording(self) -> None:
+        # Nothing was ever recorded, so there is no token amount to print at all.
+        goal = self._create_goal()
+        goal["usage"] = {"input_tokens": 0, "output_tokens": 0, "cached_input_tokens": 0,
+                         "runs_with_usage": 0, "runs_without_usage": 0,
+                         "runs_before_recording": 3}
+        text = self._report(goal)
+        self.assertIn("这个目标是在开始记录用量之前跑的", text)
+        self.assertNotIn("token", text)
 
     def test_finish_report_without_any_usage_says_nothing(self) -> None:
         goal = self._create_goal()
@@ -437,6 +625,18 @@ class UsageCopyTests(_UsageCase):
                        "usage": ags.empty_usage()})
         text = self._progress_reply(detail)
         self.assertIn("已跑 1 轮 / 通过 0 轮", text)
+        self.assertNotIn("token", text)
+
+    def test_progress_reply_for_a_goal_that_predates_recording(self) -> None:
+        goal = self._create_goal()
+        detail = dict(goal)
+        detail.update({"state": "running", "rounds_total": 3, "rounds_passed": 1,
+                       "usage": {"input_tokens": 0, "output_tokens": 0,
+                                  "cached_input_tokens": 0, "runs_with_usage": 0,
+                                  "runs_without_usage": 0, "runs_before_recording": 3}})
+        text = self._progress_reply(detail)
+        self.assertIn("已跑 3 轮 / 通过 1 轮", text)
+        self.assertIn("这个目标是在开始记录用量之前跑的", text)
         self.assertNotIn("token", text)
 
 

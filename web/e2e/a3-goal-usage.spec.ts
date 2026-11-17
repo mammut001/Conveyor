@@ -16,6 +16,7 @@ const USAGE_WITH_NOTE: GoalUsage = {
   cached_input_tokens: 9000,
   runs_with_usage: 3,
   runs_without_usage: 1,
+  runs_before_recording: 0,
 }
 
 const USAGE_COMPLETE: GoalUsage = {
@@ -24,6 +25,7 @@ const USAGE_COMPLETE: GoalUsage = {
   cached_input_tokens: 0,
   runs_with_usage: 4,
   runs_without_usage: 0,
+  runs_before_recording: 0,
 }
 
 const USAGE_EMPTY: GoalUsage = {
@@ -32,6 +34,27 @@ const USAGE_EMPTY: GoalUsage = {
   cached_input_tokens: 0,
   runs_with_usage: 0,
   runs_without_usage: 2,
+  runs_before_recording: 0,
+}
+
+// 全部轮次都跑在「开始记录用量」之前：没有 token 数可显示，只说明一句。
+const USAGE_HISTORICAL_ONLY: GoalUsage = {
+  input_tokens: 0,
+  output_tokens: 0,
+  cached_input_tokens: 0,
+  runs_with_usage: 0,
+  runs_without_usage: 0,
+  runs_before_recording: 3,
+}
+
+// 有用量的轮次 + 更早没开始记录的轮次：数字照显示，备注说明那几轮为什么没有数。
+const USAGE_MIXED_HISTORY: GoalUsage = {
+  input_tokens: 30000,
+  output_tokens: 4000,
+  cached_input_tokens: 0,
+  runs_with_usage: 3,
+  runs_without_usage: 0,
+  runs_before_recording: 2,
 }
 
 function createMockCapabilities(): SupervisorCapabilities {
@@ -235,4 +258,49 @@ test('goal card stays clean against an older server that sends no usage field', 
   const card = page.getByRole('region', { name: '目标进度' })
   await expect(card).toContainText('老服务器上的目标')
   await expect(card).not.toContainText('已用约')
+})
+
+test('goal card reads runs_before_recording defensively when the server omits it', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  // 更老的服务器只带前五个字段：新字段读不到时按「没有」处理，不能报错也不能乱显示。
+  const legacyUsage = { ...USAGE_COMPLETE } as GoalUsage
+  delete (legacyUsage as Partial<GoalUsage>).runs_before_recording
+  await installGoalsFixture(page, [createGoal('goal-usage-5', '缺新字段的老目标', legacyUsage)])
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toContainText('已用约 12 万 token')
+  await expect(card).not.toContainText('（部分执行者没有报告用量）')
+  await expect(card).not.toContainText('（更早的轮次还没开始记录用量）')
+})
+
+test('goal card says a goal that predates usage recording has no token amount', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsFixture(page, [createGoal('goal-usage-6', '记录用量之前的老目标', USAGE_HISTORICAL_ONLY)])
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toContainText('记录用量之前的老目标')
+  // 没有 token 数可显示：换成说明那句，而且不能冒出「0 token」或执行者不报告的备注。
+  await expect(card).toContainText('这个目标是在开始记录用量之前跑的')
+  await expect(card).not.toContainText('已用约')
+  await expect(card).not.toContainText('0 token')
+  await expect(card).not.toContainText('（部分执行者没有报告用量）')
+})
+
+test('goal card notes pre-recording rounds next to a real token amount', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installGoalsFixture(page, [createGoal('goal-usage-7', '跨越记录起点的目标', USAGE_MIXED_HISTORY)])
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  await expect(card).toContainText('已用约 3.4 万 token')
+  await expect(card).toContainText('（更早的轮次还没开始记录用量）')
+  // 真的没报告用量的执行者才有那条备注，这里没有。
+  await expect(card).not.toContainText('（部分执行者没有报告用量）')
+  const cardText = await card.innerText()
+  expect(cardText.toLowerCase()).not.toContain('runs_before_recording')
 })
