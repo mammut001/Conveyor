@@ -24,18 +24,20 @@ import os
 import re
 import shutil
 import signal
+import socket
 import sqlite3
 import stat
 import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Protocol
 
-from conveyor.core.redaction import redact_text, truncate
+from conveyor.core.redaction import SECRET_VALUE_PATTERNS, redact_text, truncate
 
 log = logging.getLogger("agent_supervisor")
 
@@ -6211,65 +6213,8 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                     fingerprint=candidate_fp,
                 )
 
-            # Independent read-only reviewer.
             if task_cancelled(settings, task_id):
                 raise SupervisorCancelledError("cancelled before review")
-            rev_cfg = roles["reviewer"]
-            rev_executor = get_executor(settings, rev_cfg.executor)
-            uses_check_script = any(
-                name == "check-script" or tuple(argv) == ("sh", "scripts/check.sh")
-                for name, argv in val_specs
-            )
-            reviewer_prompt = build_reviewer_prompt(
-                goal=goal,
-                worktree_path=wp,
-                base_sha=base_sha,
-                current_sha=candidate_sha,
-                fingerprint=candidate_fp,
-                analysis_plan=plan,
-                implementer_summary=i_result.output,
-                acceptance_criteria=accepted_criteria,
-                validation_results=executed_checks,
-                discussion_context=discussion_context,
-                project_notes=project_notes_context,
-                uses_check_script=uses_check_script,
-            )
-            rev_ctx = ExecutionContext(
-                task_id=task_id,
-                repo_path=repo_path,
-                worktree_path=wp,
-                stage=f"review:{round_no}",
-                metadata=exec_meta,
-            )
-            r_result = await _invoke_role_executor(
-                rev_executor,
-                role=rev_cfg,
-                prompt=reviewer_prompt,
-                worktree_path=wp,
-                timeout_seconds=timeout,
-                task_id=task_id,
-                context=rev_ctx,
-            )
-            if r_result.cancelled or task_cancelled(settings, task_id):
-                raise SupervisorCancelledError("cancelled during review")
-
-            review_identity = target_identity(wp)
-            if review_identity["sha"] != candidate_sha or review_identity["fingerprint"] != candidate_fp:
-                raise SupervisorStateError("code changed during review; reviewer violation")
-
-            parsed = None
-            issue_reason = ""
-            if not r_result.success:
-                issue_reason = f"review executor failed: {r_result.error}"
-            else:
-                try:
-                    parsed = parse_review_verdict(
-                        r_result.output,
-                        expected_sha=review_identity["sha"],
-                        expected_fingerprint=review_identity["fingerprint"],
-                    )
-                except ReviewEnvelopeError as exc:
-                    issue_reason = f"invalid review evidence: {exc}"
 
             failed_validations = [c for c in executed_checks if not c.get("passed")]
             validation_issue_msgs = [
@@ -6278,144 +6223,240 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                 for c in failed_validations
             ]
 
-            if parsed is None:
-                issues = [issue_reason or REVIEW_INVALID_ISSUES_DEFAULT, *validation_issue_msgs]
+            # Deterministic leak check before invoking the model reviewer:
+            # any hit fails the round immediately without calling the model reviewer.
+            review_identity = new_identity
+            round_diff_text = _collect_round_diff_text(wp, base_sha=base_sha)
+            leak_issues = scan_diff_for_leaks(
+                round_diff_text,
+                worktree_path=wp,
+                repo_path=repo_path,
+                settings=settings,
+                goal=goal,
+            )
+            if leak_issues:
+                issues = [*leak_issues, *validation_issue_msgs]
                 record_acceptance(
                     settings,
                     task_id,
                     sha=review_identity["sha"],
                     passed=False,
                     issues=issues,
-                    evidence=r_result.output if r_result.success else r_result.error,
-                    evidence_path=r_result.evidence.get("evidence_path", "") if r_result.success else "",
+                    evidence=json.dumps(
+                        {
+                            "executed_checks": executed_checks,
+                            "leak_issues": leak_issues,
+                        },
+                        ensure_ascii=False,
+                    ),
+                    evidence_path="",
                     fingerprint=review_identity["fingerprint"],
                     self_reported_checks=[],
                     executed_checks=executed_checks,
-                    evidence_source="operator_validation+invalid_review" if val_specs else "reviewer_self_report",
+                    evidence_source=(
+                        "operator_validation+deterministic_leak_check"
+                        if val_specs
+                        else "deterministic_leak_check"
+                    ),
                     provenance_verified=False,
                 )
-            elif not val_specs:
-                # No operator validation commands configured: NEVER fabricate 'completed'.
-                reviewer_checks = list(parsed.get("checks") or [])
-                if not parsed["passed"]:
-                    issues = list(parsed.get("issues") or [])
+            else:
+                # Independent read-only reviewer.
+                rev_cfg = roles["reviewer"]
+                rev_executor = get_executor(settings, rev_cfg.executor)
+                uses_check_script = any(
+                    name == "check-script" or tuple(argv) == ("sh", "scripts/check.sh")
+                    for name, argv in val_specs
+                )
+                reviewer_prompt = build_reviewer_prompt(
+                    goal=goal,
+                    worktree_path=wp,
+                    base_sha=base_sha,
+                    current_sha=candidate_sha,
+                    fingerprint=candidate_fp,
+                    analysis_plan=plan,
+                    implementer_summary=i_result.output,
+                    acceptance_criteria=accepted_criteria,
+                    validation_results=executed_checks,
+                    discussion_context=discussion_context,
+                    project_notes=project_notes_context,
+                    uses_check_script=uses_check_script,
+                )
+                rev_ctx = ExecutionContext(
+                    task_id=task_id,
+                    repo_path=repo_path,
+                    worktree_path=wp,
+                    stage=f"review:{round_no}",
+                    metadata=exec_meta,
+                )
+                r_result = await _invoke_role_executor(
+                    rev_executor,
+                    role=rev_cfg,
+                    prompt=reviewer_prompt,
+                    worktree_path=wp,
+                    timeout_seconds=timeout,
+                    task_id=task_id,
+                    context=rev_ctx,
+                )
+                if r_result.cancelled or task_cancelled(settings, task_id):
+                    raise SupervisorCancelledError("cancelled during review")
+
+                review_identity = target_identity(wp)
+                if review_identity["sha"] != candidate_sha or review_identity["fingerprint"] != candidate_fp:
+                    raise SupervisorStateError("code changed during review; reviewer violation")
+
+                parsed = None
+                issue_reason = ""
+                if not r_result.success:
+                    issue_reason = f"review executor failed: {r_result.error}"
+                else:
+                    try:
+                        parsed = parse_review_verdict(
+                            r_result.output,
+                            expected_sha=review_identity["sha"],
+                            expected_fingerprint=review_identity["fingerprint"],
+                        )
+                    except ReviewEnvelopeError as exc:
+                        issue_reason = f"invalid review evidence: {exc}"
+
+                if parsed is None:
+                    issues = [issue_reason or REVIEW_INVALID_ISSUES_DEFAULT, *validation_issue_msgs]
                     record_acceptance(
                         settings,
                         task_id,
                         sha=review_identity["sha"],
                         passed=False,
                         issues=issues,
-                        evidence=json.dumps(
-                            {"executed_checks": [], "reviewer_self_reported_checks": reviewer_checks},
-                            ensure_ascii=False,
-                        ),
-                        evidence_path=r_result.evidence.get("evidence_path", ""),
+                        evidence=r_result.output if r_result.success else r_result.error,
+                        evidence_path=r_result.evidence.get("evidence_path", "") if r_result.success else "",
                         fingerprint=review_identity["fingerprint"],
-                        self_reported_checks=reviewer_checks,
-                        executed_checks=[],
-                        evidence_source="reviewer_self_report",
+                        self_reported_checks=[],
+                        executed_checks=executed_checks,
+                        evidence_source="operator_validation+invalid_review" if val_specs else "reviewer_self_report",
                         provenance_verified=False,
                     )
+                elif not val_specs:
+                    # No operator validation commands configured: NEVER fabricate 'completed'.
+                    reviewer_checks = list(parsed.get("checks") or [])
+                    if not parsed["passed"]:
+                        issues = list(parsed.get("issues") or [])
+                        record_acceptance(
+                            settings,
+                            task_id,
+                            sha=review_identity["sha"],
+                            passed=False,
+                            issues=issues,
+                            evidence=json.dumps(
+                                {"executed_checks": [], "reviewer_self_reported_checks": reviewer_checks},
+                                ensure_ascii=False,
+                            ),
+                            evidence_path=r_result.evidence.get("evidence_path", ""),
+                            fingerprint=review_identity["fingerprint"],
+                            self_reported_checks=reviewer_checks,
+                            executed_checks=[],
+                            evidence_source="reviewer_self_report",
+                            provenance_verified=False,
+                        )
+                    else:
+                        needs_val_msg = (
+                            "operator validation commands not configured; "
+                            "awaiting operator validation before completion"
+                        )
+                        record_acceptance(
+                            settings,
+                            task_id,
+                            sha=review_identity["sha"],
+                            passed=False,
+                            issues=[needs_val_msg],
+                            evidence=json.dumps(
+                                {"executed_checks": [], "reviewer_self_reported_checks": reviewer_checks},
+                                ensure_ascii=False,
+                            ),
+                            evidence_path=r_result.evidence.get("evidence_path", ""),
+                            fingerprint=review_identity["fingerprint"],
+                            self_reported_checks=reviewer_checks,
+                            executed_checks=[],
+                            evidence_source="unverified_no_operator_validation",
+                            provenance_verified=False,
+                        )
+                        transition(
+                            settings,
+                            task_id,
+                            "waiting_user",
+                            stage="needs_validation",
+                            error=needs_val_msg,
+                            current_sha=review_identity["sha"],
+                            fingerprint=review_identity["fingerprint"],
+                            metadata={
+                                "validation_status": "needs_validation",
+                                "reviewer_verdict_passed": True,
+                                "provenance_verified": False,
+                            },
+                        )
+                        return get_task(settings, task_id) or {}
                 else:
-                    needs_val_msg = (
-                        "operator validation commands not configured; "
-                        "awaiting operator validation before completion"
+                    reviewer_checks = list(parsed.get("checks") or [])
+                    provenance_ok = bool(executed_checks) and all(
+                        c.get("passed")
+                        and c.get("target_sha") == review_identity["sha"]
+                        and c.get("target_fingerprint") == review_identity["fingerprint"]
+                        and bool(c.get("execution_id"))
+                        for c in executed_checks
                     )
+                    effective_passed = bool(parsed["passed"]) and not failed_validations and provenance_ok
+                    if effective_passed:
+                        issues = []
+                    else:
+                        issues = [*list(parsed.get("issues") or []), *validation_issue_msgs]
+                        if not issues:
+                            issues = ["validation provenance check did not pass"]
+
                     record_acceptance(
                         settings,
                         task_id,
                         sha=review_identity["sha"],
-                        passed=False,
-                        issues=[needs_val_msg],
+                        passed=effective_passed,
+                        issues=issues,
                         evidence=json.dumps(
-                            {"executed_checks": [], "reviewer_self_reported_checks": reviewer_checks},
+                            {
+                                "executed_checks": executed_checks,
+                                "reviewer_self_reported_checks": reviewer_checks,
+                            },
                             ensure_ascii=False,
                         ),
                         evidence_path=r_result.evidence.get("evidence_path", ""),
                         fingerprint=review_identity["fingerprint"],
                         self_reported_checks=reviewer_checks,
-                        executed_checks=[],
-                        evidence_source="unverified_no_operator_validation",
-                        provenance_verified=False,
+                        executed_checks=executed_checks,
+                        evidence_source="operator_validation+independent_review",
+                        provenance_verified=bool(executed_checks) and all(
+                            c.get("target_sha") == review_identity["sha"]
+                            and c.get("target_fingerprint") == review_identity["fingerprint"]
+                            and bool(c.get("execution_id"))
+                            for c in executed_checks
+                        ),
                     )
-                    transition(
-                        settings,
-                        task_id,
-                        "waiting_user",
-                        stage="needs_validation",
-                        error=needs_val_msg,
-                        current_sha=review_identity["sha"],
-                        fingerprint=review_identity["fingerprint"],
-                        metadata={
-                            "validation_status": "needs_validation",
-                            "reviewer_verdict_passed": True,
-                            "provenance_verified": False,
-                        },
-                    )
-                    return get_task(settings, task_id) or {}
-            else:
-                reviewer_checks = list(parsed.get("checks") or [])
-                provenance_ok = bool(executed_checks) and all(
-                    c.get("passed")
-                    and c.get("target_sha") == review_identity["sha"]
-                    and c.get("target_fingerprint") == review_identity["fingerprint"]
-                    and bool(c.get("execution_id"))
-                    for c in executed_checks
-                )
-                effective_passed = bool(parsed["passed"]) and not failed_validations and provenance_ok
-                if effective_passed:
-                    issues = []
-                else:
-                    issues = [*list(parsed.get("issues") or []), *validation_issue_msgs]
-                    if not issues:
-                        issues = ["validation provenance check did not pass"]
 
-                record_acceptance(
-                    settings,
-                    task_id,
-                    sha=review_identity["sha"],
-                    passed=effective_passed,
-                    issues=issues,
-                    evidence=json.dumps(
-                        {
-                            "executed_checks": executed_checks,
-                            "reviewer_self_reported_checks": reviewer_checks,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    evidence_path=r_result.evidence.get("evidence_path", ""),
-                    fingerprint=review_identity["fingerprint"],
-                    self_reported_checks=reviewer_checks,
-                    executed_checks=executed_checks,
-                    evidence_source="operator_validation+independent_review",
-                    provenance_verified=bool(executed_checks) and all(
-                        c.get("target_sha") == review_identity["sha"]
-                        and c.get("target_fingerprint") == review_identity["fingerprint"]
-                        and bool(c.get("execution_id"))
-                        for c in executed_checks
-                    ),
-                )
-
-                if effective_passed:
-                    final_identity = target_identity(wp)
-                    if (
-                        final_identity["sha"] != review_identity["sha"]
-                        or final_identity["fingerprint"] != review_identity["fingerprint"]
-                    ):
-                        raise SupervisorStateError("target content changed between review and completion")
-                    transition(
-                        settings,
-                        task_id,
-                        "completed",
-                        stage="completed",
-                        current_sha=final_identity["sha"],
-                        fingerprint=final_identity["fingerprint"],
-                        metadata={
-                            "validation_status": "verified",
-                            "provenance_verified": True,
-                        },
-                    )
-                    return get_task(settings, task_id) or {}
+                    if effective_passed:
+                        final_identity = target_identity(wp)
+                        if (
+                            final_identity["sha"] != review_identity["sha"]
+                            or final_identity["fingerprint"] != review_identity["fingerprint"]
+                        ):
+                            raise SupervisorStateError("target content changed between review and completion")
+                        transition(
+                            settings,
+                            task_id,
+                            "completed",
+                            stage="completed",
+                            current_sha=final_identity["sha"],
+                            fingerprint=final_identity["fingerprint"],
+                            metadata={
+                                "validation_status": "verified",
+                                "provenance_verified": True,
+                            },
+                        )
+                        return get_task(settings, task_id) or {}
 
             # Failure -> bounded repair loop.
             round_no += 1
@@ -6682,13 +6723,342 @@ def _resolve_project_notes_snapshot(
     return snapshot
 
 
+_CONVEYOR_STATIC_INTERNAL_PATHS = ("/srv/conveyor",)
+_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_DIFF_GIT_PATH_RE = re.compile(r"^diff --git a/.+? b/(.+)$")
+_PATH_TOKEN_STOP_CHARS = frozenset(
+    " \t\r\n'\"`<>()[]{}，。、；：！？「」『』（）【】《》,;"
+)
+_MAX_LEAK_SCAN_UNTRACKED_BYTES = 256 * 1024
+_SECRET_KIND_BY_PATTERN: dict[str, str] = {
+    r"(api\.telegram\.org/bot)[A-Za-z0-9:_-]+": "机器人访问令牌",
+    r"(bot)\d+:[A-Za-z0-9_-]{20,}": "机器人访问令牌",
+    r"\b\d{6,}:[A-Za-z0-9_-]{30,}\b": "机器人或服务令牌",
+    r"\b(ghp_|gho_|ghu_|ghs_|ghr_|github_pat_)[A-Za-z0-9_]{20,}\b": "GitHub 访问令牌",
+    r"\b(AKIA|ASIA)[0-9A-Z]{16}\b": "云服务访问密钥",
+    r"\b(ya29\.)[A-Za-z0-9_-]{20,}\b": "授权访问令牌",
+    r"\b(AIza)[A-Za-z0-9_-]{30,}\b": "接口密钥",
+    r"\b(cli_)[A-Za-z0-9_-]{8,}\b": "应用凭据",
+    r"\b(t-)[a-zA-Z0-9_-]{20,}\b": "飞书访问令牌",
+    r"\b(sk-ant-api)[A-Za-z0-9_-]{20,}\b": "接口密钥",
+    r"sk-[A-Za-z0-9_-]{20,}": "接口密钥",
+    r"xox[baprs]-[A-Za-z0-9-]{20,}": "聊天平台令牌",
+    r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{16,}": "访问令牌",
+    r"(?i)(authorization:\s*)[^\s]+": "认证头密钥",
+    r"(?i)\b(token|secret|password|api[_-]?key)\b\s*[:=]\s*['\"]?[^'\"\s]+": "密钥或密码配置",
+    r"(?i)([?&](?:access_key|ticket)=)[^&\s\[\]]+": "链接凭据参数",
+}
+
+
+def _is_git_internal_file(rel_path: str) -> bool:
+    return ".git" in rel_path.replace("\\", "/").split("/")
+
+
+def _unquote_diff_path(raw_path: str) -> str:
+    cleaned = raw_path.strip()
+    if len(cleaned) >= 2 and cleaned.startswith('"') and cleaned.endswith('"'):
+        cleaned = cleaned[1:-1]
+    return cleaned
+
+
+def _parse_added_diff_lines(diff_text: str) -> Iterator[tuple[str, int, str]]:
+    """Yield ``(file_path, new_line_no, added_content)`` for added lines in a unified diff.
+
+    Skips removed lines, context lines, non-diff sections, and files under ``.git/``.
+    """
+    current_file = ""
+    in_hunk = False
+    new_line = 0
+    new_remaining = 0
+
+    for raw_line in str(diff_text or "").splitlines():
+        if raw_line.startswith("diff --git "):
+            in_hunk = False
+            new_line = 0
+            new_remaining = 0
+            m = _DIFF_GIT_PATH_RE.match(raw_line)
+            current_file = _unquote_diff_path(m.group(1)) if m else ""
+            continue
+        if (not in_hunk or new_remaining <= 0) and raw_line.startswith("--- "):
+            in_hunk = False
+            continue
+        if (not in_hunk or new_remaining <= 0) and raw_line.startswith("+++ "):
+            in_hunk = False
+            target = raw_line[4:].strip()
+            if target == "/dev/null":
+                current_file = ""
+            else:
+                target = _unquote_diff_path(target)
+                if target.startswith("b/"):
+                    target = target[2:]
+                current_file = target
+            continue
+        hunk_match = _HUNK_HEADER_RE.match(raw_line)
+        if hunk_match:
+            new_line = int(hunk_match.group(1))
+            new_remaining = int(hunk_match.group(2)) if hunk_match.group(2) is not None else 1
+            in_hunk = True
+            continue
+        if not in_hunk:
+            continue
+        if raw_line.startswith("+"):
+            if current_file and not _is_git_internal_file(current_file) and new_line > 0:
+                yield current_file, new_line, raw_line[1:]
+            new_line += 1
+            if new_remaining > 0:
+                new_remaining -= 1
+        elif raw_line.startswith(" "):
+            new_line += 1
+            if new_remaining > 0:
+                new_remaining -= 1
+        elif raw_line.startswith(("-", "\\")):
+            continue
+        else:
+            in_hunk = False
+
+
+def _collect_round_diff_text(worktree_path: str, base_sha: str = "") -> str:
+    """Collect ``base_sha..current`` diff (committed + staged + unstaged + untracked text)."""
+    canon = _canonical_path(worktree_path)
+    if not canon:
+        return ""
+    ref = base_sha if _is_valid_git_sha(base_sha) else "HEAD"
+    sections: list[str] = []
+    try:
+        r = subprocess.run(
+            ["git", "-C", canon, "-c", "core.quotePath=false", "diff",
+             "--no-color", "--no-ext-diff", "--no-textconv", ref],
+            capture_output=True, text=True, timeout=60,
+        )
+        if r.returncode == 0 and r.stdout:
+            sections.append(r.stdout)
+    except Exception:
+        pass
+    try:
+        u = subprocess.run(
+            ["git", "-C", canon, "-c", "core.quotePath=false",
+             "ls-files", "--others", "--exclude-standard", "-z"],
+            capture_output=True, timeout=30,
+        )
+        untracked = [
+            p.decode("utf-8", "replace")
+            for p in (u.stdout or b"").split(b"\x00")
+            if p
+        ]
+    except Exception:
+        untracked = []
+
+    for rel in untracked:
+        if not rel or _is_git_internal_file(rel) or rel.startswith("/") or ".." in rel.split("/"):
+            continue
+        full = os.path.join(canon, rel)
+        try:
+            real_full = os.path.realpath(full)
+            if real_full != canon and not real_full.startswith(canon + os.sep):
+                continue
+            st = os.lstat(full)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > _MAX_LEAK_SCAN_UNTRACKED_BYTES:
+                continue
+            with open(full, "rb") as handle:
+                data = handle.read(_MAX_LEAK_SCAN_UNTRACKED_BYTES + 1)
+        except OSError:
+            continue
+        if len(data) > _MAX_LEAK_SCAN_UNTRACKED_BYTES or b"\x00" in data[:8192]:
+            continue
+        text = data.decode("utf-8", "replace")
+        lines = text.splitlines()
+        if not lines:
+            continue
+        header = (
+            f"diff --git a/{rel} b/{rel}\n"
+            "new file mode 100644\n"
+            "--- /dev/null\n"
+            f"+++ b/{rel}\n"
+            f"@@ -0,0 +1,{len(lines)} @@\n"
+        )
+        sections.append(header + "".join(f"+{ln}\n" for ln in lines))
+    return "\n".join(sections)
+
+
+def _add_path_variants(raw: Any, out: list[str]) -> None:
+    if raw is None:
+        return
+    text = str(raw).strip()
+    if not text:
+        return
+    if os.path.isabs(text):
+        cleaned = text.rstrip("/") or "/"
+        if cleaned != "/" and len(cleaned) > 1:
+            out.append(cleaned)
+    canon = _canonical_path(text)
+    if canon and canon != "/" and len(canon) > 1:
+        out.append(canon)
+
+
+def _collect_internal_paths(
+    *,
+    worktree_path: str = "",
+    repo_path: str = "",
+    settings: Any = None,
+    state_roots: Sequence[str | Path] = (),
+) -> tuple[list[str], set[str]]:
+    candidates: list[str] = []
+    prefix_allowed_candidates: list[str] = []
+    for raw in (worktree_path, repo_path):
+        _add_path_variants(raw, candidates)
+        _add_path_variants(raw, prefix_allowed_candidates)
+
+    if settings is not None:
+        mem_root = getattr(settings, "codex_memory_root", None)
+        _add_path_variants(mem_root, candidates)
+        task_root = getattr(settings, "codex_task_root", None)
+        _add_path_variants(task_root, candidates)
+        if task_root:
+            _add_path_variants(Path(str(task_root)) / "projects", candidates)
+        for attr in ("projects_root", "conveyor_projects_root"):
+            _add_path_variants(getattr(settings, attr, None), candidates)
+        try:
+            _add_path_variants(_managed_worktree_root(settings), candidates)
+        except Exception:
+            pass
+
+    for extra in state_roots:
+        _add_path_variants(extra, candidates)
+    for static_path in _CONVEYOR_STATIC_INTERNAL_PATHS:
+        _add_path_variants(static_path, candidates)
+
+    deduped = sorted(set(candidates), key=len, reverse=True)
+    return deduped, set(prefix_allowed_candidates)
+
+
+def _extract_path_token(line: str, start: int) -> str:
+    end = start
+    n = len(line)
+    while end < n and line[end] not in _PATH_TOKEN_STOP_CHARS:
+        end += 1
+    return line[start:end]
+
+
+def _path_allowed_by_goal(
+    full_token: str,
+    matched_root: str,
+    goal: str,
+    *,
+    prefix_allowed_roots: set[str],
+) -> bool:
+    if not goal:
+        return False
+    trimmed = full_token.rstrip("/")
+    if full_token in goal or (trimmed and trimmed in goal):
+        return True
+    if matched_root in prefix_allowed_roots and matched_root in goal:
+        return True
+    return False
+
+
+def _detect_secret_kind(line: str) -> str | None:
+    for pattern in SECRET_VALUE_PATTERNS:
+        if pattern.search(line):
+            return _SECRET_KIND_BY_PATTERN.get(pattern.pattern, "疑似密钥或令牌")
+    if redact_text(line) != line:
+        return "疑似密钥或令牌"
+    return None
+
+
+def scan_diff_for_leaks(
+    diff_text: str,
+    *,
+    worktree_path: str = "",
+    repo_path: str = "",
+    settings: Any = None,
+    state_roots: Sequence[str | Path] = (),
+    hostname: str | None = None,
+    goal: str = "",
+) -> list[str]:
+    """Scan ADDED lines of a unified diff for leaked internal paths, hostnames, or secrets.
+
+    Returns one Simplified-Chinese issue string per hit (with file name and line number).
+    Secret values are never echoed; only their kind is reported. Lines under ``.git/``
+    and removed (``-``) lines are ignored; paths explicitly present in ``goal`` are allowed.
+    """
+    internal_paths, prefix_allowed_roots = _collect_internal_paths(
+        worktree_path=worktree_path,
+        repo_path=repo_path,
+        settings=settings,
+        state_roots=state_roots,
+    )
+    raw_host = socket.gethostname() if hostname is None else hostname
+    host = str(raw_host or "").strip()
+    if len(host) < 3 or host.lower() in {"localhost", "localhost.localdomain"} or (goal and host in goal):
+        host = ""
+    host_re = (
+        re.compile(rf"(?<![A-Za-z0-9_.-]){re.escape(host)}(?![A-Za-z0-9_.-])")
+        if host
+        else None
+    )
+
+    issues: list[str] = []
+    for file_path, line_no, line in _parse_added_diff_lines(diff_text):
+        matched_spans: list[tuple[int, int]] = []
+        for root in internal_paths:
+            search_from = 0
+            root_len = len(root)
+            while True:
+                idx = line.find(root, search_from)
+                if idx < 0:
+                    break
+                end = idx + root_len
+                search_from = idx + 1
+                left_ok = idx == 0 or (
+                    not (line[idx - 1].isascii() and (line[idx - 1].isalnum() or line[idx - 1] in "_.-/"))
+                )
+                right_ok = end == len(line) or (
+                    not (line[end].isascii() and (line[end].isalnum() or line[end] in "_-"))
+                )
+                if not (left_ok and right_ok):
+                    continue
+                if any(s <= idx < e or s < end <= e for s, e in matched_spans):
+                    continue
+                full_token = _extract_path_token(line, idx)
+                token_end = idx + len(full_token)
+                matched_spans.append((idx, max(end, token_end)))
+                if _path_allowed_by_goal(
+                    full_token, root, goal, prefix_allowed_roots=prefix_allowed_roots
+                ):
+                    continue
+                trimmed_token = full_token.rstrip("/")
+                shown = f"{root}/…" if len(trimmed_token) > len(root) else root
+                issues.append(
+                    f"{file_path} 第 {line_no} 行写进了服务器内部路径 {shown}，项目文件里不应该出现"
+                )
+
+        if host_re is not None:
+            for m in host_re.finditer(line):
+                s, e = m.span()
+                if any(ms <= s < me or ms < e <= me for ms, me in matched_spans):
+                    continue
+                issues.append(
+                    f"{file_path} 第 {line_no} 行写进了服务器主机名 {host}，项目文件里不应该出现"
+                )
+                break
+
+        secret_kind = _detect_secret_kind(line)
+        if secret_kind is not None:
+            issues.append(
+                f"{file_path} 第 {line_no} 行写进了{secret_kind}，项目文件里不应该出现"
+            )
+
+    return issues
+
+
 def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, current_sha: str,
                           fingerprint: str, analysis_plan: str,
                           implementer_summary: str, acceptance_criteria: str,
                           validation_results: list[dict[str, Any]] | None = None,
                           discussion_context: str = "",
                           project_notes: str = "",
-                          uses_check_script: bool | None = None) -> str:
+                          uses_check_script: bool | None = None,
+                          today: str | None = None) -> str:
     """Independent reviewer gets actual acceptance criteria, analysis plan,
     the real diff from captured ``base_sha`` through committed + uncommitted
     candidate changes, base SHA, fingerprint, and supervisor-executed operator
@@ -6706,11 +7076,20 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
         except OSError:
             check_sh_exists = False
 
+    server_date = (today or datetime.now().strftime("%Y-%m-%d")).strip()
     instruction = (
         "You are an INDEPENDENT code reviewer. Verify the implementation ACTUALLY works.\n"
         "Inspect the repository files and candidate diff yourself using read-only file access "
         "(do not create, modify, or delete files, and do not attempt mutation channels).\n"
         "You have strict read-only permissions; any write attempt is a review violation.\n"
+        f"Today is {server_date} (server date). Dates written into files must not contradict it.\n"
+        "Content-quality rule: Reject this round (`passed: false`) when user-facing text "
+        "(README, docs, UI strings, comments meant for users) states things that are false "
+        "for this repository (dates, features that do not exist, wrong commands) or exposes "
+        "internal infrastructure; list each problem in Chinese in `issues`.\n"
+        "Usefulness rule: Reject this round (`passed: false`) if the change does not move "
+        "the stated goal forward (e.g. only reformatting) unless the goal asked for it, "
+        "and list the reason in Chinese in `issues`.\n"
     )
     if uses_check_script and check_sh_exists:
         instruction += (
