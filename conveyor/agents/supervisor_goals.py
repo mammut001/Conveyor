@@ -996,7 +996,13 @@ def get_goal_diff(settings: Any, goal_id: str) -> dict[str, Any]:
     return {"goal_id": goal["id"], **payload}
 
 
-def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:
+def stop_goal(
+    server: Any,
+    settings: Any,
+    goal_id: str,
+    *,
+    post_report: bool = True,
+) -> dict[str, Any]:
     """User stops the goal: state → `stopped`, and the active task (if any) is cancelled."""
     svc.require_enabled(settings)
     goal = _get_goal_row(settings, goal_id)
@@ -1026,7 +1032,8 @@ def stop_goal(server: Any, settings: Any, goal_id: str) -> dict[str, Any]:
             except svc.SupervisorServiceError:
                 log.warning("goal %s: cancelling task %s failed", goal_id, tid, exc_info=True)
 
-    _on_goal_terminal(settings, updated)
+    if post_report:
+        _on_goal_terminal(settings, updated)
     _wake_goal_worker(server, settings)
     return get_goal(settings, goal_id)
 
@@ -1554,28 +1561,54 @@ def _is_check_script_entry(entry: Any) -> bool:
     return "scripts/check.sh" in str(entry.get("command") or "")
 
 
-def _last_round_check_script_passed(settings: Any, iterations: list[dict[str, Any]]) -> bool | None:
+_CHECK_SCRIPT_STATUS_LINES = {
+    "passed": "自动检查：scripts/check.sh（最后一轮 通过）",
+    "failed": "自动检查：scripts/check.sh（最后一轮 没通过）",
+    "not_run": "自动检查：scripts/check.sh（最后一轮没有跑到检查就停了）",
+    "never_ran": "自动检查：scripts/check.sh（还没有跑过检查）",
+}
+
+
+def _task_check_script_passed(settings: Any, task_id: str) -> bool | None:
+    """Return the stored `check-script` outcome for `task_id`, or None if validation did not run."""
+    tid = str(task_id or "").strip()
+    if not tid or settings is None or not getattr(settings, "codex_memory_root", ""):
+        return None
+    try:
+        acc = ags.latest_acceptance(settings, tid)
+    except Exception:
+        return None
+    if not isinstance(acc, dict):
+        return None
+    checks = acc.get("executed_checks") or []
+    if not isinstance(checks, list):
+        return None
+    for chk in checks:
+        if _is_check_script_entry(chk):
+            return bool(chk.get("passed"))
+    return None
+
+
+def _last_round_check_script_status(settings: Any, iterations: list[dict[str, Any]]) -> str:
+    """Classify `scripts/check.sh` outcome using stored validation results only."""
     ran = [it for it in iterations if _iteration_ran(it)]
     if not ran:
-        return None
-    last_it = ran[-1]
-    task_id = str(last_it.get("task_id") or "").strip()
-    if task_id and settings is not None and getattr(settings, "codex_memory_root", ""):
-        try:
-            acc = ags.latest_acceptance(settings, task_id)
-            if isinstance(acc, dict):
-                checks = acc.get("executed_checks") or []
-                if isinstance(checks, list):
-                    for chk in checks:
-                        if _is_check_script_entry(chk):
-                            return bool(chk.get("passed"))
-        except Exception:
-            pass
-    return bool(
-        last_it.get("passed")
-        or last_it.get("decision") == DECISION_ACHIEVED
-        or last_it.get("task_final_state") == "completed"
-    )
+        return "never_ran"
+    last_result = _task_check_script_passed(settings, str(ran[-1].get("task_id") or ""))
+    if last_result is True:
+        return "passed"
+    if last_result is False:
+        return "failed"
+    return "not_run"
+
+
+def _last_round_check_script_passed(settings: Any, iterations: list[dict[str, Any]]) -> bool | None:
+    status = _last_round_check_script_status(settings, iterations)
+    if status == "passed":
+        return True
+    if status == "failed":
+        return False
+    return None
 
 
 def _resolve_report_scope(
@@ -1704,13 +1737,8 @@ def _build_finish_report_bundle(
         lines.append(f"原因：{_clip_report_detail(stop_reason)}")
 
     if _repo_uses_check_script(settings, goal):
-        check_passed = _last_round_check_script_passed(settings, iterations)
-        if check_passed is True:
-            lines.append("自动检查：scripts/check.sh（最后一轮 通过）")
-        elif check_passed is False:
-            lines.append("自动检查：scripts/check.sh（最后一轮 没通过）")
-        else:
-            lines.append("自动检查：scripts/check.sh（尚未运行）")
+        check_status = _last_round_check_script_status(settings, iterations)
+        lines.append(_CHECK_SCRIPT_STATUS_LINES[check_status])
 
     if scope["commits_ahead"] > 0 and scope["branch"]:
         lines.append(f"改动在工作目录 {scope['branch']}，还没有合并到主分支。")
@@ -1814,6 +1842,11 @@ def _on_goal_terminal(settings: Any, goal: dict[str, Any]) -> None:
             _record_finish_report_card(settings, goal_id, str(card["id"]))
     except Exception:
         log.warning("goal %s: failed to post finish report", goal_id, exc_info=True)
+
+
+def post_finish_report(settings: Any, goal: dict[str, Any]) -> None:
+    """Idempotently post the goal finish report to web chat."""
+    _on_goal_terminal(settings, goal)
 
 
 def _finish_goal(
