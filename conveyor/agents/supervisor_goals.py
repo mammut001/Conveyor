@@ -412,6 +412,21 @@ def _compute_remaining_seconds(deadline_at: str | None) -> int | None:
     return math.ceil(delta)
 
 
+def _goal_usage(settings: Any, iterations: list[dict[str, Any]]) -> dict[str, int]:
+    """Goal total model usage: sum over the tasks of its rounds.
+
+    Rounds that never produced a task contribute nothing, and tasks whose runs
+    reported no usage stay at zero (the per-task counts carry that signal).
+    """
+    task_ids = [str(it.get("task_id") or "") for it in iterations if it.get("task_id")]
+    usage_by_task = ags.tasks_usage(settings, task_ids)
+    total = ags.empty_usage()
+    for entry in usage_by_task.values():
+        for key in total:
+            total[key] += int(entry.get(key) or 0)
+    return total
+
+
 def _enrich_goal_dict(goal: dict[str, Any], iterations: list[dict[str, Any]]) -> dict[str, Any]:
     rounds_total = sum(1 for it in iterations if _iteration_ran(it))
     rounds_passed = sum(
@@ -911,6 +926,7 @@ def create_goal(server: Any, settings: Any, body: dict[str, Any]) -> dict[str, A
         conn.close()
 
     goal = _enrich_goal_dict(_get_goal_row(settings, goal_id), [])
+    goal["usage"] = _goal_usage(settings, [])
     goal["iterations"] = []
     goal["iterations_used"] = 0
     svc.ensure_server_worker(server, settings, wake=True)
@@ -931,6 +947,7 @@ def list_goals(settings: Any) -> list[dict[str, Any]]:
         raw_goal = _goal_row_to_dict(row)
         iters = _iterations(settings, raw_goal["id"])
         goal = _enrich_goal_dict(raw_goal, iters)
+        goal["usage"] = _goal_usage(settings, iters)
         goal["iterations_used"] = len(iters)
         goals.append(goal)
     return goals
@@ -948,6 +965,7 @@ def get_goal(settings: Any, goal_id: str) -> dict[str, Any]:
         task = ags.get_task(settings, task_id)
         item["task_state"] = str(task.get("state") or "") if task else "missing"
     goal = _enrich_goal_dict(raw_goal, iterations)
+    goal["usage"] = _goal_usage(settings, iterations)
     goal["iterations"] = iterations
     goal["iterations_used"] = len(iterations)
     return goal
@@ -1719,9 +1737,19 @@ def _build_finish_report_bundle(
     scope = _resolve_report_scope(settings, goal, iterations)
     elapsed_zh = _format_elapsed_zh(goal.get("created_at"), goal.get("updated_at"))
 
+    usage = goal.get("usage")
+    if not isinstance(usage, dict):
+        # Older callers (and terminal snapshots taken before usage was attached)
+        # may not carry it; never invent a zero in that case, just read it.
+        usage = _goal_usage(settings, iterations)
+    usage_phrase = ags.usage_summary_phrase(usage)
+    rounds_line = f"跑了 {rounds_total} 轮，通过 {rounds_passed} 轮，{elapsed_zh}"
+    if usage_phrase:
+        rounds_line += f"，{usage_phrase}"
+
     lines: list[str] = [
         f"{scope['repo_name']} 的目标结束了：{label}。",
-        f"跑了 {rounds_total} 轮，通过 {rounds_passed} 轮，{elapsed_zh}。",
+        f"{rounds_line}。",
     ]
 
     passed_titles: list[str] = []
@@ -1885,6 +1913,7 @@ def _finish_goal(
         resume_at=None,
         updated_at=now,
     )
+    updated["usage"] = _goal_usage(settings, _iterations(settings, goal["id"]))
     log.info("goal %s -> %s (%s)", goal["id"], state, updated.get("stop_reason") or updated.get("question") or "")
     # Tell the owner on Telegram / Feishu / Web Push. Non-blocking and idempotent;
     # `stopped` is skipped because the owner stopped the goal themselves.

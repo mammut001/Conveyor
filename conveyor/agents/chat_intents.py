@@ -1879,6 +1879,10 @@ def _handle_progress_intent(
     if rem_text:
         parts.append(rem_text)
     parts.append(f"已跑 {rounds_total} 轮 / 通过 {rounds_passed} 轮")
+    # 已经花了多少 token：只有真的有执行者报告了用量才说，绝不编一个 0。
+    usage_phrase = ags.usage_summary_phrase(detail.get("usage"))
+    if usage_phrase:
+        parts.append(usage_phrase)
     line1 = "，".join(parts) + "。"
     if last_round_title:
         text = f"{line1}\n最近一轮：{last_round_title}"
