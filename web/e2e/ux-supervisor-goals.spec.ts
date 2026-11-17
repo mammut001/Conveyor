@@ -1169,7 +1169,7 @@ test('mock fixture: an English backend error becomes one Chinese line, never the
   await expect(form).not.toContainText('claude binary not found')
 })
 
-test('mock fixture: read-only worktree shows the same read-only banner and disables 开始', async ({ page }) => {
+test('mock fixture: read-only worktree shows the create-worktree card and no goal form', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await installGoalsMockFixture(page)
   await page.goto('/#code')
@@ -1179,8 +1179,11 @@ test('mock fixture: read-only worktree shows the same read-only banner and disab
   await page.getByRole('tab', { name: '目标' }).click()
 
   const pane = page.locator('.sup-goals-scroll')
-  await expect(pane.getByText('当前为只读工作目录（主分支）')).toBeVisible()
-  await expect(pane.getByRole('button', { name: '开始', exact: true })).toBeDisabled()
+  await expect(pane.getByRole('region', { name: '只读工作目录' })).toContainText('这是只读的主分支，不能直接在这里改。')
+  await expect(pane.getByRole('button', { name: '新建工作目录并开始' })).toBeVisible()
+  // The unusable form is gone entirely — not merely disabled.
+  await expect(pane.getByRole('region', { name: '描述你想要的结果' })).toHaveCount(0)
+  await expect(pane.getByRole('button', { name: '开始', exact: true })).toHaveCount(0)
 })
 
 test('mock fixture: phone 390px keeps the 目标 tab inside the viewport with 40px buttons', async ({ page }) => {

@@ -13,7 +13,7 @@ import {
 import { ChangedFileList } from './TaskParts'
 import SupervisorChecks from './SupervisorChecks'
 import ProjectNotesCard from './ProjectNotes'
-import SupervisorGoals, { SupervisorGoalsProbe } from './SupervisorGoals'
+import SupervisorGoals, { SupervisorGoalsProbe, type Goal } from './SupervisorGoals'
 import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 import { goalRoundTaskTitle, parseGoalRoundTask, goalRoundKey } from '../taskText'
@@ -72,6 +72,8 @@ export type SupervisorWorktree = {
   active_task_id?: string
   active_task_state?: string | null
   chat_session_id?: string
+  /** 创建工作目录的时间；老服务器不带这个字段，读的时候按「没有」处理。 */
+  created_at?: string
 }
 
 export type SupervisorRepo = {
@@ -594,6 +596,126 @@ function saveContext(repoId: string, worktreeId: string): void {
   } catch {
     // Ignore storage errors
   }
+}
+
+/** ISO 时间戳 → 毫秒；读不到（或老服务器不带这个字段）就当 0。 */
+function activityTimestamp(value?: string | null): number {
+  if (!value) return 0
+  const ms = Date.parse(value)
+  return Number.isNaN(ms) ? 0 : ms
+}
+
+/**
+ * 没有保存的上下文（或保存的那个仓库 / 工作目录已经不在）时，老板应该落在
+ * 「最近还在忙」的地方：先按目标和任务最近的 updated_at 挑一个受托管的工作目录，
+ * 一点活动都没有就按工作目录自己的创建时间，最后才退回列表里的第一个仓库。
+ */
+export function pickMostRecentContext(
+  repos: SupervisorRepo[],
+  goals: Goal[],
+  tasks: SupervisorTask[],
+): { repoId: string; worktreeId: string } {
+  const activity = new Map<string, number>()
+  const bump = (repoId: string, worktreeId: string, at?: string | null) => {
+    if (!repoId || !worktreeId) return
+    const key = `${repoId}:${worktreeId}`
+    const ms = activityTimestamp(at)
+    if (ms > (activity.get(key) || 0)) activity.set(key, ms)
+  }
+  for (const goal of goals || []) {
+    bump(goal.repo_id || '', goal.worktree_id || '', goal.updated_at || goal.created_at)
+  }
+  for (const task of tasks || []) {
+    const meta = task.metadata || {}
+    bump(meta.repo_id || '', meta.worktree_id || '', task.updated_at || task.created_at)
+  }
+
+  let busiest: { repoId: string; worktreeId: string; at: number; locked: boolean } | null = null
+  let newest: { repoId: string; worktreeId: string; at: number; locked: boolean } | null = null
+  // 时间戳相同时，没锁定的工作目录赢（和旧实现「优先选没锁定的」保持一致）。
+  const better = (
+    current: { at: number; locked: boolean } | null,
+    candidate: { at: number; locked: boolean },
+  ) => !current || candidate.at > current.at || (candidate.at === current.at && current.locked && !candidate.locked)
+  for (const repo of repos) {
+    for (const wt of repo.worktrees || []) {
+      // 主分支和未托管目录都只读，不能作为「接着干活」的落点。
+      if (wt.is_main || !wt.managed) continue
+      const at = activity.get(`${repo.id}:${wt.id}`) || 0
+      if (at > 0) {
+        const busy = { repoId: repo.id, worktreeId: wt.id, at, locked: Boolean(wt.locked) }
+        if (better(busiest, busy)) busiest = busy
+      }
+      const fresh = {
+        repoId: repo.id,
+        worktreeId: wt.id,
+        at: activityTimestamp(wt.created_at),
+        locked: Boolean(wt.locked),
+      }
+      if (better(newest, fresh)) newest = fresh
+    }
+  }
+  if (busiest) return { repoId: busiest.repoId, worktreeId: busiest.worktreeId }
+  if (newest) return { repoId: newest.repoId, worktreeId: newest.worktreeId }
+  return { repoId: repos[0]?.id || '', worktreeId: '' }
+}
+
+/**
+ * 只读工作目录（主分支 / 未托管目录）上代替派发 / 目标表单的那一张卡：
+ * 一句话说清为什么不能在这里改，一个主按钮去新建工作目录，
+ * 再把这个仓库已有的受托管工作目录列出来，一键跳过去。
+ */
+export function SupervisorReadOnlyWorktreeCard({
+  repo,
+  worktree,
+  busy,
+  error,
+  onCreateWorktree,
+  onSelectWorktree,
+}: {
+  repo: SupervisorRepo
+  worktree: SupervisorWorktree
+  busy?: boolean
+  error?: string
+  onCreateWorktree: (repoId: string) => void | Promise<unknown>
+  onSelectWorktree?: (repoId: string, worktreeId: string) => void
+}) {
+  const kindLabel = worktree.is_main ? '主分支' : '未托管目录'
+  const managed = (repo.worktrees || []).filter(w => !w.is_main && w.managed).slice(0, 3)
+  return (
+    <section className="sup-card sup-readonly-card" aria-label="只读工作目录">
+      <div className="sup-readonly-card-text">
+        <strong>这是只读的{kindLabel}，不能直接在这里改。</strong>
+        <span>新建一个工作目录，在独立副本里改；这个目录里的内容仍然可以随便看。</span>
+      </div>
+      <div className="sup-readonly-card-actions">
+        <button
+          type="button"
+          className="shell-button primary"
+          disabled={busy}
+          onClick={() => { void onCreateWorktree(repo.id) }}
+        >
+          {busy ? '正在新建…' : '新建工作目录并开始'}
+        </button>
+        {managed.map(w => (
+          <button
+            key={w.id}
+            type="button"
+            className="shell-button"
+            onClick={() => onSelectWorktree?.(repo.id, w.id)}
+          >
+            去 {w.branch}
+          </button>
+        ))}
+      </div>
+      {error && (
+        <div className="sup-banner sup-banner--error" role="alert">
+          <strong>没有新建成功</strong>
+          <span>{error}</span>
+        </div>
+      )}
+    </section>
+  )
 }
 
 function shortSha(sha?: string | null): string {
@@ -1952,18 +2074,47 @@ export function SupervisorWorkspace({
   }, [token])
 
   // Choose sensible initial repo/worktree when repositories arrive
-  const reconcileSelection = useCallback((repos: SupervisorRepo[], currentRepoId: string, currentWtId: string) => {
+  const reconcileSelection = useCallback((
+    repos: SupervisorRepo[],
+    currentRepoId: string,
+    currentWtId: string,
+    activity?: { goals: Goal[]; tasks: SupervisorTask[] },
+  ) => {
     if (!repos.length) return { repoId: '', worktreeId: '' }
-    const repo = repos.find(r => r.id === currentRepoId) || repos[0]
-    const wts = repo.worktrees || []
-    const matchedWt = wts.find(w => w.id === currentWtId)
-    if (matchedWt) return { repoId: repo.id, worktreeId: matchedWt.id }
+    const repo = repos.find(r => r.id === currentRepoId)
+    if (repo) {
+      const matchedWt = (repo.worktrees || []).find(w => w.id === currentWtId)
+      // 保存的上下文还有效：老板上次选的地方仍然赢，别乱跳。
+      if (matchedWt) return { repoId: repo.id, worktreeId: matchedWt.id }
+    }
+    // 没有保存的上下文，或保存的那个已经不在：落到最近还在忙的受托管工作目录。
+    if (activity) {
+      const recent = pickMostRecentContext(repos, activity.goals, activity.tasks)
+      if (recent.worktreeId) return recent
+    }
+    const fallbackRepo = repo || repos[0]
+    const wts = fallbackRepo.worktrees || []
     // Prefer a managed unlocked worktree first, else first worktree
     const preferred = wts.find(w => w.managed && !w.is_main && !w.locked)
       || wts.find(w => w.managed && !w.is_main)
       || wts[0]
-    return { repoId: repo.id, worktreeId: preferred?.id || '' }
+    return { repoId: fallbackRepo.id, worktreeId: preferred?.id || '' }
   }, [])
+
+  // 「最近还在忙」的快照：目标和任务各自的 updated_at，用来挑初始落点（读不到就按没有算）。
+  const loadActivitySnapshot = useCallback(async (repos: SupervisorRepo[]) => {
+    if (!repos.length) return { goals: [] as Goal[], tasks: [] as SupervisorTask[] }
+    const [goalsRes, tasksRes] = await Promise.allSettled([
+      apiCall<{ goals?: Goal[] }>('/api/supervisor/goals'),
+      apiCall<{ tasks?: SupervisorTask[] }>('/api/supervisor/tasks'),
+    ])
+    const goals = goalsRes.status === 'fulfilled' ? goalsRes.value.goals : undefined
+    const tasks = tasksRes.status === 'fulfilled' ? tasksRes.value.tasks : undefined
+    return {
+      goals: Array.isArray(goals) ? goals : [],
+      tasks: Array.isArray(tasks) ? tasks : [],
+    }
+  }, [apiCall])
 
   const loadBootstrap = useCallback(async () => {
     if (!token) return
@@ -1982,8 +2133,14 @@ export function SupervisorWorkspace({
       const repos = Array.isArray(repoRes.value.repositories) ? repoRes.value.repositories : []
       setRepositories(repos)
       setReposError('')
+      // 保存的上下文还有效就别动它；失效（或从没保存过）时先读最近的活动，再决定落在哪。
+      const savedRepo = repos.find(r => r.id === savedContext.repoId)
+      const savedWorktree = savedRepo?.worktrees?.find(w => w.id === savedContext.worktreeId)
+      const activity = savedRepo && savedWorktree
+        ? undefined
+        : await loadActivitySnapshot(repos)
       setSelectedRepoId(prevRepoId => {
-        const next = reconcileSelection(repos, prevRepoId, selectedWorktreeId)
+        const next = reconcileSelection(repos, prevRepoId, selectedWorktreeId, activity)
         if (next.worktreeId !== selectedWorktreeId) {
           setSelectedWorktreeId(next.worktreeId)
         }
@@ -1994,7 +2151,7 @@ export function SupervisorWorkspace({
       setReposError(repoRes.reason instanceof Error ? repoRes.reason.message : '无法读取仓库列表')
     }
     setInitialLoading(false)
-  }, [apiCall, reconcileSelection, selectedWorktreeId, token])
+  }, [apiCall, loadActivitySnapshot, reconcileSelection, savedContext, selectedWorktreeId, token])
 
   // Re-read the repository list so validation_source badges stay honest after a save.
   const refreshRepositories = useCallback(async () => {
@@ -3086,6 +3243,8 @@ export function SupervisorWorkspace({
             onDraftOutcomeUsed={handleGoalDraftUsed}
             onOpenWorkers={onOpenWorkers}
             workersData={workersData}
+            onCreateWorktree={handleCreateWorktree}
+            onSelectWorktree={(repoId, worktreeId) => selectWorktreeContext(repoId, worktreeId)}
           />
         ) : (
           <div className="sup-workbench-split">
@@ -3093,26 +3252,6 @@ export function SupervisorWorkspace({
               className="sup-task-pane"
               style={narrowViewport && subTab === 'chat' ? { display: 'none' } : undefined}
             >
-              {isReadOnlyWorktree && (
-                <div className="sup-banner sup-banner--readonly" role="status">
-                  <div className="sup-banner-text">
-                    <strong>当前为只读工作目录（{selectedWorktree.is_main ? '主分支' : '未托管目录'}）</strong>
-                    <span>主工作目录与未托管目录仅支持只读查看。请新建工作目录，在独立副本里派发任务。</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="shell-button primary"
-                    onClick={() => {
-                      setExpandedRepos(prev => ({ ...prev, [selectedRepo.id]: true }))
-                      setOpenCreateForRepoId(selectedRepo.id)
-                      if (narrowViewport) setMobileRepoDrawerOpen(true)
-                    }}
-                  >
-                    新建工作目录
-                  </button>
-                </div>
-              )}
-
               {!isReadOnlyWorktree && isLockedWorktree && (
                 <div className="sup-banner sup-banner--locked" role="status">
                   <strong>当前工作目录已锁定（任务执行中）</strong>
@@ -3124,109 +3263,115 @@ export function SupervisorWorkspace({
 
               <ProjectNotesCard key={selectedRepo.id} token={token} repoId={selectedRepo.id} repoName={selectedRepo.name} />
 
-              <section className="sup-card sup-dispatch-card" aria-label="任务目标与派发">
-                <div className="sup-card-head">
-                  <h4>当前任务目标</h4>
-                  <span className="sup-card-hint">普通对话不会自动派发，确认目标后点击「开始执行」</span>
-                </div>
-
-                {currentDraft.fromSuggestion && (
-                  <div className="sup-suggestion-notice" role="status">
-                    {handoffNotice(currentDraft.handoffMode, narrowViewport)}
+              {isReadOnlyWorktree ? (
+                <SupervisorReadOnlyWorktreeCard
+                  repo={selectedRepo}
+                  worktree={selectedWorktree}
+                  busy={createWorktreeBusyRepoId === selectedRepo.id}
+                  error={createWorktreeError}
+                  onCreateWorktree={handleCreateWorktree}
+                  onSelectWorktree={(repoId, worktreeId) => selectWorktreeContext(repoId, worktreeId)}
+                />
+              ) : (
+                <section className="sup-card sup-dispatch-card" aria-label="任务目标与派发">
+                  <div className="sup-card-head">
+                    <h4>当前任务目标</h4>
+                    <span className="sup-card-hint">普通对话不会自动派发，确认目标后点击「开始执行」</span>
                   </div>
-                )}
 
-                {/* N25: while a draft exists the owner can see it is kept on this device. */}
-                {(currentDraft.goal.trim() || currentDraft.acceptanceCriteria.trim()) && (
-                  <p className="sup-draft-hint" role="status">草稿已自动保存，刷新页面也不会丢；点「开始执行」后清除。</p>
-                )}
+                  {currentDraft.fromSuggestion && (
+                    <div className="sup-suggestion-notice" role="status">
+                      {handoffNotice(currentDraft.handoffMode, narrowViewport)}
+                    </div>
+                  )}
 
-                <form className="composer sup-goal-composer" onSubmit={e => void handleCreateAndDispatch(e)}>
-                  <label htmlFor="sup-goal-textarea" className="sr-only">任务目标</label>
-                  <textarea
-                    id="sup-goal-textarea"
-                    ref={goalInputRef}
-                    aria-label="任务目标"
-                    placeholder={
-                      isReadOnlyWorktree
-                        ? '只读工作目录不能派发任务，请先新建工作目录…'
-                        : '输入要在这个工作目录完成的目标（例如：为项目页补充仓库搜索与错误提示）…'
-                    }
-                    rows={3}
-                    value={currentDraft.goal}
-                    disabled={isReadOnlyWorktree || dispatchBusy}
-                    onChange={e => updateCurrentDraft({ goal: e.target.value })}
-                  />
+                  {/* N25: while a draft exists the owner can see it is kept on this device. */}
+                  {(currentDraft.goal.trim() || currentDraft.acceptanceCriteria.trim()) && (
+                    <p className="sup-draft-hint" role="status">草稿已自动保存，刷新页面也不会丢；点「开始执行」后清除。</p>
+                  )}
 
-                  <div className="sup-criteria-row">
-                    <label htmlFor="sup-criteria-input">验收标准（可选）</label>
-                    <input
-                      id="sup-criteria-input"
-                      aria-label="验收标准"
-                      type="text"
-                      placeholder="例如：通过单元测试与构建检查，不改动后端接口"
-                      value={currentDraft.acceptanceCriteria}
-                      disabled={isReadOnlyWorktree || dispatchBusy}
-                      onChange={e => updateCurrentDraft({ acceptanceCriteria: e.target.value })}
+                  <form className="composer sup-goal-composer" onSubmit={e => void handleCreateAndDispatch(e)}>
+                    <label htmlFor="sup-goal-textarea" className="sr-only">任务目标</label>
+                    <textarea
+                      id="sup-goal-textarea"
+                      ref={goalInputRef}
+                      aria-label="任务目标"
+                      placeholder="输入要在这个工作目录完成的目标（例如：为项目页补充仓库搜索与错误提示）…"
+                      rows={3}
+                      value={currentDraft.goal}
+                      disabled={dispatchBusy}
+                      onChange={e => updateCurrentDraft({ goal: e.target.value })}
                     />
-                  </div>
 
-                  <SupervisorRoleBar
-                    capabilities={capabilities}
-                    effectiveRoles={effectiveRoles}
-                    onChangeRole={handleRoleChange}
-                    onOpenWorkers={onOpenWorkers}
-                    disabled={isReadOnlyWorktree || dispatchBusy}
-                    apiCall={apiCall}
-                    workersData={workersData}
-                  />
-
-                  {unavailableRoleReasons.length > 0 && (
-                    <div className="sup-banner sup-banner--error" role="alert">
-                      <strong>角色执行器不可用</strong>
-                      <span>{unavailableRoleReasons.join('；')}</span>
+                    <div className="sup-criteria-row">
+                      <label htmlFor="sup-criteria-input">验收标准（可选）</label>
+                      <input
+                        id="sup-criteria-input"
+                        aria-label="验收标准"
+                        type="text"
+                        placeholder="例如：通过单元测试与构建检查，不改动后端接口"
+                        value={currentDraft.acceptanceCriteria}
+                        disabled={dispatchBusy}
+                        onChange={e => updateCurrentDraft({ acceptanceCriteria: e.target.value })}
+                      />
                     </div>
-                  )}
 
-                  {dispatchError && (
-                    <div className="sup-banner sup-banner--error" role="alert">
-                      <strong>派发未完成</strong>
-                      <span>{dispatchError}</span>
-                      {dispatchErrorCode === 'executor_check_failed' && onOpenWorkers && (
-                        <button type="button" className="sup-role-guidance-link" onClick={onOpenWorkers}>
-                          去执行者页面测试
-                        </button>
-                      )}
-                      {currentPending && (
-                        <small>已保留请求标识（{currentPending.taskId ? `任务 ${currentPending.taskId}` : `请求 ${currentPending.requestId.slice(0, 8)}`}），重试不会重复创建任务。</small>
-                      )}
+                    <SupervisorRoleBar
+                      capabilities={capabilities}
+                      effectiveRoles={effectiveRoles}
+                      onChangeRole={handleRoleChange}
+                      onOpenWorkers={onOpenWorkers}
+                      disabled={dispatchBusy}
+                      apiCall={apiCall}
+                      workersData={workersData}
+                    />
+
+                    {unavailableRoleReasons.length > 0 && (
+                      <div className="sup-banner sup-banner--error" role="alert">
+                        <strong>角色执行器不可用</strong>
+                        <span>{unavailableRoleReasons.join('；')}</span>
+                      </div>
+                    )}
+
+                    {dispatchError && (
+                      <div className="sup-banner sup-banner--error" role="alert">
+                        <strong>派发未完成</strong>
+                        <span>{dispatchError}</span>
+                        {dispatchErrorCode === 'executor_check_failed' && onOpenWorkers && (
+                          <button type="button" className="sup-role-guidance-link" onClick={onOpenWorkers}>
+                            去执行者页面测试
+                          </button>
+                        )}
+                        {currentPending && (
+                          <small>已保留请求标识（{currentPending.taskId ? `任务 ${currentPending.taskId}` : `请求 ${currentPending.requestId.slice(0, 8)}`}），重试不会重复创建任务。</small>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="sup-dispatch-footer">
+                      <span className="sup-dispatch-context-tag">
+                        在这里改：<code>{selectedRepo.name}</code> / <code>{selectedWorktree.branch}</code>
+                      </span>
+                      <button
+                        type="submit"
+                        className="send-button primary"
+                        disabled={
+                          !currentDraft.goal.trim()
+                          || dispatchBusy
+                          || isLockedWorktree
+                          || unavailableRoleReasons.length > 0
+                        }
+                      >
+                        {dispatchBusy
+                          ? '正在派发…'
+                          : currentPending
+                            ? '重试派发'
+                            : '开始执行'}
+                      </button>
                     </div>
-                  )}
-
-                  <div className="sup-dispatch-footer">
-                    <span className="sup-dispatch-context-tag">
-                      在这里改：<code>{selectedRepo.name}</code> / <code>{selectedWorktree.branch}</code>
-                    </span>
-                    <button
-                      type="submit"
-                      className="send-button primary"
-                      disabled={
-                        !currentDraft.goal.trim()
-                        || dispatchBusy
-                        || isReadOnlyWorktree
-                        || isLockedWorktree
-                        || unavailableRoleReasons.length > 0
-                      }
-                    >
-                      {dispatchBusy
-                        ? '正在派发…'
-                        : currentPending
-                          ? '重试派发'
-                          : '开始执行'}
-                    </button>
-                  </div>
-                </form>
-              </section>
+                  </form>
+                </section>
+              )}
 
               {selectedTask && (
                 <section ref={taskCardRef} className="sup-card sup-active-task-card" aria-label="当前任务进度与结果">
