@@ -244,7 +244,9 @@ def _db_cache_key(path: Path) -> tuple[str, int, int] | None:
 def _ensure_schema(path: Path) -> None:
     """Initialize or migrate SQLite schema at most once per DB file/version.
 
-    Already-migrated databases perform zero writes and zero DDL statements.
+    Already-migrated databases run no migration at all; the one thing they may
+    still write is the ``usage_recording_since`` stamp, and only while it is
+    missing (a v4 database created before that stamp existed).
     """
     key = _db_cache_key(path)
     if key is not None and _INITIALIZED_DBS.get(key) == SCHEMA_VERSION:
@@ -267,6 +269,11 @@ def _ensure_schema(path: Path) -> None:
                         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='supervisor_tasks'"
                     ).fetchone()
                     if has_tasks is not None:
+                        # Already at this version: the only thing that can still be
+                        # missing is the recording stamp (a v4 database created
+                        # before the meta table existed). Once the row is there
+                        # the stamp call is a single read and no write.
+                        _stamp_usage_recording_since(conn, own_transaction=True)
                         new_key = _db_cache_key(path)
                         if new_key is not None:
                             _INITIALIZED_DBS[new_key] = SCHEMA_VERSION
@@ -285,6 +292,7 @@ def _ensure_schema(path: Path) -> None:
                     }
                     if col_name not in existing_cols:
                         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_ddl}")
+                _stamp_usage_recording_since(conn, own_transaction=False)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
                 conn.execute("COMMIT")
             except Exception:
@@ -430,6 +438,8 @@ CREATE TABLE IF NOT EXISTS supervisor_execution_usage (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_supervisor_execution_usage_task ON supervisor_execution_usage(task_id);
+-- The one-off recording stamp lives in supervisor_meta, created by
+-- _stamp_usage_recording_since (see _SCHEMA_META_TABLE).
 
 CREATE TABLE IF NOT EXISTS supervisor_deployments (
     id TEXT PRIMARY KEY,
@@ -462,6 +472,15 @@ CREATE INDEX IF NOT EXISTS idx_supervisor_deployment_stages_run ON supervisor_de
 
 _SCHEMA_STATEMENTS = tuple(s.strip() for s in _SCHEMA_MAIN.split(";") if s.strip())
 
+# Meta row holding the instant per-run usage recording began. Runs that started
+# before it simply predate recording, which is NOT the same as "this executor
+# failed to report"; the stamp is written once and never rewritten.
+_USAGE_RECORDING_SINCE_KEY = "usage_recording_since"
+_SCHEMA_META_TABLE = """CREATE TABLE IF NOT EXISTS supervisor_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+)"""
+
 _SCHEMA_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("supervisor_tasks", "content_fingerprint", "TEXT NOT NULL DEFAULT ''"),
     ("supervisor_acceptance", "evidence_path", "TEXT NOT NULL DEFAULT ''"),
@@ -480,6 +499,38 @@ _SCHEMA_MIGRATION_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("supervisor_executions", "owner_pid", "INTEGER"),
     ("supervisor_executions", "owner_process_identity", "TEXT NOT NULL DEFAULT ''"),
 )
+
+
+def _stamp_usage_recording_since(conn: sqlite3.Connection, *, own_transaction: bool) -> None:
+    """Write ``usage_recording_since`` once, the first time this DB is opened.
+
+    Called right after ``supervisor_execution_usage`` exists (fresh v4 migration)
+    and on the first open of an already-migrated database, so a database that
+    predates recording gets a stamp the moment it is upgraded. The value is
+    never rewritten: it marks when recording began, not when we last looked.
+    """
+    try:
+        conn.execute(_SCHEMA_META_TABLE)
+        row = conn.execute("SELECT value FROM supervisor_meta WHERE key = ?",
+                           (_USAGE_RECORDING_SINCE_KEY,)).fetchone()
+    except sqlite3.Error:
+        return
+    if row is not None and str(row[0] or "").strip():
+        return
+    if own_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("INSERT OR IGNORE INTO supervisor_meta (key, value) VALUES (?, ?)",
+                     (_USAGE_RECORDING_SINCE_KEY, _utc_now()))
+        if own_transaction:
+            conn.execute("COMMIT")
+    except Exception:
+        if own_transaction:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+        raise
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -2900,6 +2951,7 @@ def empty_usage() -> dict[str, int]:
         "cached_input_tokens": 0,
         "runs_with_usage": 0,
         "runs_without_usage": 0,
+        "runs_before_recording": 0,
     }
 
 
@@ -2953,21 +3005,40 @@ def usage_summary_phrase(usage: Any) -> str:
     """「用了约 3.4 万 token」plus the partial-reporting note, or "" with no usage.
 
     Empty means "nobody reported usage", which is different from "cost nothing";
-    the caller then shows nothing at all instead of a fabricated zero.
+    the caller then shows nothing at all instead of a fabricated zero. The one
+    exception is a goal whose runs all predate usage recording: there is no
+    number to show, so it says so instead of staying silent.
     """
     if not isinstance(usage, dict):
         return ""
     try:
         with_usage = int(usage.get("runs_with_usage") or 0)
         without_usage = int(usage.get("runs_without_usage") or 0)
+        before_recording = int(usage.get("runs_before_recording") or 0)
     except (TypeError, ValueError):
         return ""
     if with_usage <= 0:
+        if before_recording > 0:
+            return "这个目标是在开始记录用量之前跑的"
         return ""
     phrase = f"用了{format_tokens(usage_total_tokens(usage))}"
     if without_usage > 0:
         phrase += "（部分执行者没有报告用量）"
+    elif before_recording > 0:
+        phrase += "（更早的轮次还没开始记录用量）"
     return phrase
+
+
+def _usage_recording_since(conn: sqlite3.Connection) -> float:
+    """Epoch seconds when usage recording began, or 0.0 when this DB has no stamp."""
+    try:
+        row = conn.execute("SELECT value FROM supervisor_meta WHERE key = ?",
+                           (_USAGE_RECORDING_SINCE_KEY,)).fetchone()
+    except sqlite3.Error:
+        return 0.0
+    if row is None:
+        return 0.0
+    return _parse_iso_ts(row[0])
 
 
 def _store_execution_usage(conn: sqlite3.Connection, *, execution_id: str, task_id: str,
@@ -3032,20 +3103,27 @@ def _usage_for_tasks(conn: sqlite3.Connection,
     # Executor runs of this task that reported no usage at all (unknown, not zero).
     # Operator validation commands are shell checks, not model runs, so they are
     # never counted as "a run whose cost we do not know".
-    without = conn.execute(
-        f"""SELECT e.task_id AS task_id, COUNT(*) AS runs_without_usage
+    recording_since = _usage_recording_since(conn)
+    unknown = conn.execute(
+        f"""SELECT e.task_id AS task_id, e.started_at AS started_at
             FROM supervisor_executions e
             WHERE e.task_id IN ({placeholders})
               AND e.executor <> 'operator-validation'
               AND NOT EXISTS (SELECT 1 FROM supervisor_execution_usage u
-                              WHERE u.execution_id = e.execution_id)
-            GROUP BY e.task_id""",
+                              WHERE u.execution_id = e.execution_id)""",
         params,
     ).fetchall()
-    for row in without:
+    for row in unknown:
         tid = str(row["task_id"] or "")
-        if tid in result:
-            result[tid]["runs_without_usage"] = int(row["runs_without_usage"] or 0)
+        if tid not in result:
+            continue
+        # A run that started before recording began had no way to report: blaming
+        # its executor for a missing report would be wrong, so it is counted
+        # separately. Without a stamp at all nothing may be blamed either.
+        if recording_since <= 0 or _parse_iso_ts(row["started_at"]) < recording_since:
+            result[tid]["runs_before_recording"] += 1
+        else:
+            result[tid]["runs_without_usage"] += 1
     return result
 
 

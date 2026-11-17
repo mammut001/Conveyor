@@ -56,6 +56,8 @@ export type GoalUsage = {
   cached_input_tokens: number
   runs_with_usage: number
   runs_without_usage: number
+  /** 开始记录用量之前就跑完的执行轮次；老服务器不带这个字段，读的时候按 0 处理。 */
+  runs_before_recording?: number
 }
 
 export type Iteration = {
@@ -389,9 +391,19 @@ export function formatTokens(n?: number | null): string {
 export function goalUsageLine(goal?: { usage?: GoalUsage | null } | null): string {
   // 老服务器可能只带一部分字段，读的时候一律按「没有」处理，不抛错。
   const usage = goal?.usage as Partial<GoalUsage> | null | undefined
-  if (!usage || !(usage.runs_with_usage ?? 0)) return ''
+  if (!usage) return ''
+  const runsWithUsage = usage.runs_with_usage ?? 0
+  const runsWithoutUsage = usage.runs_without_usage ?? 0
+  // 开始记录用量之前就跑掉的轮次：不是执行者不报告，是那时候还没有记录。
+  const runsBeforeRecording = usage.runs_before_recording ?? 0
+  // 一条用量都没有，但这些轮次都早于记录起点：没有 token 数可显示，改成说明一句。
+  if (runsWithUsage <= 0) {
+    return runsBeforeRecording > 0 ? '这个目标是在开始记录用量之前跑的' : ''
+  }
   const total = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
-  const note = (usage.runs_without_usage ?? 0) > 0 ? '（部分执行者没有报告用量）' : ''
+  let note = ''
+  if (runsWithoutUsage > 0) note = '（部分执行者没有报告用量）'
+  else if (runsBeforeRecording > 0) note = '（更早的轮次还没开始记录用量）'
   return `已用${formatTokens(total)}${note}`
 }
 

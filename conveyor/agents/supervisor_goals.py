@@ -417,6 +417,9 @@ def _goal_usage(settings: Any, iterations: list[dict[str, Any]]) -> dict[str, in
 
     Rounds that never produced a task contribute nothing, and tasks whose runs
     reported no usage stay at zero (the per-task counts carry that signal).
+    ``runs_without_usage`` and ``runs_before_recording`` are summed too, so the
+    goal-level copy can tell "an executor stayed silent" from "that round
+    predates usage recording".
     """
     task_ids = [str(it.get("task_id") or "") for it in iterations if it.get("task_id")]
     usage_by_task = ags.tasks_usage(settings, task_ids)
