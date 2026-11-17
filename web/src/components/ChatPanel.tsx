@@ -26,6 +26,8 @@ export type ChatMessage = {
   role: 'user' | 'assistant';
   text: string;
   created_at: string;
+  /** A short system-style notice (理解指令 is down), never a model answer. */
+  notice?: boolean;
   subagents?: SubagentProgress[];
   interrupted?: boolean;
   /** A stored reply that was really a backend error: shown as a short notice, raw text under 详情. */
@@ -332,7 +334,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
         id: `hist-${idx}-${m.created_at || Date.now()}`,
         role: m.role,
         text: m.text,
-        failedReply: m.role === 'assistant' && !m.approval && !m.action_card && looksLikeRawError(m.text) ? m.text : undefined,
+        failedReply: m.role === 'assistant' && !m.approval && !m.action_card && m.kind !== 'notice' && looksLikeRawError(m.text) ? m.text : undefined,
+        notice: m.role === 'assistant' && m.kind === 'notice',
         taskSuggestion: m.task_suggestion,
         actionCard: m.action_card,
         originChannel: m.origin_channel,
@@ -788,6 +791,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   id: `asst-${Date.now()}`,
                   role: 'assistant',
                   text: payload.text,
+                  notice: payload.kind === 'notice',
                   taskSuggestion: payload.task_suggestion,
                   actionCard: payload.action_card,
                   created_at: new Date().toISOString(),
@@ -1025,6 +1029,16 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
                   <MessageTime value={message.created_at} />
                   <span className="chat-sent-check" aria-hidden="true">✓</span>
                 </footer>
+              </article>
+            );
+          }
+
+          if (message.notice) {
+            return (
+              <article key={message.id} className="transcript-message role-assistant chat-turn chat-system-notice" role="status">
+                <div className="transcript-content">
+                  <p className="formatted-paragraph">{message.text}</p>
+                </div>
               </article>
             );
           }

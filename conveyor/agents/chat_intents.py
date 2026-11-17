@@ -46,6 +46,8 @@ PENDING_TTL_SECONDS = 10 * 60
 MIN_DURATION_MINUTES = 30
 MAX_DURATION_MINUTES = 1440
 DEFAULT_TIMED_GOAL_OUTCOME = "按你的项目笔记找最值得做的改进"
+# One 「理解指令暂时用不了」 notice per chat session, not one per message.
+DECIDER_NOTICE_INTERVAL_SECONDS = 6 * 60 * 60
 
 _DB_INIT_LOCK = threading.Lock()
 _INITIALIZED_DBS: set[tuple[str, int, int]] = set()
@@ -100,6 +102,12 @@ CREATE TABLE IF NOT EXISTS chat_action_buttons (
     FOREIGN KEY(card_id) REFERENCES chat_action_cards(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_chat_action_buttons_card ON chat_action_buttons(card_id, sort_index);
+
+CREATE TABLE IF NOT EXISTS chat_decider_notices (
+    session_id TEXT PRIMARY KEY,
+    last_kind TEXT NOT NULL DEFAULT '',
+    last_notice_at REAL NOT NULL DEFAULT 0
+);
 """
 
 
@@ -1158,6 +1166,84 @@ def _emit_plain_reply(port: Any, msg: Any, text: str) -> None:
     port.emit("message", {"text": text})
     if hasattr(port, "_persist_turn"):
         port._persist_turn(msg, text, kind="chat")
+
+
+def _emit_decider_notice(port: Any, msg: Any, text: str) -> None:
+    """Post one system-style notice; it never becomes this turn's final answer."""
+    port.emit("message", {"text": text, "kind": "notice"})
+    if not hasattr(port, "_persist_turn"):
+        return
+    try:
+        port._persist_turn(msg, text, kind="notice", final=False)
+    except TypeError:
+        # Ports that only know the plain signature still keep the notice in history.
+        port._persist_turn(msg, text, kind="notice")
+
+
+def _should_emit_decider_notice(settings: Any, session_id: str) -> bool:
+    """True at most once per 6 hours per chat session."""
+    if not session_id:
+        return False
+    conn = _connect(settings)
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS chat_decider_notices (
+                   session_id TEXT PRIMARY KEY,
+                   last_kind TEXT NOT NULL DEFAULT '',
+                   last_notice_at REAL NOT NULL DEFAULT 0
+               )"""
+        )
+        row = conn.execute(
+            "SELECT last_notice_at FROM chat_decider_notices WHERE session_id = ?",
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return True
+        return (time.time() - float(row["last_notice_at"] or 0.0)) >= DECIDER_NOTICE_INTERVAL_SECONDS
+    except Exception:
+        logger.exception("Failed reading the intent decider notice state")
+        return False
+    finally:
+        conn.close()
+
+
+def _mark_decider_notice(settings: Any, session_id: str, kind: str) -> None:
+    if not session_id:
+        return
+    conn = _connect(settings)
+    try:
+        conn.execute(
+            """INSERT INTO chat_decider_notices (session_id, last_kind, last_notice_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(session_id) DO UPDATE SET
+                   last_kind = excluded.last_kind,
+                   last_notice_at = excluded.last_notice_at""",
+            (session_id, kind or "", time.time()),
+        )
+        conn.commit()
+    except Exception:
+        logger.exception("Failed recording the intent decider notice")
+    finally:
+        conn.close()
+
+
+def _maybe_emit_decider_notice(settings: Any, session_id: str, port: Any, msg: Any) -> None:
+    """Tell the owner once that 理解指令 is down and this answer is plain chat."""
+    # The cheap gate first: most messages arrive while a notice is still fresh.
+    if not _should_emit_decider_notice(settings, session_id):
+        return
+    try:
+        health = intent_decider.get_decider_health(settings)
+    except Exception:
+        logger.debug("intent decider health unavailable", exc_info=True)
+        return
+    if not health.get("unhealthy"):
+        return
+    text = intent_decider.decider_fallback_notice(health)
+    if not text:
+        return
+    _emit_decider_notice(port, msg, text)
+    _mark_decider_notice(settings, session_id, str(health.get("last_error_kind") or ""))
 
 
 def _emit_card_reply(port: Any, msg: Any, text: str, card: dict[str, Any]) -> None:
@@ -2231,6 +2317,8 @@ async def maybe_handle_web_chat(
                 return True
             if decider_configured:
                 # Decider was configured and errored/timed out -> fall back to normal chat.
+                # Say so once when it is really unhealthy, without delaying the answer.
+                _maybe_emit_decider_notice(settings, session_id, port, msg)
                 return False
 
         # 4. Legacy optional chat-tier LLM fallback when no decider is configured.
