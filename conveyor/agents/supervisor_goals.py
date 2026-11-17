@@ -2463,7 +2463,22 @@ def _derive_round_title(
     return _display_title(candidate)
 
 
-def _task_failure_texts(settings: Any, task: dict[str, Any]) -> list[str]:
+# Executions the Supervisor runs itself (repo checks), not a model executor.
+# Their error text is command output: tracebacks and random worktree paths
+# ("sup-<ms-timestamp>-<hex>"), which must never be read as a quota message.
+NON_PROVIDER_EXECUTORS = frozenset({"operator-validation"})
+
+
+def _task_failure_texts(
+    settings: Any, task: dict[str, Any], *, provider_only: bool = False
+) -> list[str]:
+    """Texts that may explain a failed round.
+
+    ``provider_only`` keeps only what a model executor itself reported (the task
+    error plus its executions' errors, minus the Supervisor's own repo checks).
+    Repo check output and reviewer issues quote tracebacks and random paths, so
+    they are not evidence about the model's quota.
+    """
     texts: list[str] = []
     err = str(task.get("error") or "").strip()
     if err:
@@ -2472,12 +2487,16 @@ def _task_failure_texts(settings: Any, task: dict[str, Any]) -> list[str]:
     if task_id:
         try:
             for ex in ags.list_executions(settings, task_id=task_id, limit=10):
+                if provider_only and str(ex.get("executor") or "") in NON_PROVIDER_EXECUTORS:
+                    continue
                 for key in ("error", "error_message", "stderr"):
                     val = str(ex.get(key) or "").strip()
                     if val:
                         texts.append(val)
         except Exception:
             pass
+        if provider_only:
+            return texts
         try:
             acc = ags.latest_acceptance(settings, task_id)
             if isinstance(acc, dict):
@@ -2549,6 +2568,13 @@ def _has_cooling_or_over_threshold_worker(settings: Any, now_ts: float) -> bool:
 
 
 def _is_quota_failure(settings: Any, task: dict[str, Any]) -> bool:
+    """Whether a failed round failed because the model pool is out of quota.
+
+    Quota is a fact about the pool, so it is only inferred from structured pool
+    signals (the pool's own markers, cooling / over-threshold workers) or from a
+    provider's own quota message. Arbitrary failure text — repo check output,
+    tracebacks, paths — is never enough.
+    """
     task_state = str(task.get("state") or "")
     if task_state not in ("failed", "blocked"):
         return False
@@ -2557,13 +2583,21 @@ def _is_quota_failure(settings: Any, task: dict[str, Any]) -> bool:
         return False
     now_ts = _now().timestamp()
     for text in texts:
+        # Structured pool signals: the pool writes these itself, so they cannot
+        # show up by accident inside a check output or a random worktree path.
         if worker_pool.ALL_QUOTA_PREFIX in text:
-            return True
-        if workers.classify_failure(text) is not None:
             return True
         if "冷却中" in text or "用量阈值" in text or "over_threshold" in text:
             return True
         if worker_pool.NO_WORKER_REASON in text and _has_cooling_or_over_threshold_worker(settings, now_ts):
+            return True
+    # A provider quota message is only read from what a model executor itself
+    # reported. `workers.classify_failure` is a blunt keyword match (its bare
+    # `429` also sits inside `sup-<ms-timestamp>-<hex>` worktree names and
+    # timestamps), so running it over repo-check output would pause a healthy
+    # goal as if the pool were out of quota.
+    for text in _task_failure_texts(settings, task, provider_only=True):
+        if workers.classify_failure(text) is not None:
             return True
     return False
 
@@ -2586,7 +2620,7 @@ def _earliest_quota_reset(settings: Any, task: dict[str, Any]) -> datetime:
             if reset_ts > now_ts:
                 candidates.append(reset_ts)
 
-    for text in _task_failure_texts(settings, task):
+    for text in _task_failure_texts(settings, task, provider_only=True):
         parsed_sec = workers.parse_reset_seconds(text)
         if parsed_sec is not None and parsed_sec > 0:
             candidates.append(now_ts + float(parsed_sec))
