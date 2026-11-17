@@ -2,8 +2,10 @@
 
 Covers: duration validation, deadline enforcement (never start after deadline,
 let running round finish), continuous mode prompts + round tracking, 3 consecutive
-failures pause, quota pause/auto-resume/deadline-exceeded stop, startup recovery,
-goal dict metrics, and schema migration from older DBs.
+failures pause, quota pause/auto-resume/deadline-exceeded stop, the boundary of
+what counts as a quota failure (a provider's own quota message does, a repo
+check's output does not), startup recovery, goal dict metrics, and schema
+migration from older DBs.
 """
 from __future__ import annotations
 
@@ -43,6 +45,30 @@ class _Clock:
     def advance(self, **kwargs: Any) -> datetime:
         self.current = self.current + timedelta(**kwargs)
         return self.current
+
+
+# A repo check that really failed. Its output quotes the worktree path, whose
+# name embeds the task id (`sup-<ms-timestamp>-<hex>`), so it can contain the
+# bare digits `429` (and timestamps contain them often) without anything being
+# wrong with the model's quota. This is what CI once fed to
+# `supervisor_goals._is_quota_failure` (tests/test_goal_live_script.py).
+CHECK_OUTPUT_WITH_429 = (
+    "EEE\n"
+    "======================================================================\n"
+    "ERROR: test_add_integers (test_calc.AddTests.test_add_integers)\n"
+    "----------------------------------------------------------------------\n"
+    "Traceback (most recent call last):\n"
+    '  File "/tmp/conveyor-goal-live-9x2q7faa/live/tasks/worktrees/supervisor/'
+    'sup-1794947997429-3ac91b77/tests/test_calc.py", line 7, in test_add_integers\n'
+    "    self.assertEqual(calc.add(2, 3), 5)\n"
+    "NotImplementedError: add 还没实现\n"
+    "----------------------------------------------------------------------\n"
+    "Ran 6 tests in 0.002s\n"
+    "\n"
+    "FAILED (errors=6)\n"
+)
+# What a model executor itself reports when its provider is out of quota.
+PROVIDER_QUOTA_ERROR = "Claude AI usage limit reached|1794947997"
 
 
 class TimeboxedGoalTests(unittest.TestCase):
@@ -119,6 +145,34 @@ class TimeboxedGoalTests(unittest.TestCase):
             ags.transition(self.settings, task_id, "completed", stage="completed")
             return
         ags.transition(self.settings, task_id, state, stage=state, error=error or None)
+
+    def _seed_failed_check_round(self, task_id: str, check_output: str) -> None:
+        """Leave behind what a failed repo check leaves: the check's own execution
+        row (its error is the raw command output) and the acceptance issue that
+        quotes it."""
+        conn = ags._connect(self.settings)
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO supervisor_executions
+                       (execution_id, task_id, role, executor, status, started_at, error)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    ("ex-check01", task_id, "validator", "operator-validation", "failed",
+                     "2026-11-15T10:00:00+00:00", check_output),
+                )
+                conn.execute(
+                    """INSERT INTO supervisor_acceptance
+                       (id, task_id, sha, passed, issues_json, created_at)
+                       VALUES (?,?,?,?,?,?)""",
+                    ("acc-check01", task_id, "0" * 40, 0,
+                     json.dumps(
+                         [f"operator validation failed: unittest (exit 1): {check_output[:240]}"],
+                         ensure_ascii=False,
+                     ),
+                     "2026-11-15T10:00:00+00:00"),
+                )
+        finally:
+            conn.close()
 
     def test_duration_validation_and_goal_dict_fields(self) -> None:
         for bad in (29, 1441, 0, -60, "abc", True, 45.5):
@@ -507,6 +561,63 @@ class TimeboxedGoalTests(unittest.TestCase):
         self.clock.advance(minutes=15)
         self._advance()
         self.assertEqual(self._goal(goal["id"])["state"], "stopped")
+
+    def test_check_output_merely_containing_429_is_not_a_quota_pause(self) -> None:
+        """A failed repo check must never pause the goal as "out of quota".
+
+        Only structured pool signals (the pool's own markers, cooling /
+        over-threshold state) and a provider's own quota message may do that.
+        """
+        goal = self._create(duration_minutes=120, mode="outcome")
+        gid = goal["id"]
+        self._advance()
+        t1 = self._goal(gid)["iterations"][0]["task_id"]
+        self._seed_failed_check_round(t1, CHECK_OUTPUT_WITH_429)
+        self._set_task_state(t1, "failed",
+                             error="max repair rounds exceeded; remaining issues reported")
+        self.responder = lambda _p: json.dumps(
+            {
+                "decision": "continue",
+                "reason": "单元测试还是没过",
+                "next_prompt": "把 divide 除数为 0 的处理补上",
+                "question": "",
+                "summary": "第 1 轮测试没通过。",
+            },
+            ensure_ascii=False,
+        )
+        self._advance()
+
+        after = self._goal(gid)
+        self.assertEqual(after["state"], "running")
+        self.assertIsNone(after["resume_at"])
+        self.assertNotIn("额度", after["summary"])
+        # The round was evaluated (round 2 dispatched), not paused and retried.
+        self.assertEqual(after["iterations"][0]["task_id"], t1)
+        self.assertEqual(len(after["iterations"]), 2)
+
+    def test_provider_quota_error_from_an_executor_still_pauses(self) -> None:
+        goal = self._create(duration_minutes=120, mode="outcome")
+        gid = goal["id"]
+        self._advance()
+        t1 = self._goal(gid)["iterations"][0]["task_id"]
+        conn = ags._connect(self.settings)
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO supervisor_executions
+                       (execution_id, task_id, role, executor, status, started_at, error)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    ("ex-impl01", t1, "implementer", "pool", "failed",
+                     "2026-11-15T10:00:00+00:00", PROVIDER_QUOTA_ERROR),
+                )
+        finally:
+            conn.close()
+        self._set_task_state(t1, "failed", error=f"implementation failed: {PROVIDER_QUOTA_ERROR}")
+        self._advance()
+
+        paused = self._goal(gid)
+        self.assertEqual(paused["state"], "waiting_quota")
+        self.assertEqual(paused["resume_at"], "2026-11-15T10:30:00+00:00")
 
     def test_quota_failure_after_stop_keeps_round_task(self) -> None:
         goal = self._create(duration_minutes=120, mode="continuous")
