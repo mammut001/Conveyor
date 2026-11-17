@@ -20,6 +20,7 @@ from conveyor.agents import chat_intents
 from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_goals as goals_mod
 from conveyor.agents import supervisor_service as svc
+from conveyor.agents.intent_decider import Decision
 from conveyor.core.transcript_store import get_transcript_store
 from conveyor.web.web_chat import WebChatPort, build_history
 from channel.types import InboundMessage
@@ -908,7 +909,7 @@ class ChatIntentsDeciderTests(unittest.TestCase):
             "mode": "continuous",
         })
 
-        for q in ("进度怎么样了？", "进度怎么样了?", "现在能停吗", "做到哪了呢", "怎么查看进度", "如何停止", "为什么停了", "什么是目标"):
+        for q in ("现在能停吗", "怎么查看进度", "如何停止", "为什么停了", "什么是目标"):
             with self.subTest(question=q):
                 with patch.object(
                     chat_intents.intent_decider,
@@ -921,6 +922,34 @@ class ChatIntentsDeciderTests(unittest.TestCase):
                 self.assertIn("你是想查看项目进度吗？", payload["text"])
                 card = payload["action_card"]
                 self.assertEqual([b["label"] for b in card["buttons"]], ["是", "不是"])
+
+    def test_progress_questions_answered_directly_without_clarifying_card(self) -> None:
+        # Progress is read-only, so a plain progress question is answered straight
+        # away by the progress handler: no clarifying card, no 是/不是 buttons.
+        created = svc.create_managed_project(self.settings, name="alpha-app")
+        repo = created["repository"]
+        wt = next(w for w in repo["worktrees"] if w["managed"] and not w["is_main"])
+        goals_mod.create_goal(None, self.settings, {
+            "repo_id": repo["id"],
+            "worktree_id": wt["id"],
+            "outcome": "把首页做好",
+            "duration_minutes": 120,
+            "mode": "continuous",
+        })
+
+        for q in ("进度怎么样了？", "进度怎么样了?", "做到哪了呢"):
+            with self.subTest(question=q):
+                with patch.object(chat_intents.intent_decider, "decide_intent") as spy_decide:
+                    handled, port = self._run(q)
+                self.assertTrue(handled)
+                spy_decide.assert_not_called()
+                payload = port.events[0][1]
+                self.assertIn("alpha-app", payload["text"])
+                self.assertNotIn("你是想查看项目进度吗？", payload["text"])
+                card = payload["action_card"]
+                self.assertEqual([b["label"] for b in card["buttons"]], ["查看进度"])
+                self.assertNotIn("是", [b["label"] for b in card["buttons"]])
+                self.assertNotIn("不是", [b["label"] for b in card["buttons"]])
 
         # Confidence 0.5-0.8 on non-question -> clarifying card
         with patch.object(
