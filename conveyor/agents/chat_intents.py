@@ -1482,6 +1482,16 @@ def post_goal_finish_report(
     return card
 
 
+def post_goal_progress_digest(
+    settings: Any,
+    *,
+    session_id: str,
+    text: str,
+) -> dict[str, Any]:
+    """Persist one short progress digest message into the goal's web-chat session."""
+    return _persist_follow_up_message(settings, session_id, text)
+
+
 # ---------------------------------------------------------------------------
 # Intent execution paths (chat message & server action endpoint)
 # ---------------------------------------------------------------------------

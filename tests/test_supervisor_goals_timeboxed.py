@@ -10,7 +10,10 @@ migration from older DBs.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
+import importlib
 import json
+import os
 import sqlite3
 import tempfile
 import threading
@@ -22,9 +25,14 @@ from unittest.mock import patch
 
 from conveyor.agents import agent_supervisor as ags
 from conveyor.agents import agent_supervisor_pool as worker_pool
+from conveyor.agents import agents
 from conveyor.agents import goal_notify
 from conveyor.agents import supervisor_goals as goals
 from conveyor.agents import supervisor_service as svc
+from conveyor.core.config import load_runtime_settings
+from conveyor.core.transcript_store import get_transcript_store
+from conveyor.web import web_push
+from conveyor.web.web_chat import build_history
 from tests.test_supervisor_goals import (
     OUTCOME,
     FakeChatExecutor,
@@ -71,11 +79,14 @@ CHECK_OUTPUT_WITH_429 = (
 PROVIDER_QUOTA_ERROR = "Claude AI usage limit reached|1794947997"
 
 
-class TimeboxedGoalTests(unittest.TestCase):
+class _TimeboxedGoalBase(unittest.TestCase):
+    def _make_test_settings(self) -> Any:
+        return _make_settings(self.root)
+
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(prefix="conveyor-timebox-")
         self.root = Path(self._tmp.name).resolve()
-        self.settings = _make_settings(self.root)
+        self.settings = self._make_test_settings()
         self.repo_dir = self.root / "repo"
         _init_repo(self.repo_dir)
 
@@ -102,6 +113,7 @@ class TimeboxedGoalTests(unittest.TestCase):
         self.wt_path = str(wt["path"])
 
     def tearDown(self) -> None:
+        goal_notify.drain()
         self._tmp.cleanup()
 
     def _default_responder(self, _prompt: str) -> str:
@@ -174,6 +186,8 @@ class TimeboxedGoalTests(unittest.TestCase):
         finally:
             conn.close()
 
+
+class TimeboxedGoalTests(_TimeboxedGoalBase):
     def test_duration_validation_and_goal_dict_fields(self) -> None:
         for bad in (29, 1441, 0, -60, "abc", True, 45.5):
             with self.subTest(bad=bad):
@@ -711,6 +725,430 @@ class TimeboxedGoalTests(unittest.TestCase):
         self.assertIsNone(legacy["remaining_seconds"])
         self.assertEqual(legacy["rounds_total"], 1)
         self.assertEqual(legacy["rounds_passed"], 1)
+        self.assertIsNone(legacy["last_digest_at"])
+        self.assertIsNone(legacy["last_digest_rounds"])
+
+
+class ProgressDigestTests(_TimeboxedGoalBase):
+    """Hermetic tests for Task G2: short progress digests during long goals."""
+
+    def _make_test_settings(self) -> Any:
+        return dataclasses.replace(
+            _make_settings(self.root),
+            telegram_bot_token="tg-token",
+            telegram_allowed_user_id=42,
+            lark_app_id="lark-app",
+            lark_app_secret="lark-secret",
+            lark_allowed_open_id="ou-owner",
+        )
+
+    def setUp(self) -> None:
+        super().setUp()
+
+        self.telegram_sent: list[str] = []
+        self.feishu_sent: list[str] = []
+        self.web_pushed: list[tuple[str, str]] = []
+
+        tg_patch = patch(
+            "personal_tools.sentry.send_owner_telegram",
+            side_effect=lambda _s, text, **_kw: self.telegram_sent.append(text) or True,
+        )
+        fs_patch = patch(
+            "personal_tools.sentry.send_owner_feishu",
+            side_effect=lambda _s, text, **_kw: self.feishu_sent.append(text) or True,
+        )
+        push_patch = patch.object(
+            web_push,
+            "queue_notification",
+            side_effect=lambda _s, item_id, kind: self.web_pushed.append((item_id, kind)),
+        )
+        for p in (tg_patch, fs_patch, push_patch):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _session_messages(self, session_id: str) -> list[dict[str, Any]]:
+        session = get_transcript_store(self.settings).get_session(session_id)
+        return [
+            m for m in build_history(session, settings=self.settings)
+            if m.get("role") == "assistant"
+        ]
+
+    def _digest_messages(self, session_id: str) -> list[str]:
+        return [
+            m["text"] for m in self._session_messages(session_id)
+            if "还在跑：" in m.get("text", "")
+        ]
+
+    def _run_round(
+        self,
+        goal_id: str,
+        *,
+        minutes: int = 15,
+        passed: bool = True,
+        round_title: str = "",
+        decision: str = "achieved",
+        next_prompt: str = "继续优化下一处",
+    ) -> str:
+        self._advance()
+        detail = self._goal(goal_id)
+        task_id = detail["iterations"][-1]["task_id"]
+        self.assertTrue(task_id)
+        self.clock.advance(minutes=minutes)
+        if passed:
+            self.responder = lambda _p, d=decision, rt=round_title, np=next_prompt: json.dumps(
+                {
+                    "decision": d,
+                    "reason": "本轮检查通过",
+                    "next_prompt": np,
+                    "question": "",
+                    "summary": rt or "本轮改进完成。",
+                    "round_title": rt,
+                },
+                ensure_ascii=False,
+            )
+            self._set_task_state(task_id, "completed")
+        else:
+            self.responder = lambda _p, np=next_prompt: json.dumps(
+                {
+                    "decision": "continue",
+                    "reason": "测试未通过",
+                    "next_prompt": np,
+                    "question": "",
+                    "summary": "本轮检查没通过，继续修。",
+                    "round_title": "",
+                },
+                ensure_ascii=False,
+            )
+            self._set_task_state(task_id, "failed", error="check failed")
+        self._advance()
+        goal_notify.drain()
+        return task_id
+
+    def test_digest_after_3_rounds_posts_to_origin_and_pushes_channels(self) -> None:
+        origin_sid = "web:web-console:g2-origin-session"
+        goal = self._create(
+            duration_minutes=600,
+            mode="continuous",
+            origin_session_id=origin_sid,
+        )
+        gid = goal["id"]
+
+        # Rounds 1 and 2 (< 3 rounds, < 60 min): no digest yet.
+        self._run_round(gid, minutes=20, round_title="补全单测")
+        self._run_round(gid, minutes=20, round_title="修复分页边界")
+        self.assertEqual(self._digest_messages(origin_sid), [])
+        self.assertEqual(self.telegram_sent, [])
+        self.assertEqual(self.feishu_sent, [])
+        self.assertIsNone(self._goal(gid)["last_digest_at"])
+        self.assertIsNone(self._goal(gid)["last_digest_rounds"])
+
+        # Round 3 (+55m total): triggers digest #1.
+        self._run_round(gid, minutes=15, round_title="清理调试日志")
+        digests = self._digest_messages(origin_sid)
+        self.assertEqual(len(digests), 1)
+        expected_1 = (
+            "repo 还在跑：已经 55 分，跑了 3 轮、通过 3 轮，还剩约 9 小时 5 分。"
+            "最近完成：补全单测、修复分页边界、清理调试日志。"
+        )
+        self.assertEqual(digests[0], expected_1)
+        self.assertEqual(self.telegram_sent, [expected_1])
+        self.assertEqual(self.feishu_sent, [expected_1])
+        self.assertEqual(self.web_pushed, [])
+
+        after_d1 = self._goal(gid)
+        self.assertEqual(after_d1["last_digest_rounds"], 3)
+        self.assertEqual(after_d1["last_digest_at"], "2026-11-15T10:55:00+00:00")
+
+        # Rounds 4 and 5 (+70m, +85m): only 1-2 rounds and < 60m since digest #1 -> quiet.
+        self._run_round(gid, minutes=15, round_title="优化配置读取")
+        self._run_round(gid, minutes=15, round_title="收紧超时处理")
+        self.assertEqual(len(self._digest_messages(origin_sid)), 1)
+
+        # Round 6 (+100m total): 3 rounds since digest #1 -> triggers digest #2 (at most 3 round_titles).
+        self._run_round(gid, minutes=15, round_title="增加错误提示")
+        digests_2 = self._digest_messages(origin_sid)
+        self.assertEqual(len(digests_2), 2)
+        self.assertIn("跑了 6 轮、通过 6 轮", digests_2[1])
+        self.assertIn("最近完成：优化配置读取、收紧超时处理、增加错误提示。", digests_2[1])
+        self.assertNotIn("补全单测", digests_2[1])
+        self.assertEqual(len(self.telegram_sent), 2)
+        self.assertEqual(len(self.feishu_sent), 2)
+        self.assertEqual(self._goal(gid)["last_digest_rounds"], 6)
+
+    def test_digest_after_60_minutes_with_fewer_rounds_and_default_session_fallback(self) -> None:
+        default_sid = agents.session_id_for(agents.DEFAULT_AGENT_ID)
+        goal = self._create(duration_minutes=600, mode="continuous")
+        gid = goal["id"]
+
+        # Round 1 takes 65 minutes (only 1 round, >= 60 min): digest #1 fires to default main chat.
+        self._run_round(gid, minutes=65, round_title="完成首轮排查")
+        digests = self._digest_messages(default_sid)
+        self.assertEqual(len(digests), 1)
+        self.assertEqual(
+            digests[0],
+            "repo 还在跑：已经 1 小时 5 分，跑了 1 轮、通过 1 轮，还剩约 8 小时 55 分。"
+            "最近完成：完成首轮排查。",
+        )
+        self.assertEqual(self.telegram_sent, digests)
+        self.assertEqual(self.feishu_sent, digests)
+
+        # Round 2 takes 20 min (only 20 min since digest #1, 1 round): no digest.
+        self._run_round(gid, minutes=20, round_title="补强输入校验")
+        self.assertEqual(len(self._digest_messages(default_sid)), 1)
+
+        # Round 3 takes 45 min (65 min since digest #1, 2 rounds since): fires by 60-min rule!
+        self._run_round(gid, minutes=45, round_title="整理文档")
+        digests_2 = self._digest_messages(default_sid)
+        self.assertEqual(len(digests_2), 2)
+        self.assertIn("已经 2 小时 10 分，跑了 3 轮、通过 3 轮，还剩约 7 小时 50 分。", digests_2[1])
+        self.assertEqual(self._goal(gid)["last_digest_rounds"], 3)
+
+    def test_no_duplicate_after_restart(self) -> None:
+        origin_sid = "web:web-console:g2-restart"
+        goal = self._create(
+            duration_minutes=600,
+            mode="continuous",
+            origin_session_id=origin_sid,
+        )
+        gid = goal["id"]
+
+        for title in ("第一项", "第二项", "第三项"):
+            self._run_round(gid, minutes=15, round_title=title)
+        self.assertEqual(len(self._digest_messages(origin_sid)), 1)
+        self.assertEqual(len(self.telegram_sent), 1)
+        self.assertEqual(len(self.feishu_sent), 1)
+
+        # Simulate process restart (DB connection cache cleared, notify worker reloaded, 70 min passed).
+        goals._INITIALIZED_DBS.clear()
+        importlib.reload(goal_notify)
+        self.clock.advance(minutes=70)
+
+        # Re-evaluating / re-calling digest check on the already-digested round must not duplicate.
+        row = goals._get_goal_row(self.settings, gid)
+        iters = goals._iterations(self.settings, gid)
+        completed = [it for it in iters if goals._iteration_completed(it)]
+        self.assertFalse(goals._maybe_post_progress_digest(self.settings, row, completed))
+        goal_notify.notify_goal_digest(
+            self.settings,
+            row,
+            "duplicate-check",
+            rounds=3,
+            digest_at=str(row["last_digest_at"] or ""),
+        )
+        goal_notify.drain()
+
+        self.assertEqual(len(self._digest_messages(origin_sid)), 1)
+        self.assertEqual(len(self.telegram_sent), 1)
+        self.assertEqual(len(self.feishu_sent), 1)
+
+        # Completing round 4 (> 60 min since digest #1) does emit digest #2 once.
+        t4 = self._goal(gid)["iterations"][-1]["task_id"]
+        self.clock.advance(minutes=5)
+        self._set_task_state(t4, "completed")
+        self.responder = lambda _p: json.dumps(
+            {
+                "decision": "achieved",
+                "reason": "第四轮通过",
+                "next_prompt": "",
+                "question": "",
+                "summary": "第四项完成。",
+                "round_title": "第四项",
+            },
+            ensure_ascii=False,
+        )
+        self._advance()
+        goal_notify.drain()
+        self.assertEqual(len(self._digest_messages(origin_sid)), 2)
+        self.assertEqual(len(self.telegram_sent), 2)
+        self.assertEqual(len(self.feishu_sent), 2)
+
+    def test_no_digest_for_round_capped_goal(self) -> None:
+        origin_sid = "web:web-console:g2-round-capped"
+        goal = self._create(
+            max_iterations=6,
+            origin_session_id=origin_sid,
+        )
+        gid = goal["id"]
+
+        for idx in range(1, 5):
+            self._run_round(
+                gid,
+                minutes=30,
+                decision="continue",
+                round_title=f"第{idx}项",
+                next_prompt="继续下一轮",
+            )
+
+        self.assertEqual(self._digest_messages(origin_sid), [])
+        self.assertEqual(self.telegram_sent, [])
+        self.assertEqual(self.feishu_sent, [])
+        self.assertIsNone(self._goal(gid)["last_digest_at"])
+        self.assertIsNone(self._goal(gid)["last_digest_rounds"])
+
+    def test_no_digest_after_goal_ends(self) -> None:
+        # 1) Outcome time-boxed goal achieved on round 3 -> finish report only, no digest.
+        sid_a = "web:web-console:g2-end-achieved"
+        g_ach = self._create(duration_minutes=300, mode="outcome", origin_session_id=sid_a)
+        for idx in (1, 2):
+            self._run_round(
+                g_ach["id"],
+                minutes=15,
+                decision="continue",
+                round_title=f"完成第{idx}步",
+                next_prompt="继续下一步",
+            )
+        self._run_round(g_ach["id"], minutes=15, decision="achieved", round_title="最终收尾")
+        self.assertEqual(self._goal(g_ach["id"])["state"], "achieved")
+        self.assertEqual(self._digest_messages(sid_a), [])
+        self.assertTrue(any("的目标结束了：已达成。" in m["text"] for m in self._session_messages(sid_a)))
+
+        # 2) Continuous goal whose round 3 finishes after deadline -> finish report only, no digest.
+        sid_b = "web:web-console:g2-end-deadline"
+        g_dead = self._create(duration_minutes=60, mode="continuous", origin_session_id=sid_b)
+        self._run_round(g_dead["id"], minutes=20, round_title="步1")
+        self._run_round(g_dead["id"], minutes=20, round_title="步2")
+        self._run_round(g_dead["id"], minutes=25, round_title="步3")
+        self.assertEqual(self._goal(g_dead["id"])["state"], "exhausted")
+        self.assertEqual(self._digest_messages(sid_b), [])
+        self.assertTrue(any("的目标结束了：时间到了。" in m["text"] for m in self._session_messages(sid_b)))
+        self.assertEqual(self.telegram_sent, [])
+        self.assertEqual(self.feishu_sent, [])
+
+        # 3) Stopped goal never gets a digest even if helper is invoked late.
+        sid_c = "web:web-console:g2-end-stopped"
+        g_stop = self._create(duration_minutes=300, mode="continuous", origin_session_id=sid_c)
+        self._run_round(g_stop["id"], minutes=70, round_title="停前完成")
+        self.assertEqual(len(self._digest_messages(sid_c)), 1)
+        goals.stop_goal(None, self.settings, g_stop["id"])
+        self.clock.advance(minutes=70)
+        self.assertFalse(
+            goals._maybe_post_progress_digest(
+                self.settings,
+                goals._get_goal_row(self.settings, g_stop["id"]),
+                goals._iterations(self.settings, g_stop["id"]),
+            )
+        )
+        self.assertEqual(len(self._digest_messages(sid_c)), 1)
+
+    def test_failing_streak_wording(self) -> None:
+        origin_sid = "web:web-console:g2-failing-streak"
+        goal = self._create(
+            duration_minutes=600,
+            mode="outcome",
+            origin_session_id=origin_sid,
+        )
+        gid = goal["id"]
+
+        for _ in range(3):
+            self._run_round(gid, minutes=20, passed=False, next_prompt="继续修复失败测试")
+
+        self.assertEqual(self._goal(gid)["state"], "running")
+        digests = self._digest_messages(origin_sid)
+        self.assertEqual(len(digests), 1)
+        self.assertEqual(
+            digests[0],
+            "repo 还在跑：已经 1 小时，跑了 3 轮、通过 0 轮，还剩约 9 小时。"
+            "最近 3 轮都没通过检查，正在继续修。",
+        )
+        self.assertNotIn("最近完成：", digests[0])
+        self.assertEqual(self.telegram_sent, digests)
+        self.assertEqual(self.feishu_sent, digests)
+
+    def test_usage_line_present_only_with_usage(self) -> None:
+        origin_sid = "web:web-console:g2-usage"
+        goal = self._create(
+            duration_minutes=600,
+            mode="continuous",
+            origin_session_id=origin_sid,
+        )
+        gid = goal["id"]
+
+        # First 3 rounds: no usage recorded -> no usage line.
+        for idx in range(1, 4):
+            self._run_round(gid, minutes=15, round_title=f"无用量轮{idx}")
+        digests_no_usage = self._digest_messages(origin_sid)
+        self.assertEqual(len(digests_no_usage), 1)
+        self.assertNotIn("已用", digests_no_usage[0])
+        self.assertNotIn("token", digests_no_usage[0])
+
+        # Seed usage for round 4 and advance >= 60 minutes -> usage line appears.
+        t4 = self._goal(gid)["iterations"][-1]["task_id"]
+        conn = ags._connect(self.settings)
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO supervisor_executions
+                       (execution_id, task_id, role, executor, status, started_at, finished_at)
+                       VALUES (?, ?, 'implementer', 'fake', 'finished', ?, ?)""",
+                    ("ex-g2-u1", t4, "2026-11-15T10:50:00+00:00", "2026-11-15T10:55:00+00:00"),
+                )
+                ags._store_execution_usage(
+                    conn,
+                    execution_id="ex-g2-u1",
+                    task_id=t4,
+                    role="implementer",
+                    executor="fake",
+                    model="test-model",
+                    usage={"input_tokens": 30000, "output_tokens": 4000, "cached_input_tokens": 0},
+                )
+        finally:
+            conn.close()
+
+        self.clock.advance(minutes=65)
+        self._set_task_state(t4, "completed")
+        self.responder = lambda _p: json.dumps(
+            {
+                "decision": "achieved",
+                "reason": "有用量轮通过",
+                "next_prompt": "",
+                "question": "",
+                "summary": "有用量轮完成。",
+                "round_title": "有用量轮",
+            },
+            ensure_ascii=False,
+        )
+        self._advance()
+        goal_notify.drain()
+
+        digests_with_usage = self._digest_messages(origin_sid)
+        self.assertEqual(len(digests_with_usage), 2)
+        lines = digests_with_usage[1].splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[1], "已用约 3.4 万 token。")
+        self.assertEqual(self.telegram_sent[-1], digests_with_usage[1])
+        self.assertEqual(self.feishu_sent[-1], digests_with_usage[1])
+
+    def test_flag_off_posts_nothing_and_env_flag_defaults_on(self) -> None:
+        env = {
+            "CODEX_WORKSPACE_ROOT": str(self.root / "ws"),
+            "CODEX_TASK_ROOT": str(self.root / "tasks"),
+            "CODEX_MEMORY_ROOT": str(self.root / "mem-env"),
+            "TELEGRAM_ALLOWED_USER_ID": "1",
+        }
+        (self.root / "ws").mkdir(parents=True, exist_ok=True)
+        with patch.dict(os.environ, env, clear=True):
+            self.assertTrue(load_runtime_settings(env_file="").goal_digests_enabled)
+        with patch.dict(os.environ, {**env, "CONVEYOR_GOAL_DIGESTS": "false"}, clear=True):
+            self.assertFalse(load_runtime_settings(env_file="").goal_digests_enabled)
+
+        self.settings = dataclasses.replace(self.settings, goal_digests_enabled=False)
+        origin_sid = "web:web-console:g2-flag-off"
+        goal = self._create(
+            duration_minutes=600,
+            mode="continuous",
+            origin_session_id=origin_sid,
+        )
+        gid = goal["id"]
+
+        for idx in range(1, 5):
+            self._run_round(gid, minutes=30, round_title=f"静默轮{idx}")
+
+        self.assertEqual(self._digest_messages(origin_sid), [])
+        self.assertEqual(self.telegram_sent, [])
+        self.assertEqual(self.feishu_sent, [])
+        self.assertEqual(self.web_pushed, [])
+        self.assertIsNone(self._goal(gid)["last_digest_at"])
+        self.assertIsNone(self._goal(gid)["last_digest_rounds"])
 
 
 if __name__ == "__main__":
