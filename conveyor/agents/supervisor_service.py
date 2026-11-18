@@ -1993,6 +1993,9 @@ def get_capabilities(settings: Any) -> dict[str, Any]:
         "coordinator": coordinator_info,
         "roles": roles_out,
         "executors": executors_out,
+        "missing_search_tools": ags.missing_search_tools(settings) if any(
+            e["name"] == "pi" and e.get("available") for e in executors_out
+        ) else [],
         "deployment": {
             "configured": False,
             "can_start": False,

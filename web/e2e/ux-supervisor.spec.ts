@@ -1817,3 +1817,25 @@ test('H2: 改动视图在 390px 手机上不横向溢出', async ({ page }) => {
   expect(overflow.scroll).toBeLessThanOrEqual(390)
   await page.screenshot({ path: test.info().outputPath('sup-h2-changes-390.png') })
 })
+
+test('R12: missing ripgrep/fd shows one calm notice on the 项目 page, absent otherwise', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const capabilities = { ...createMockCapabilities(), missing_search_tools: ['rg', 'fd'] }
+  await installSupervisorMockFixture(page, { capabilities })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  const notice = page.locator('.sup-search-tools-notice')
+  await expect(notice).toHaveCount(1)
+  await expect(notice).toContainText('缺少代码搜索工具（ripgrep / fd）')
+  await expect(notice).toContainText('sudo apt-get install ripgrep fd-find')
+  await expect(notice).not.toContainText('/srv/')
+})
+
+test('R12: no notice when the server has the search tools', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const capabilities = { ...createMockCapabilities(), missing_search_tools: [] }
+  await installSupervisorMockFixture(page, { capabilities })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  await expect(page.locator('.sup-search-tools-notice')).toHaveCount(0)
+})

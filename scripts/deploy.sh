@@ -99,6 +99,34 @@ cd "${REMOTE_DIR}"
 [[ -d .venv ]] || die ".venv not found at ${REMOTE_DIR}/.venv"
 [[ -f Makefile ]] || die "Makefile not found at ${REMOTE_DIR}/Makefile"
 
+# ---- code-search tools (Pi grep/find need rg and fd; Pi runs offline) -------
+TOOLS_PRESENT=""
+TOOLS_MISSING=""
+
+if command -v rg >/dev/null 2>&1; then
+    TOOLS_PRESENT="rg"
+else
+    TOOLS_MISSING="rg"
+fi
+
+if command -v fd >/dev/null 2>&1 || command -v fdfind >/dev/null 2>&1; then
+    TOOLS_PRESENT="${TOOLS_PRESENT:+$TOOLS_PRESENT }fd"
+else
+    TOOLS_MISSING="${TOOLS_MISSING:+$TOOLS_MISSING }fd"
+fi
+
+if [[ -n "$TOOLS_MISSING" ]]; then
+    log "WARNING: code-search tools missing ($TOOLS_MISSING); installing ripgrep fd-find"
+    # Attempt install
+    if sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -q ripgrep fd-find >/dev/null 2>&1; then
+        log "Installed ripgrep/fd-find successfully."
+    else
+        log "WARNING: could not install ripgrep/fd-find; supervisor roles will read whole files (more tokens)"
+    fi
+else
+    log "Code-search tools present: ${TOOLS_PRESENT}"
+fi
+
 # ---- backup key files (minimal rollback support) ---------------------------
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 BACKUP_PATH="${BACKUP_DIR}/${TIMESTAMP}"
