@@ -1785,7 +1785,8 @@ test('H2: 运行记录里的失败原因先说中文，英文原文收在「技�
           state: 'failed',
           stage: 'verification',
           error: 'max repair rounds exceeded; remaining issues reported',
-          updated_at: '2026-11-14T09:00:00Z',
+          // After CHANGES_TASK completed (10:00), so it still needs attention (R25).
+          updated_at: '2026-11-14T11:00:00Z',
           metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
         },
       ],
@@ -1983,4 +1984,65 @@ test('R24: a managed worktree whose folder is missing is skipped when another on
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
   await page.locator('.sup-repo-tree').getByText('qa-pick', { exact: true }).click()
   await expect(page.getByRole('heading', { name: 'qa-pick / sup/y', exact: true })).toBeVisible()
+})
+
+test('mock fixture: settled failures do not count as attention', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        {
+          id: 'task-completed',
+          goal: 'Completed Task',
+          state: 'completed',
+          updated_at: '2026-11-18T10:00:00Z',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+        {
+          id: 'task-failed',
+          goal: 'Failed Task',
+          state: 'failed',
+          updated_at: '2026-11-18T08:00:00Z',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+      ],
+    },
+  })
+  await page.goto('/#code')
+
+  const historyToggle = page.locator('.sup-run-history-bar')
+  await expect(historyToggle).toContainText('运行记录 · 2 条')
+  await expect(historyToggle).toContainText('失败或等待确认时自动展开')
+  await expect(historyToggle).not.toContainText('需处理或失败')
+  await expect(historyToggle).toHaveAttribute('aria-expanded', 'false')
+})
+
+test('mock fixture: failed task after completed task counts as attention', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        {
+          id: 'task-failed',
+          goal: 'Failed Task',
+          state: 'failed',
+          updated_at: '2026-11-18T10:00:00Z',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+        {
+          id: 'task-completed',
+          goal: 'Completed Task',
+          state: 'completed',
+          updated_at: '2026-11-18T08:00:00Z',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+      ],
+    },
+  })
+  await page.goto('/#code')
+
+  const historyToggle = page.locator('.sup-run-history-bar')
+  await expect(historyToggle).toContainText('运行记录 · 2 条')
+  await expect(historyToggle).toContainText('1 条需处理或失败')
+  await expect(historyToggle).toHaveAttribute('aria-expanded', 'true')
 })

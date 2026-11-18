@@ -1606,13 +1606,50 @@ function SupervisorRunHistory({
   const lastWorktreeRef = useRef(worktreeId)
   const seenAlertKeysRef = useRef<Set<string>>(new Set())
 
+  // 失败之后同一个工作目录里又有任务完成了：老板已经往前走了，这条失败不再算「需处理」。
+  const isSettledByLaterSuccess = useCallback((task: SupervisorTask) => {
+    const taskTime = activityTimestamp(task.updated_at || task.created_at)
+    if (taskTime === 0) return false
+    return tasks.some(t => {
+      const state = (t.state || '').trim().toLowerCase()
+      if (state !== 'completed' && state !== 'succeeded') return false
+      const tTime = activityTimestamp(t.updated_at || t.created_at)
+      return tTime > taskTime
+    })
+  }, [tasks])
+
+  // 目标循环里「前面某一轮失败、后面还有轮次」是正常过程：这些失败不算「需处理」。
+  const latestRoundByGoal = useMemo(() => {
+    const rounds = new Map<string, number>()
+    for (const task of tasks) {
+      const info = parseGoalRoundTask(task.goal)
+      if (!info) continue
+      const key = goalRoundKey(info)
+      const seen = rounds.get(key) || 0
+      if (info.round > seen) rounds.set(key, info.round)
+    }
+    return rounds
+  }, [tasks])
+  const isSupersededRound = useCallback((task: SupervisorTask) => {
+    const info = parseGoalRoundTask(task.goal)
+    if (!info) return false
+    const latest = latestRoundByGoal.get(goalRoundKey(info))
+    return typeof latest === 'number' && latest > info.round
+  }, [latestRoundByGoal])
+
+  const isAttentionTaskFinal = useCallback((t: SupervisorTask) =>
+    isAttentionTask(t) && !isSupersededRound(t) && !isSettledByLaterSuccess(t)
+  , [isSupersededRound, isSettledByLaterSuccess])
+
   const attentionKeys = useMemo(
     () =>
       tasks
-        .filter(t => isAttentionTask(t))
+        // Auto-expand keeps the old rule for superseded goal rounds; only settled failures stop expanding it.
+        .filter(t => isAttentionTask(t) && !isSettledByLaterSuccess(t))
         .map(t => `${worktreeId}:${t.id}:${(t.state || '').trim().toLowerCase()}:${(t.error || '').trim()}`),
-    [tasks, worktreeId],
+    [tasks, worktreeId, isSettledByLaterSuccess],
   )
+  const attentionCount = tasks.filter(t => isAttentionTaskFinal(t)).length
 
   if (lastWorktreeRef.current !== worktreeId) {
     lastWorktreeRef.current = worktreeId
@@ -1632,25 +1669,6 @@ function SupervisorRunHistory({
   }
 
   const latestTask = tasks[0]
-  // 目标循环里「前面某一轮失败、后面还有轮次」是正常过程：这些失败不算「需处理」。
-  const latestRoundByGoal = useMemo(() => {
-    const rounds = new Map<string, number>()
-    for (const task of tasks) {
-      const info = parseGoalRoundTask(task.goal)
-      if (!info) continue
-      const key = goalRoundKey(info)
-      const seen = rounds.get(key) || 0
-      if (info.round > seen) rounds.set(key, info.round)
-    }
-    return rounds
-  }, [tasks])
-  const isSupersededRound = useCallback((task: SupervisorTask) => {
-    const info = parseGoalRoundTask(task.goal)
-    if (!info) return false
-    const latest = latestRoundByGoal.get(goalRoundKey(info))
-    return typeof latest === 'number' && latest > info.round
-  }, [latestRoundByGoal])
-  const attentionCount = tasks.filter(t => isAttentionTask(t) && !isSupersededRound(t)).length
 
   return (
     <section className={`sup-run-history ${expanded ? 'is-expanded' : 'is-collapsed'}`} aria-label="运行记录">
