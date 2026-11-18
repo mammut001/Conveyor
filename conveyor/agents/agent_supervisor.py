@@ -4096,8 +4096,13 @@ class CodexExecutor:
                   context: ExecutionContext | None = None) -> ExecutionResult:
         started = _utc_now()
         ok, reason = self.available()
-        return ExecutionResult(success=False, error=reason,
-                               started_at=started, finished_at=_utc_now())
+        return ExecutionResult(
+            success=False,
+            error=reason,
+            evidence={"meta": {"error_kind": "executor_unavailable"}},
+            started_at=started,
+            finished_at=_utc_now(),
+        )
 
     async def cancel(self, execution_id: str) -> bool:
         return False
@@ -4127,8 +4132,13 @@ class ChatExecutor:
         started = _utc_now()
         ok, reason = self.available()
         if not ok:
-            return ExecutionResult(success=False, error=reason, started_at=started,
-                                   finished_at=_utc_now())
+            return ExecutionResult(
+                success=False,
+                error=reason,
+                evidence={"meta": {"error_kind": "executor_unavailable"}},
+                started_at=started,
+                finished_at=_utc_now(),
+            )
         import runner.chat_client as chat
         config = chat.config_from_settings(self.settings)
         if role.model:
@@ -4142,11 +4152,21 @@ class ChatExecutor:
             response = await asyncio.wait_for(
                 chat.complete_chat(config, messages), timeout=timeout_seconds)
         except asyncio.TimeoutError:
-            return ExecutionResult(success=False, error=f"timed out after {timeout_seconds}s",
-                                   started_at=started, finished_at=_utc_now())
+            return ExecutionResult(
+                success=False,
+                error=f"timed out after {timeout_seconds}s",
+                evidence={"meta": {"error_kind": "executor_timeout"}},
+                started_at=started,
+                finished_at=_utc_now(),
+            )
         except chat.ChatError as exc:
-            return ExecutionResult(success=False, error=redact_text(str(exc)),
-                                   started_at=started, finished_at=_utc_now())
+            return ExecutionResult(
+                success=False,
+                error=redact_text(str(exc)),
+                evidence={"meta": {"error_kind": "executor_error"}},
+                started_at=started,
+                finished_at=_utc_now(),
+            )
         content = str(response.get("content") or "") if isinstance(response, dict) else ""
         return ExecutionResult(success=bool(content.strip()), output=content,
                                error="" if content.strip() else "empty chat response",
@@ -4257,7 +4277,13 @@ class AntigravityExecutor:
         ok, reason = self.available()
         if not ok:
             started = _utc_now()
-            return ExecutionResult(success=False, error=reason, started_at=started, finished_at=_utc_now())
+            return ExecutionResult(
+                success=False,
+                error=reason,
+                evidence={"meta": {"error_kind": "executor_unavailable"}},
+                started_at=started,
+                finished_at=_utc_now(),
+            )
         if not isinstance(prompt, str) or not prompt.strip():
             started = _utc_now()
             return ExecutionResult(
@@ -4399,6 +4425,12 @@ class PiExecutor:
                 parser=_parse_pi_stream, task_id=task_id, context=context,
                 stdout_line_filter=_pi_stdout_line_filter)
             if not result.success:
+                ev = dict(result.evidence or {})
+                retry_meta = dict(ev.get("meta") or {}) if isinstance(ev.get("meta"), dict) else {}
+                if retry_meta.get("stop_reason") == "length" or not retry_meta.get("error_kind"):
+                    retry_meta["error_kind"] = "pi_length"
+                ev["meta"] = retry_meta
+                result.evidence = ev
                 result.error = "模型两次都因为回答太长被截断，这一轮没做成。"
 
         return result
@@ -4431,8 +4463,13 @@ def get_executor(settings: Any, name: str) -> Executor:
             return False, f"不知道的执行者：{name}"
 
         async def run(self, *, role, prompt, worktree_path, timeout_seconds, task_id="", context=None):
-            return ExecutionResult(success=False, error=f"unknown executor: {name}",
-                                   started_at=_utc_now(), finished_at=_utc_now())
+            return ExecutionResult(
+                success=False,
+                error=f"unknown executor: {name}",
+                evidence={"meta": {"error_kind": "executor_unavailable"}},
+                started_at=_utc_now(),
+                finished_at=_utc_now(),
+            )
 
         async def cancel(self, execution_id):
             return False
@@ -4794,9 +4831,25 @@ def _parse_pi_stream(stdout: str) -> tuple[str, dict[str, Any]]:
             if parsed.result:
                 final_text = parsed.result
     if error_text:
-        return "", {"is_error": True, "subtype": "agent_error", "error": error_text, "stop_reason": stop_reason}
+        err_meta: dict[str, Any] = {
+            "is_error": True,
+            "subtype": "agent_error",
+            "error": error_text,
+            "stop_reason": stop_reason,
+        }
+        if stop_reason == "length":
+            err_meta["error_kind"] = "pi_length"
+        return "", err_meta
     if final_events != 1 or not final_text.strip():
-        return "", {"is_error": True, "subtype": "missing_result", "error": "missing unambiguous final pi result", "stop_reason": stop_reason}
+        miss_meta: dict[str, Any] = {
+            "is_error": True,
+            "subtype": "missing_result",
+            "error": "missing unambiguous final pi result",
+            "stop_reason": stop_reason,
+        }
+        if stop_reason == "length":
+            miss_meta["error_kind"] = "pi_length"
+        return "", miss_meta
     meta: dict[str, Any] = {"is_error": False, "subtype": "success", "error": "", "stop_reason": stop_reason}
     if usage_totals:
         meta["usage"] = usage_totals
@@ -5181,10 +5234,12 @@ async def _spawn_cli(
     if ctx and isinstance(getattr(ctx, "metadata", None), dict) and ctx.metadata.get("discussion_digest"):
         spawn_digest = str(ctx.metadata["discussion_digest"])
 
-    def _fail(message: str, *, cancelled_flag: bool = False) -> ExecutionResult:
+    def _fail(message: str, *, cancelled_flag: bool = False, error_kind: str = "") -> ExecutionResult:
+        ev: dict[str, Any] = {"meta": {"error_kind": error_kind}} if error_kind else {}
         return ExecutionResult(
             success=False,
             error=reason_or(message),
+            evidence=ev,
             started_at=started,
             finished_at=_utc_now(),
             execution_id=execution_id,
@@ -5392,9 +5447,18 @@ async def _spawn_cli(
                     os.close(gate_r)
                 gate_r = None
             _LIVE.pop(execution_id, None)
-            _update_execution(settings, execution_id, status="failed", error=f"timed out after {timeout_seconds}s before subprocess startup")
+            _update_execution(
+                settings,
+                execution_id,
+                status="timeout",
+                error=f"timed out after {timeout_seconds}s before subprocess startup",
+                metadata={"error_kind": "executor_timeout"},
+            )
             _clear_lock_writer_spawning(settings, effective_task_id)
-            return _fail(f"timed out after {timeout_seconds}s before subprocess startup")
+            return _fail(
+                f"timed out after {timeout_seconds}s before subprocess startup",
+                error_kind="executor_timeout",
+            )
 
         try:
             kwargs = dict(
@@ -5422,9 +5486,18 @@ async def _spawn_cli(
                     os.close(gate_r)
                 gate_r = None
             _LIVE.pop(execution_id, None)
-            _update_execution(settings, execution_id, status="failed", error=f"timed out after {timeout_seconds}s during subprocess startup")
+            _update_execution(
+                settings,
+                execution_id,
+                status="timeout",
+                error=f"timed out after {timeout_seconds}s during subprocess startup",
+                metadata={"error_kind": "executor_timeout"},
+            )
             _clear_lock_writer_spawning(settings, effective_task_id)
-            return _fail(f"timed out after {timeout_seconds}s during subprocess startup")
+            return _fail(
+                f"timed out after {timeout_seconds}s during subprocess startup",
+                error_kind="executor_timeout",
+            )
         except OSError as exc:
             _abort_launcher_gate(gate_w)
             gate_w = None
@@ -5433,9 +5506,18 @@ async def _spawn_cli(
                     os.close(gate_r)
                 gate_r = None
             _LIVE.pop(execution_id, None)
-            _update_execution(settings, execution_id, status="failed", error=f"failed to spawn executor {cmd[0]!r}: {exc}")
+            _update_execution(
+                settings,
+                execution_id,
+                status="failed",
+                error=f"failed to spawn executor {cmd[0]!r}: {exc}",
+                metadata={"error_kind": "executor_unavailable"},
+            )
             _clear_lock_writer_spawning(settings, effective_task_id)
-            return _fail(f"failed to spawn executor {cmd[0]!r}: {exc}")
+            return _fail(
+                f"failed to spawn executor {cmd[0]!r}: {exc}",
+                error_kind="executor_unavailable",
+            )
         finally:
             if gate_r is not None:
                 with contextlib.suppress(OSError):
@@ -5697,8 +5779,12 @@ async def _spawn_cli(
             err_reap = f"{primary_reason}; {cleanup_diag}"
         else:
             err_reap = cleanup_diag
-        _update_execution(settings, execution_id, status=status_reap, error=err_reap)
+        reap_meta = {"error_kind": "executor_timeout"} if timed_out else {}
+        _update_execution(settings, execution_id, status=status_reap, error=err_reap, metadata=reap_meta or None)
         db_finalized = True
+        reap_evidence: dict[str, Any] = {"kill_sweep": "process-group SIGKILL issued", "writer_dead": False}
+        if reap_meta:
+            reap_evidence["meta"] = reap_meta
         return ExecutionResult(
             success=False,
             cancelled=cancelled,
@@ -5706,7 +5792,7 @@ async def _spawn_cli(
             started_at=started,
             finished_at=_utc_now(),
             execution_id=execution_id,
-            evidence={"kill_sweep": "process-group SIGKILL issued", "writer_dead": False},
+            evidence=reap_evidence,
         )
 
     rc = proc.returncode if proc is not None else None
@@ -5750,14 +5836,17 @@ async def _spawn_cli(
     elif timed_out:
         status = "timeout"
         error_text = reason_or(f"timed out after {timeout_seconds}s; process group killed")
+        meta["error_kind"] = "executor_timeout"
     elif limit_info["exceeded"]:
         status = "failed"
         error_text = reason_or(_format_output_limit_error(limit_info, byte_cap))
+        meta["error_kind"] = "runtime_error"
     elif lingering_descendant:
         status = "failed"
         error_text = reason_or(
             "executor leader exited while descendant process remained alive in process group"
         )
+        meta["error_kind"] = "runtime_error"
     elif parse_failed:
         status = "failed"
         error_text = reason_or(parse_error_msg)
@@ -6107,9 +6196,43 @@ def _contains_json_object(text: str) -> bool:
         idx = pos + 1
 
 
+def _echoed_sha_is_different_commit(worktree_path: str, echoed_sha: str, expected_sha: str) -> bool:
+    """Return True if ``echoed_sha`` resolves to a different existing commit in the repo."""
+    candidate = echoed_sha.strip()
+    if not candidate or candidate.startswith("-") or any(ch.isspace() or ch == "\x00" for ch in candidate):
+        return False
+    canon = _canonical_path(worktree_path)
+    if not canon:
+        return False
+    try:
+        cat = subprocess.run(
+            ["git", "-C", canon, "cat-file", "-e", f"{candidate}^{{commit}}"],
+            capture_output=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return False
+    if cat.returncode != 0:
+        return False
+    try:
+        rev = subprocess.run(
+            ["git", "-C", canon, "rev-parse", "--verify", f"{candidate}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return True
+    if rev.returncode != 0:
+        return True
+    resolved = (rev.stdout or "").strip()
+    return resolved.lower() != expected_sha.strip().lower()
+
+
 def parse_review_verdict(text: str, *,
                          expected_sha: str, expected_fingerprint: str,
-                         strict_checks: bool = True) -> dict[str, Any]:
+                         strict_checks: bool = True,
+                         worktree_path: str | None = None) -> dict[str, Any]:
     """Parse and strictly validate the reviewer's structured JSON verdict schema.
 
     Note: This validates structured schema and target identity fields only;
@@ -6174,16 +6297,43 @@ def parse_review_verdict(text: str, *,
         raise ReviewEnvelopeError("'passed' must be a boolean")
 
     target_sha = obj["target_sha"]
-    if type(target_sha) is not str or not target_sha.strip():
+    if (
+        type(target_sha) is not str
+        or not target_sha.strip()
+        or target_sha != target_sha.strip()
+        or target_sha.startswith("-")
+        or any(ch.isspace() or ch == "\x00" for ch in target_sha)
+    ):
         raise ReviewEnvelopeError("'target_sha' must be a non-empty string")
-    if target_sha != expected_sha:
-        raise ReviewEnvelopeError(f"target_sha mismatch: got {target_sha!r}, expected {expected_sha!r}")
 
     target_fp = obj["target_fingerprint"]
     if type(target_fp) is not str or not target_fp.strip():
         raise ReviewEnvelopeError("'target_fingerprint' must be a non-empty string")
     if target_fp != expected_fingerprint:
         raise ReviewEnvelopeError("target_fingerprint mismatch (content changed during review)")
+
+    sha_echo_mismatch = False
+    if target_sha != expected_sha:
+        if not worktree_path:
+            raise ReviewEnvelopeError(f"target_sha mismatch: got {target_sha!r}, expected {expected_sha!r}")
+        if _echoed_sha_is_different_commit(worktree_path, target_sha, expected_sha):
+            raise ReviewEnvelopeError(
+                f"target_sha mismatch (names a different commit): got {target_sha!r}, expected {expected_sha!r}"
+            )
+        try:
+            live_identity = target_identity(worktree_path)
+        except SupervisorStateError as exc:
+            raise ReviewEnvelopeError(
+                f"target_sha mismatch and cannot verify worktree identity: {exc}"
+            ) from exc
+        if (
+            live_identity.get("sha") != expected_sha
+            or live_identity.get("fingerprint") != expected_fingerprint
+        ):
+            raise ReviewEnvelopeError(
+                "target_sha mismatch (worktree identity changed during review)"
+            )
+        sha_echo_mismatch = True
 
     summary_val = obj["summary"]
     if type(summary_val) is not str or not summary_val.strip():
@@ -6222,7 +6372,48 @@ def parse_review_verdict(text: str, *,
         if strict_checks and any(not check["passed"] for check in checks):
             raise ReviewEnvelopeError("pass verdict with a failed check (invalid evidence)")
 
+    if sha_echo_mismatch:
+        obj["sha_echo_mismatch"] = True
+        obj["evidence_notes"] = ["sha_echo_mismatch"]
+
     return obj
+
+
+def _build_review_evidence_json(
+    executed_checks: list[dict[str, Any]],
+    reviewer_checks: list[dict[str, Any]],
+    parsed: dict[str, Any],
+    *,
+    expected_sha: str,
+) -> str:
+    payload: dict[str, Any] = {
+        "executed_checks": executed_checks,
+        "reviewer_self_reported_checks": reviewer_checks,
+    }
+    if parsed.get("sha_echo_mismatch"):
+        payload["notes"] = ["sha_echo_mismatch"]
+        payload["sha_echo_mismatch"] = {
+            "echoed_target_sha": parsed.get("target_sha", ""),
+            "expected_target_sha": expected_sha,
+        }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _execution_error_kind(res: ExecutionResult | None) -> str:
+    if res is None:
+        return ""
+    ev = res.evidence if isinstance(res.evidence, dict) else {}
+    meta = ev.get("meta") if isinstance(ev.get("meta"), dict) else {}
+    kind = str(meta.get("error_kind") or "").strip().lower()
+    if kind:
+        return kind
+    if str(meta.get("stop_reason") or "").strip().lower() == "length":
+        return "pi_length"
+    if str(meta.get("finished_reason") or "").strip().lower() in ("length", "max_tokens"):
+        return "pi_length"
+    if str(ev.get("status") or "").strip().lower() == "timeout":
+        return "executor_timeout"
+    return ""
 
 
 def _parse_json_prefix(text: str) -> dict[str, Any] | None:
@@ -6285,6 +6476,7 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
     roles = load_roles(settings)
     timeout = task_timeout(settings)
     repairs = max_repairs if max_repairs is not None else max_repair_rounds(settings)
+    flow_error_kind = ""
     _ACTIVE_FLOW_TASKS.add(task_id)
     try:
         task = get_task(settings, task_id)
@@ -6302,9 +6494,11 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
         # Frozen discussion snapshot validation & formatting (fail-closed before executing any role)
         raw_snapshot = meta.get("discussion_snapshot")
         expected_session_id = str(meta.get("session_id") or "").strip() or None
+        flow_error_kind = "invalid_input"
         validated_snapshot = validate_discussion_snapshot(
             raw_snapshot, expected_session_id=expected_session_id
         )
+        flow_error_kind = ""
         discussion_context = format_discussion_context(validated_snapshot)
         discussion_digest = (
             str(validated_snapshot.get("sha256") or "") if validated_snapshot else ""
@@ -6336,6 +6530,7 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
         for r_name in ROLES:
             ok_pol, reason_pol = _validate_role_policy(roles[r_name])
             if not ok_pol:
+                flow_error_kind = "invalid_config"
                 raise SupervisorStateError(reason_pol)
 
         acceptance_criteria = acceptance_criteria or str(meta.get("acceptance_criteria") or "")
@@ -6354,7 +6549,9 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
         raw_wp = task.get("worktree_path") or worktree_path or ""
         wp = _canonical_path(raw_wp) if raw_wp else ""
         if not wp:
+            flow_error_kind = "worktree_unavailable"
             wp = create_worktree(settings, repo_path, task_id)
+            flow_error_kind = ""
         wp = _canonical_path(wp)
 
         task = get_task(settings, task_id) or {}
@@ -6364,16 +6561,20 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
         accepted_criteria = str(from_task_meta.get("acceptance_criteria") or acceptance_criteria)
         ok, reason = validate_worktree(settings, repo_path, wp)
         if not ok:
+            flow_error_kind = "worktree_unavailable"
             raise SupervisorStateError(reason)
 
         # Verify availability for all CLI-bound roles before running stages.
         for role_name in ("analyst", "implementer", "reviewer"):
             cfg = roles[role_name]
             if cfg.location == "worktree":
+                flow_error_kind = "worktree_unavailable"
                 _require_location(settings, cfg, wp)
+                flow_error_kind = ""
             executor = get_executor(settings, cfg.executor)
             ok, reason = executor.available()
             if not ok:
+                flow_error_kind = "executor_unavailable"
                 raise SupervisorStateError(f"{role_name} executor '{cfg.executor}' unavailable: {reason}")
 
         coordinator_cfg = roles["coordinator"]
@@ -6475,6 +6676,7 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
         if a_result.cancelled or task_cancelled(settings, task_id):
             raise SupervisorCancelledError("cancelled during analysis")
         if not a_result.success:
+            flow_error_kind = _execution_error_kind(a_result) or "executor_error"
             raise SupervisorStateError(f"analysis failed: {a_result.error}")
 
         post_analysis_identity = target_identity(wp)
@@ -6482,6 +6684,7 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
             post_analysis_identity["sha"] != base_sha
             or post_analysis_identity["fingerprint"] != base_identity["fingerprint"]
         ):
+            flow_error_kind = "worktree_mutated"
             raise SupervisorStateError("worktree changed during analysis (rejected before implementation)")
 
         plan = a_result.output
@@ -6497,9 +6700,11 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
 
         round_no = 0
         issues: list[str] = []
+        last_review_error_kind = ""
         while True:
             if task_cancelled(settings, task_id):
                 raise SupervisorCancelledError("cancelled before implementation")
+            last_review_error_kind = ""
 
             transition(settings, task_id, "implementing", stage="implementation")
             impl_cfg = roles["implementer"]
@@ -6545,12 +6750,14 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
             if i_result.cancelled or task_cancelled(settings, task_id):
                 raise SupervisorCancelledError("cancelled during implementation")
             if not i_result.success:
+                impl_error_kind = _execution_error_kind(i_result) or "executor_error"
                 transition(
                     settings,
                     task_id,
                     "failed",
                     stage="implementation",
                     error=f"implementation failed: {i_result.error}",
+                    metadata={"error_kind": impl_error_kind},
                 )
                 return get_task(settings, task_id) or {}
 
@@ -6686,18 +6893,21 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
 
                 review_identity = target_identity(wp)
                 if review_identity["sha"] != candidate_sha or review_identity["fingerprint"] != candidate_fp:
+                    flow_error_kind = "worktree_mutated"
                     raise SupervisorStateError("code changed during review; reviewer violation")
 
                 parsed = None
                 issue_reason = ""
                 if not r_result.success:
                     issue_reason = f"review executor failed: {r_result.error}"
+                    last_review_error_kind = _execution_error_kind(r_result) or "executor_error"
                 else:
                     try:
                         parsed = parse_review_verdict(
                             r_result.output,
                             expected_sha=review_identity["sha"],
                             expected_fingerprint=review_identity["fingerprint"],
+                            worktree_path=wp,
                         )
                     except ReviewEnvelopeError as exc:
                         issue_reason = f"invalid review evidence: {exc}"
@@ -6729,9 +6939,11 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                             sha=review_identity["sha"],
                             passed=False,
                             issues=issues,
-                            evidence=json.dumps(
-                                {"executed_checks": [], "reviewer_self_reported_checks": reviewer_checks},
-                                ensure_ascii=False,
+                            evidence=_build_review_evidence_json(
+                                [],
+                                reviewer_checks,
+                                parsed,
+                                expected_sha=review_identity["sha"],
                             ),
                             evidence_path=r_result.evidence.get("evidence_path", ""),
                             fingerprint=review_identity["fingerprint"],
@@ -6751,9 +6963,11 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                             sha=review_identity["sha"],
                             passed=False,
                             issues=[needs_val_msg],
-                            evidence=json.dumps(
-                                {"executed_checks": [], "reviewer_self_reported_checks": reviewer_checks},
-                                ensure_ascii=False,
+                            evidence=_build_review_evidence_json(
+                                [],
+                                reviewer_checks,
+                                parsed,
+                                expected_sha=review_identity["sha"],
                             ),
                             evidence_path=r_result.evidence.get("evidence_path", ""),
                             fingerprint=review_identity["fingerprint"],
@@ -6800,12 +7014,11 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                         sha=review_identity["sha"],
                         passed=effective_passed,
                         issues=issues,
-                        evidence=json.dumps(
-                            {
-                                "executed_checks": executed_checks,
-                                "reviewer_self_reported_checks": reviewer_checks,
-                            },
-                            ensure_ascii=False,
+                        evidence=_build_review_evidence_json(
+                            executed_checks,
+                            reviewer_checks,
+                            parsed,
+                            expected_sha=review_identity["sha"],
                         ),
                         evidence_path=r_result.evidence.get("evidence_path", ""),
                         fingerprint=review_identity["fingerprint"],
@@ -6826,6 +7039,7 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                             final_identity["sha"] != review_identity["sha"]
                             or final_identity["fingerprint"] != review_identity["fingerprint"]
                         ):
+                            flow_error_kind = "worktree_mutated"
                             raise SupervisorStateError("target content changed between review and completion")
                         transition(
                             settings,
@@ -6844,12 +7058,19 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
             # Failure -> bounded repair loop.
             round_no += 1
             if round_no > repairs:
+                if not failed_validations and last_review_error_kind:
+                    repair_error_kind = last_review_error_kind
+                elif failed_validations:
+                    repair_error_kind = "validation_failed"
+                else:
+                    repair_error_kind = "review_rejected"
                 transition(
                     settings,
                     task_id,
                     "failed",
                     stage="repair_limit_exceeded",
                     error="max repair rounds exceeded; remaining issues reported",
+                    metadata={"error_kind": repair_error_kind},
                 )
                 record_handoff(
                     settings,
@@ -6890,8 +7111,16 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
         if not task_cancelled(settings, task_id):
             cur = get_task(settings, task_id) or {}
             if cur.get("state") not in TERMINAL_STATES:
+                err_kind = "lock_error" if isinstance(exc, SupervisorLockError) else flow_error_kind
                 with contextlib.suppress(SupervisorStateError):
-                    transition(settings, task_id, "failed", stage="supervisor_error", error=str(exc))
+                    transition(
+                        settings,
+                        task_id,
+                        "failed",
+                        stage="supervisor_error",
+                        error=str(exc),
+                        metadata={"error_kind": err_kind} if err_kind else None,
+                    )
         return get_task(settings, task_id) or {}
     except Exception as exc:
         log.exception("unexpected error in run_supervisor_flow for task %s", task_id)
@@ -6905,6 +7134,7 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                         "failed",
                         stage="unexpected_error",
                         error=f"{type(exc).__name__}: {exc}",
+                        metadata={"error_kind": "unexpected_error"},
                     )
         return get_task(settings, task_id) or {}
     finally:

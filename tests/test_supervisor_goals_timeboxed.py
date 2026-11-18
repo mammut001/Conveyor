@@ -407,9 +407,253 @@ class TimeboxedGoalTests(_TimeboxedGoalBase):
 
         paused = self._goal(gid)
         self.assertEqual(paused["state"], "waiting_user")
-        self.assertEqual(paused["question"], goals.CONTINUOUS_FAILURES_QUESTION)
+        self.assertEqual(paused["question"], "最近 3 轮都没通过检查：单测未通过")
         self.assertEqual(paused["consecutive_failures"], 3)
         self.assertEqual(len(paused["iterations"]), 3)
+
+    def test_deadline_wins_over_three_failures_and_ask_user_and_posts_end_report(self) -> None:
+        origin_sid = "web:web-console:r3-deadline-wins"
+        goal = self._create(
+            duration_minutes=60,
+            mode="continuous",
+            origin_session_id=origin_sid,
+        )
+        gid = goal["id"]
+
+        self.responder = lambda _p: json.dumps(
+            {
+                "decision": "continue",
+                "reason": "单测未通过",
+                "next_prompt": "修复失败的单元测试",
+                "question": "",
+                "summary": "测试失败，继续尝试修复。",
+            },
+            ensure_ascii=False,
+        )
+
+        # Rounds 1 and 2 fail before deadline -> streak reaches 2.
+        for expected_n in (1, 2):
+            self._advance()
+            tid = self._goal(gid)["iterations"][expected_n - 1]["task_id"]
+            self.clock.advance(minutes=20)
+            self._set_task_state(tid, "failed", error="pytest failed")
+            self._advance()
+            self.assertEqual(self._goal(gid)["state"], "running")
+
+        # Round 3 runs, deadline passes, and round 3 fails too (3 in a row) ->
+        # deadline MUST win: finish as exhausted/deadline and post end report, NOT waiting_user!
+        t3 = self._goal(gid)["iterations"][2]["task_id"]
+        self.clock.advance(minutes=25)  # +65 min total -> past 60 min deadline
+        self._set_task_state(t3, "failed", error="pytest failed again")
+        self._advance()
+
+        done = self._goal(gid)
+        self.assertEqual(done["state"], "exhausted")
+        self.assertEqual(done["stop_reason"], "deadline")
+        self.assertIn("时间到了", done["summary"])
+        session = get_transcript_store(self.settings).get_session(origin_sid)
+        msgs = [m["text"] for m in build_history(session, settings=self.settings) if m.get("role") == "assistant"]
+        self.assertTrue(any("的目标结束了：时间到了。" in txt for txt in msgs))
+
+    def test_deadline_wins_over_ask_user_give_up_unavailable_and_needs_validation(self) -> None:
+        cases = [
+            ("ask_user", json.dumps({"decision": "ask_user", "question": "需要确认？", "summary": "等确认"}, ensure_ascii=False), "failed"),
+            ("give_up", json.dumps({"decision": "give_up", "reason": "做不下去", "summary": "放弃"}, ensure_ascii=False), "failed"),
+            ("unparsable", "not-json", "failed"),
+            ("waiting_user", json.dumps({"decision": "ask_user", "question": "没配验证", "summary": "等验证"}, ensure_ascii=False), "waiting_user"),
+        ]
+        for label, reply, task_state in cases:
+            with self.subTest(case=label):
+                origin_sid = f"web:web-console:r3-dead-{label}"
+                goal = self._create(duration_minutes=60, mode="continuous", origin_session_id=origin_sid)
+                gid = goal["id"]
+                self._advance()
+                t1 = self._goal(gid)["iterations"][0]["task_id"]
+                self.clock.advance(minutes=65)
+                if task_state == "waiting_user":
+                    ags.transition(self.settings, t1, "waiting_user", stage="needs_validation", error="no validation")
+                else:
+                    self._set_task_state(t1, task_state, error="check failed")
+                self.responder = lambda _p, r=reply: r
+                self._advance()
+
+                done = self._goal(gid)
+                self.assertEqual(done["state"], "exhausted")
+                self.assertEqual(done["stop_reason"], "deadline")
+                self.assertIn("时间到了", done["summary"])
+                session = get_transcript_store(self.settings).get_session(origin_sid)
+                msgs = [m["text"] for m in build_history(session, settings=self.settings) if m.get("role") == "assistant"]
+                self.assertTrue(any("的目标结束了：时间到了。" in txt for txt in msgs))
+
+    def test_outcome_mode_achieved_after_deadline_still_finishes_as_achieved(self) -> None:
+        goal = self._create(duration_minutes=60, mode="outcome")
+        gid = goal["id"]
+        self._advance()
+        t1 = self._goal(gid)["iterations"][0]["task_id"]
+        self.clock.advance(minutes=65)
+        self._set_task_state(t1, "completed")
+        self._advance()
+
+        done = self._goal(gid)
+        self.assertEqual(done["state"], "achieved")
+
+    def test_is_infrastructure_failure_classifies_from_structured_fields(self) -> None:
+        # 1) Pi length stop (even when error message is Chinese, classified from metadata stop_reason)
+        self.assertTrue(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t1", "state": "failed", "stage": "implementation", "error": "随便什么中文错误"},
+                executions=[{
+                    "executor": "pi",
+                    "status": "failed",
+                    "error": "随便什么中文错误",
+                    "metadata_json": json.dumps({"stop_reason": "length"}),
+                }],
+            )
+        )
+        # 2) Executor timeout (status == 'timeout')
+        self.assertTrue(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t2", "state": "failed", "stage": "implementation", "error": ""},
+                executions=[{"executor": "claude", "status": "timeout", "error": "", "metadata_json": "{}"}],
+            )
+        )
+        # 3) Quota / rate limit via error_kind
+        self.assertTrue(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t3", "state": "failed", "stage": "implementation", "metadata": {"error_kind": "quota"}},
+                executions=[],
+            )
+        )
+        # 4) Executor unavailable via error_kind
+        self.assertTrue(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t4", "state": "failed", "stage": "supervisor_error", "metadata": {"error_kind": "executor_unavailable"}},
+                executions=[],
+            )
+        )
+        # 5) supervisor_error with runtime cause (lock_error / analysis failed) vs worktree mutation
+        self.assertTrue(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t5", "state": "failed", "stage": "supervisor_error", "error": "worktree locked", "metadata": {"error_kind": "lock_error"}},
+                executions=[],
+            )
+        )
+        self.assertFalse(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t6", "state": "failed", "stage": "supervisor_error", "error": "worktree changed during analysis (rejected before implementation)", "metadata": {"error_kind": "worktree_mutated"}},
+                executions=[],
+            )
+        )
+        # 6) Code / validation failure is NOT infra even if Chinese text mentions timeout
+        self.assertFalse(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t7", "state": "failed", "stage": "failed", "error": "Pi 响应未完整结束（length）"},
+                executions=[],
+            )
+        )
+        self.assertFalse(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {"id": "t8", "state": "failed", "stage": "repair_limit_exceeded", "error": "max repair rounds exceeded; remaining issues reported"},
+                executions=[{"executor": "pi", "status": "finished", "error": "", "metadata_json": "{}"}],
+            )
+        )
+
+    def test_infrastructure_failures_not_counted_toward_continuous_streak(self) -> None:
+        goal = self._create(duration_minutes=240, mode="continuous")
+        gid = goal["id"]
+
+        self.responder = lambda _p: json.dumps(
+            {
+                "decision": "continue",
+                "reason": "上一轮中断，继续重试",
+                "next_prompt": "继续完成目标",
+                "question": "",
+                "summary": "执行器遇到问题，重试。",
+            },
+            ensure_ascii=False,
+        )
+
+        # 2 code failures -> streak = 2
+        for idx in (1, 2):
+            self._advance()
+            tid = self._goal(gid)["iterations"][idx - 1]["task_id"]
+            self._set_task_state(tid, "failed", error="pytest failed")
+            self._advance()
+            self.assertEqual(self._goal(gid)["consecutive_failures"], idx)
+
+        # Round 3: Pi length stop (via execution metadata) -> NOT counted, streak stays 2, keeps running!
+        self._advance()
+        t3 = self._goal(gid)["iterations"][2]["task_id"]
+        conn = ags._connect(self.settings)
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO supervisor_executions
+                       (execution_id, task_id, role, executor, status, started_at, error, metadata_json)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    ("ex-pi-len", t3, "implementer", "pi", "failed",
+                     "2026-11-15T10:00:00+00:00", "模型两次都因为回答太长被截断",
+                     json.dumps({"stop_reason": "length", "error_kind": "pi_length"})),
+                )
+        finally:
+            conn.close()
+        ags.transition(self.settings, t3, "failed", stage="implementation",
+                       error="implementation failed: 模型两次都因为回答太长被截断",
+                       metadata={"error_kind": "pi_length"})
+        self._advance()
+        after_r3 = self._goal(gid)
+        self.assertEqual(after_r3["state"], "running")
+        self.assertEqual(after_r3["consecutive_failures"], 2)
+
+        # Round 4: executor timeout -> NOT counted, streak stays 2, keeps running!
+        t4 = after_r3["iterations"][3]["task_id"]
+        conn = ags._connect(self.settings)
+        try:
+            with conn:
+                conn.execute(
+                    """INSERT INTO supervisor_executions
+                       (execution_id, task_id, role, executor, status, started_at, error, metadata_json)
+                       VALUES (?,?,?,?,?,?,?,?)""",
+                    ("ex-timeout", t4, "implementer", "pi", "timeout",
+                     "2026-11-15T10:05:00+00:00", "timed out after 3600s",
+                     json.dumps({"error_kind": "executor_timeout"})),
+                )
+        finally:
+            conn.close()
+        ags.transition(self.settings, t4, "failed", stage="implementation",
+                       error="implementation failed: timed out after 3600s",
+                       metadata={"error_kind": "executor_timeout"})
+        self._advance()
+        after_r4 = self._goal(gid)
+        self.assertEqual(after_r4["state"], "running")
+        self.assertEqual(after_r4["consecutive_failures"], 2)
+
+        # Round 5: 3rd real code failure -> streak hits 3 -> waiting_user with last reason!
+        t5 = after_r4["iterations"][4]["task_id"]
+        self.responder = lambda _p: json.dumps(
+            {
+                "decision": "continue",
+                "reason": "缺少 scripts/check.sh",
+                "next_prompt": "补上 check.sh",
+                "question": "",
+                "summary": "验证脚本缺失。",
+            },
+            ensure_ascii=False,
+        )
+        self._set_task_state(t5, "failed", error="check-script failed")
+        self._advance()
+        paused = self._goal(gid)
+        self.assertEqual(paused["state"], "waiting_user")
+        self.assertEqual(paused["consecutive_failures"], 3)
+        self.assertEqual(paused["question"], "最近 3 轮都没通过检查：缺少 scripts/check.sh")
 
     def test_quota_pause_does_not_burn_round_and_resumes_at_reset(self) -> None:
         goal = self._create(duration_minutes=180, mode="continuous")

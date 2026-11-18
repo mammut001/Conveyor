@@ -3068,6 +3068,19 @@ def _maybe_handle_quota_failure(
     if not _is_quota_failure(settings, fresh_task):
         return False
 
+    if _deadline_passed(fresh_goal):
+        _record_decision(
+            settings,
+            goal_id,
+            n,
+            decision=DECISION_CONTINUE,
+            reason="已到截止时间",
+            task_state=str(fresh_task.get("state") or ""),
+            passed=False,
+        )
+        _finish_deadline(settings, fresh_goal, _iterations(settings, goal_id))
+        return True
+
     resume_dt = _earliest_quota_reset(settings, fresh_task)
     deadline_dt = _parse_utc(fresh_goal.get("deadline_at"))
     if deadline_dt is not None and resume_dt >= deadline_dt:
@@ -3391,6 +3404,217 @@ def _advance_to_next_iteration_or_stop(
     _maybe_post_progress_digest(settings, _get_goal_row(settings, goal_id), iterations)
 
 
+_INFRA_ERROR_KINDS = frozenset({
+    "pi_length",
+    "length",
+    "max_tokens",
+    "executor_timeout",
+    "timeout",
+    "quota",
+    "rate_limit",
+    "executor_unavailable",
+    "unavailable",
+    "runtime_error",
+    "lock_error",
+    "unexpected_error",
+    "worktree_unavailable",
+    "executor_error",
+    "runtime",
+})
+_NON_INFRA_ERROR_KINDS = frozenset({
+    "code_error",
+    "validation_failed",
+    "review_rejected",
+    "worktree_mutated",
+    "invalid_input",
+    "invalid_config",
+})
+_INFRA_EXECUTION_SUBTYPES = frozenset({
+    "timeout",
+    "aborted",
+    "missing_result",
+    "malformed_result",
+    "ambiguous_result",
+    "stream_error",
+    "parser_exception",
+})
+_RUNTIME_ERROR_MARKERS = (
+    "unavailable",
+    "timed out",
+    "timeout",
+    "failed to spawn",
+    "rate limit",
+    "quota",
+    "usage limit",
+    "output byte limit",
+    "analysis failed:",
+    "cannot resolve",
+    "lock",
+)
+_NON_RUNTIME_SUPERVISOR_MARKERS = (
+    "changed during",
+    "mutated worktree",
+    "discussion_snapshot",
+    "unsupported location",
+    "unsupported tool",
+    "invalid model",
+    "cannot be configured with write",
+)
+
+
+def _execution_is_infra_failure(execution: dict[str, Any]) -> bool:
+    if not isinstance(execution, dict):
+        return False
+    status = str(execution.get("status") or "").strip().lower()
+    if status == "timeout":
+        return True
+    meta = execution.get("meta")
+    if not isinstance(meta, dict):
+        meta = _decode_json_object(execution.get("metadata_json"))
+    err_kind = str(meta.get("error_kind") or "").strip().lower()
+    if err_kind in _INFRA_ERROR_KINDS:
+        return True
+    if err_kind in _NON_INFRA_ERROR_KINDS:
+        return False
+    if str(meta.get("stop_reason") or "").strip().lower() == "length":
+        return True
+    if str(meta.get("finished_reason") or "").strip().lower() in ("length", "max_tokens"):
+        return True
+    subtype = str(meta.get("subtype") or "").strip().lower()
+    if status == "failed" and subtype in _INFRA_EXECUTION_SUBTYPES:
+        return True
+    err = str(execution.get("error") or "").strip().lower()
+    if status == "failed" and err and any(tok in err for tok in _RUNTIME_ERROR_MARKERS):
+        return True
+    return False
+
+
+def _latest_round_has_failed_validation(settings: Any, task_id: str) -> bool:
+    if not task_id or settings is None or not getattr(settings, "codex_memory_root", ""):
+        return False
+    try:
+        acc = ags.latest_acceptance(settings, task_id)
+    except Exception:
+        return False
+    if not isinstance(acc, dict):
+        return False
+    checks = acc.get("executed_checks")
+    if checks is None and isinstance(acc.get("executed_checks_json"), str):
+        try:
+            decoded = json.loads(acc["executed_checks_json"])
+            checks = decoded if isinstance(decoded, list) else []
+        except Exception:
+            checks = []
+    if isinstance(checks, list) and any(isinstance(c, dict) and not c.get("passed") for c in checks):
+        return True
+    return False
+
+
+def _is_infrastructure_failure(
+    settings: Any,
+    task: dict[str, Any],
+    executions: list[dict[str, Any]] | None = None,
+) -> bool:
+    """Classify from structured task/execution fields whether a failed round was
+    caused by the executor/runtime (not the code). Never matches Chinese text."""
+    if not isinstance(task, dict):
+        return False
+    state = str(task.get("state") or "").strip().lower()
+    if state not in ("failed", "blocked"):
+        return False
+
+    meta = task.get("metadata")
+    if not isinstance(meta, dict):
+        meta = _decode_json_object(task.get("metadata_json"))
+    error_kind = str(meta.get("error_kind") or "").strip().lower()
+    if error_kind in _NON_INFRA_ERROR_KINDS:
+        return False
+    if error_kind in _INFRA_ERROR_KINDS:
+        return True
+
+    if _is_quota_failure(settings, task):
+        return True
+
+    stage = str(task.get("stage") or "").strip().lower()
+    if stage == "unexpected_error":
+        return True
+
+    task_id = str(task.get("id") or "").strip()
+    if executions is None:
+        if task_id and settings is not None and getattr(settings, "codex_memory_root", ""):
+            try:
+                executions = ags.list_executions(settings, task_id=task_id, limit=20)
+            except Exception:
+                executions = []
+        else:
+            executions = []
+
+    provider_execs = [
+        ex for ex in executions
+        if isinstance(ex, dict) and str(ex.get("executor") or "").strip().lower() not in NON_PROVIDER_EXECUTORS
+    ]
+    latest_provider_infra = bool(provider_execs) and _execution_is_infra_failure(provider_execs[0])
+
+    if stage == "repair_limit_exceeded":
+        if _latest_round_has_failed_validation(settings, task_id):
+            return False
+        return latest_provider_infra
+
+    if latest_provider_infra:
+        return True
+
+    task_error = str(task.get("error") or "").strip().lower()
+    if stage == "supervisor_error":
+        if any(tok in task_error for tok in _NON_RUNTIME_SUPERVISOR_MARKERS):
+            return False
+        return any(tok in task_error for tok in _RUNTIME_ERROR_MARKERS) or "worktree" in task_error
+
+    if stage in ("analysis", "implementation"):
+        return any(tok in task_error for tok in _RUNTIME_ERROR_MARKERS)
+
+    return False
+
+
+def _last_failure_reason(
+    settings: Any,
+    task: dict[str, Any],
+    decision: dict[str, Any],
+) -> str:
+    reason = str(decision.get("reason") or "").strip()
+    if reason:
+        return reason
+    summary = str(decision.get("summary") or "").strip()
+    if summary and not (summary.startswith("第 ") and "任务状态：" in summary):
+        return summary
+    task_id = str(task.get("id") or "").strip()
+    if task_id and settings is not None and getattr(settings, "codex_memory_root", ""):
+        try:
+            acc = ags.latest_acceptance(settings, task_id)
+        except Exception:
+            acc = None
+        if isinstance(acc, dict):
+            issues = acc.get("issues")
+            if isinstance(issues, list):
+                joined = "；".join(str(i).strip() for i in issues if str(i or "").strip())
+                if joined:
+                    return joined
+    err = str(task.get("error") or "").strip()
+    if err:
+        return err
+    return ""
+
+
+def _continuous_failures_question(
+    settings: Any,
+    task: dict[str, Any],
+    decision: dict[str, Any],
+) -> str:
+    detail = _clip_report_detail(_last_failure_reason(settings, task, decision), 200)
+    if detail:
+        return f"最近 {CONTINUOUS_CONSECUTIVE_FAILURE_LIMIT} 轮都没通过检查：{detail}"
+    return CONTINUOUS_FAILURES_QUESTION
+
+
 def _reapply_decision(
     server: Any,
     settings: Any,
@@ -3425,20 +3649,13 @@ def _reapply_decision(
         )
         return
 
-    if stored_decision == DECISION_GIVE_UP:
-        _finish_goal(
-            settings,
-            goal,
-            GOAL_FAILED,
-            summary=summary,
-            stop_reason=reason or "评估器判断目标无法达成",
-        )
-        return
-
     if stored_decision == DECISION_ACHIEVED:
         task_id = str(iteration.get("task_id") or "")
         task = ags.get_task(settings, task_id) if task_id else None
         if task is None:
+            if _deadline_passed(goal):
+                _finish_deadline(settings, goal, iterations)
+                return
             _fail_goal(settings, goal, f"第 {n} 轮的任务记录缺失，无法确认目标结果")
             return
         if not _completion_is_current(settings, task_id):
@@ -3456,6 +3673,20 @@ def _reapply_decision(
             GOAL_ACHIEVED,
             summary=summary,
             stop_reason=reason or "评估器判断目标已达成",
+        )
+        return
+
+    if _deadline_passed(goal):
+        _finish_deadline(settings, goal, iterations)
+        return
+
+    if stored_decision == DECISION_GIVE_UP:
+        _finish_goal(
+            settings,
+            goal,
+            GOAL_FAILED,
+            summary=summary,
+            stop_reason=reason or "评估器判断目标无法达成",
         )
         return
 
@@ -3565,6 +3796,14 @@ def _apply_evaluation_decision(
         return
 
     if state == "waiting_user":
+        if _deadline_passed(fresh_goal):
+            _stage_eval_fields(settings, goal_id, summary=summary)
+            _record_decision(
+                settings, goal_id, n,
+                decision=DECISION_CONTINUE, reason="已到截止时间", task_state=state, passed=False,
+            )
+            _finish_deadline(settings, fresh_goal, _iterations(settings, goal_id))
+            return
         if stage == "needs_validation":
             question = NEEDS_VALIDATION_QUESTION
         else:
@@ -3581,6 +3820,14 @@ def _apply_evaluation_decision(
         return
 
     if not decision["decision"]:
+        if _deadline_passed(fresh_goal):
+            _stage_eval_fields(settings, goal_id, summary=summary)
+            _record_decision(
+                settings, goal_id, n,
+                decision=DECISION_CONTINUE, reason="已到截止时间", task_state=state, passed=False,
+            )
+            _finish_deadline(settings, fresh_goal, _iterations(settings, goal_id))
+            return
         # Parse failure / chat unavailable / unusable decision payload.
         question = EVALUATOR_UNAVAILABLE_QUESTION
         _stage_eval_fields(settings, goal_id, summary=summary, question=question)
@@ -3611,21 +3858,65 @@ def _apply_evaluation_decision(
     round_passed = state == "completed" and decision["decision"] in (DECISION_ACHIEVED, DECISION_CONTINUE)
     round_title = _derive_round_title(decision, iteration, fresh or task, n) if round_passed else ""
 
+    infra_failure = False
+    if not round_passed and state in ("failed", "blocked"):
+        infra_failure = _is_infrastructure_failure(settings, fresh or task)
+
     if round_passed:
         consec_failures = 0
+    elif infra_failure:
+        consec_failures = int(fresh_goal.get("consecutive_failures") or 0)
     elif state in ("failed", "blocked") or (state != "completed" and decision["decision"] != DECISION_ASK_USER):
         consec_failures = int(fresh_goal.get("consecutive_failures") or 0) + 1
     else:
         consec_failures = int(fresh_goal.get("consecutive_failures") or 0)
     _update_goal(settings, goal_id, consecutive_failures=consec_failures, updated_at=_utc_now())
 
+    if decision["decision"] == DECISION_ACHIEVED and not is_continuous:
+        reason = decision["reason"] or "评估器判断目标已达成"
+        _stage_eval_fields(settings, goal_id, summary=summary)
+        _record_decision(
+            settings, goal_id, n,
+            decision=DECISION_ACHIEVED, reason=reason, task_state=state,
+            passed=True, round_title=round_title,
+        )
+        # Recheck the snapshot after persisting the decision as well.  A crash
+        # or concurrent edit in this window uses the same recovery path.
+        recorded = dict(iteration, decision=DECISION_ACHIEVED, decision_reason=reason,
+                        task_final_state=state)
+        _reapply_decision(server, settings, goal, recorded, iterations)
+        if _get_goal_row(settings, goal_id)["state"] == GOAL_ACHIEVED:
+            _store_goal_lessons(settings, goal, decision.get("lessons"))
+        return
+
+    if _deadline_passed(fresh_goal):
+        stored_decision = (
+            DECISION_ACHIEVED if (decision["decision"] == DECISION_ACHIEVED and is_continuous) else DECISION_CONTINUE
+        )
+        _stage_eval_fields(settings, goal_id, summary=summary)
+        _record_decision(
+            settings,
+            goal_id,
+            n,
+            decision=stored_decision,
+            reason=decision["reason"] or "已到截止时间",
+            task_state=state,
+            passed=round_passed,
+            round_title=round_title,
+        )
+        if round_passed and is_continuous:
+            _store_goal_lessons(settings, goal, decision.get("lessons"))
+        _finish_deadline(settings, fresh_goal, _iterations(settings, goal_id))
+        return
+
     if is_continuous and not round_passed and consec_failures >= CONTINUOUS_CONSECUTIVE_FAILURE_LIMIT and decision["decision"] != DECISION_ASK_USER:
         next_suggestion = decision["next_prompt"].strip()
+        streak_question = _continuous_failures_question(settings, fresh or task, decision)
         _stage_eval_fields(
             settings,
             goal_id,
             summary=summary,
-            question=CONTINUOUS_FAILURES_QUESTION,
+            question=streak_question,
             last_next_prompt=next_suggestion if next_suggestion else None,
         )
         _record_decision(
@@ -3642,7 +3933,7 @@ def _apply_evaluation_decision(
             goal,
             GOAL_WAITING_USER,
             summary=summary,
-            question=CONTINUOUS_FAILURES_QUESTION,
+            question=streak_question,
         )
         return
 
@@ -3660,23 +3951,6 @@ def _apply_evaluation_decision(
             summary=summary,
             stop_reason=reason,
         )
-        return
-
-    if decision["decision"] == DECISION_ACHIEVED and not is_continuous:
-        reason = decision["reason"] or "评估器判断目标已达成"
-        _stage_eval_fields(settings, goal_id, summary=summary)
-        _record_decision(
-            settings, goal_id, n,
-            decision=DECISION_ACHIEVED, reason=reason, task_state=state,
-            passed=True, round_title=round_title,
-        )
-        # Recheck the snapshot after persisting the decision as well.  A crash
-        # or concurrent edit in this window uses the same recovery path.
-        recorded = dict(iteration, decision=DECISION_ACHIEVED, decision_reason=reason,
-                        task_final_state=state)
-        _reapply_decision(server, settings, goal, recorded, iterations)
-        if _get_goal_row(settings, goal_id)["state"] == GOAL_ACHIEVED:
-            _store_goal_lessons(settings, goal, decision.get("lessons"))
         return
 
     if decision["decision"] == DECISION_ASK_USER:
@@ -3708,6 +3982,8 @@ def _apply_evaluation_decision(
     next_prompt = decision["next_prompt"].strip()
     if len(next_prompt) > MAX_NEXT_PROMPT_CHARS:
         next_prompt = ""
+    if infra_failure and not next_prompt:
+        next_prompt = "上一轮因为执行器或运行环境异常未能完成，请重试并继续完成上一轮的工作。"
 
     if not (is_continuous and round_passed) and used < max_iterations and not _deadline_passed(fresh_goal) and not next_prompt:
         _stage_eval_fields(settings, goal_id, summary=summary, question=NO_NEXT_PROMPT_QUESTION)

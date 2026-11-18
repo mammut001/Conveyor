@@ -397,6 +397,83 @@ class Round1ReviewVerdictTests(unittest.TestCase):
         self.assertIn(f'"target_fingerprint": "{identity["fingerprint"]}"', prompt)
         self.assertIn('"issues": []', prompt)
 
+    def test_target_sha_transcription_typo_accepted_with_live_worktree_check(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="sup-r1-sha-typo-"))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        _, wt, _head = make_disposable_repo(tmp)
+        identity = target_identity(str(wt))
+        real_sha = identity["sha"]
+        # Simulate a model repeating one hex group while keeping target_fingerprint exact.
+        echoed_typo_sha = real_sha[:12] + real_sha[8:12] + real_sha[12:]
+        self.assertNotEqual(echoed_typo_sha, real_sha)
+
+        payload = self._valid_pass_payload(sha=echoed_typo_sha, fp=identity["fingerprint"])
+        parsed = parse_review_verdict(
+            json.dumps(payload),
+            expected_sha=real_sha,
+            expected_fingerprint=identity["fingerprint"],
+            worktree_path=str(wt),
+        )
+        self.assertTrue(parsed["passed"])
+        self.assertTrue(parsed.get("sha_echo_mismatch"))
+        self.assertIn("sha_echo_mismatch", parsed.get("evidence_notes") or [])
+
+        evidence_json = ags._build_review_evidence_json(
+            [], parsed["checks"], parsed, expected_sha=real_sha
+        )
+        evidence_obj = json.loads(evidence_json)
+        self.assertIn("sha_echo_mismatch", evidence_obj.get("notes") or [])
+        self.assertEqual(evidence_obj["sha_echo_mismatch"]["echoed_target_sha"], echoed_typo_sha)
+        self.assertEqual(evidence_obj["sha_echo_mismatch"]["expected_target_sha"], real_sha)
+
+    def test_target_sha_different_real_commit_rejected(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="sup-r1-diff-commit-"))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        _, wt, head1 = make_disposable_repo(tmp)
+        (wt / "next.txt").write_text("second commit\n", encoding="utf-8")
+        git_run(wt, "add", "next.txt")
+        git_run(wt, "commit", "-m", "second commit")
+        identity2 = target_identity(str(wt))
+        self.assertNotEqual(identity2["sha"], head1)
+
+        payload = self._valid_pass_payload(sha=head1, fp=identity2["fingerprint"])
+        with self.assertRaises(ReviewEnvelopeError):
+            parse_review_verdict(
+                json.dumps(payload),
+                expected_sha=identity2["sha"],
+                expected_fingerprint=identity2["fingerprint"],
+                worktree_path=str(wt),
+            )
+
+    def test_target_fingerprint_mismatch_or_changed_worktree_rejected(self) -> None:
+        tmp = Path(tempfile.mkdtemp(prefix="sup-r1-fp-mismatch-"))
+        self.addCleanup(lambda: shutil.rmtree(tmp, ignore_errors=True))
+        _, wt, _head = make_disposable_repo(tmp)
+        identity = target_identity(str(wt))
+        real_sha = identity["sha"]
+        echoed_typo_sha = real_sha[:12] + real_sha[8:12] + real_sha[12:]
+
+        # 1) Fingerprint mismatch must be rejected even with worktree_path supplied.
+        bad_fp_payload = self._valid_pass_payload(sha=echoed_typo_sha, fp="0" * 64)
+        with self.assertRaises(ReviewEnvelopeError):
+            parse_review_verdict(
+                json.dumps(bad_fp_payload),
+                expected_sha=real_sha,
+                expected_fingerprint=identity["fingerprint"],
+                worktree_path=str(wt),
+            )
+
+        # 2) If worktree content changed after identity capture, transcription fallback must reject.
+        (wt / "dirty.txt").write_text("mutated\n", encoding="utf-8")
+        stale_payload = self._valid_pass_payload(sha=echoed_typo_sha, fp=identity["fingerprint"])
+        with self.assertRaises(ReviewEnvelopeError):
+            parse_review_verdict(
+                json.dumps(stale_payload),
+                expected_sha=real_sha,
+                expected_fingerprint=identity["fingerprint"],
+                worktree_path=str(wt),
+            )
+
 
 class Round1CommandCodeParserTests(unittest.TestCase):
     def test_parses_success_envelope_and_ignores_non_result_decoys(self) -> None:

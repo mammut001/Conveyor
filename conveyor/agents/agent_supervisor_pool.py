@@ -118,8 +118,13 @@ class PoolExecutor:
         candidates = self.candidates(role)
         if not candidates:
             now = ags._utc_now()
-            return ExecutionResult(success=False, error=NO_WORKER_REASON,
-                                   started_at=now, finished_at=now)
+            return ExecutionResult(
+                success=False,
+                error=NO_WORKER_REASON,
+                evidence={"meta": {"error_kind": "executor_unavailable"}},
+                started_at=now,
+                finished_at=now,
+            )
 
         write = "write" in role.tools
         attempts: list[dict[str, Any]] = []
@@ -169,13 +174,15 @@ class PoolExecutor:
                 logger.warning("pool: failed to cool/record worker %s: %s", wid, exc)
 
         assert result is not None
+        ev = dict(result.evidence or {})
         if quota_exhausted and not result.success:
             result.error = f"{ALL_QUOTA_PREFIX}{result.error}"
+            meta = dict(ev.get("meta") or {}) if isinstance(ev.get("meta"), dict) else {}
+            meta["error_kind"] = "quota"
+            ev["meta"] = meta
         last = attempts[-1]
-        result.evidence = {
-            **(result.evidence or {}),
-            "pool": {"worker_id": last["worker_id"], "label": last["label"], "attempts": attempts},
-        }
+        ev["pool"] = {"worker_id": last["worker_id"], "label": last["label"], "attempts": attempts}
+        result.evidence = ev
         return result
 
     async def cancel(self, execution_id: str) -> bool:
