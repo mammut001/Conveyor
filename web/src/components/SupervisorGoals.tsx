@@ -401,10 +401,16 @@ export function goalUsageLine(goal?: { usage?: GoalUsage | null } | null): strin
     return runsBeforeRecording > 0 ? '这个目标是在开始记录用量之前跑的' : ''
   }
   const total = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
+  let phrase = `已用${formatTokens(total)}`
+  const cached = usage.cached_input_tokens ?? 0
+  if (cached > 0 && total > 0) {
+    const pct = Math.round(100 * cached / total)
+    if (pct > 0) phrase += `（其中约 ${pct}% 命中缓存）`
+  }
   let note = ''
   if (runsWithoutUsage > 0) note = '（部分执行者没有报告用量）'
   else if (runsBeforeRecording > 0) note = '（更早的轮次还没开始记录用量）'
-  return `已用${formatTokens(total)}${note}`
+  return `${phrase}${note}`
 }
 
 // 每一步对应哪个角色：执行记录里找不到正在跑的那条时，用任务里登记的角色执行者。
