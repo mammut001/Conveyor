@@ -552,6 +552,15 @@ class UsageCopyTests(_UsageCase):
         text = self._report(goal)
         self.assertIn("用了约 3.4 万 token（部分执行者没有报告用量）", text)
 
+    def test_finish_report_includes_cached_hit_percentage(self) -> None:
+        goal = self._create_goal()
+        goal["usage"] = {"input_tokens": 30000, "output_tokens": 4000,
+                         "cached_input_tokens": 10000, "runs_with_usage": 3,
+                         "runs_without_usage": 0}
+        # 10000 cached / 34000 total = 29.4% -> 29%
+        text = self._report(goal)
+        self.assertIn("用了约 3.4 万 token（其中约 29% 命中缓存）", text)
+
     def test_finish_report_without_partial_reporting_has_no_note(self) -> None:
         goal = self._create_goal()
         goal["usage"] = {"input_tokens": 30000, "output_tokens": 4000,
