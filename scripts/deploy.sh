@@ -118,7 +118,7 @@ fi
 if [[ -n "$TOOLS_MISSING" ]]; then
     log "WARNING: code-search tools missing ($TOOLS_MISSING); installing ripgrep fd-find"
     # Attempt install
-    if sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y -q ripgrep fd-find >/dev/null 2>&1; then
+    if sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q ripgrep fd-find >/dev/null 2>&1; then
         log "Installed ripgrep/fd-find successfully."
     else
         log "WARNING: could not install ripgrep/fd-find; supervisor roles will read whole files (more tokens)"
