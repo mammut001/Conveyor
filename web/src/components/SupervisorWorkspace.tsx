@@ -506,6 +506,7 @@ function taskResultNote(taskDetail: SupervisorTaskDetail | null, task: Superviso
 
 export function isAttentionTask(task: SupervisorTask): boolean {
   const key = (task.state || '').trim().toLowerCase()
+  if (key === 'cancelled') return false
   return (
     ['failed', 'blocked', 'waiting_user', 'waiting_for_user', 'waiting_for_human', 'needs_attention', 'interrupted'].includes(key)
     || Boolean(task.error && String(task.error).trim())
@@ -1685,13 +1686,23 @@ function SupervisorRunHistory({
                     </div>
                   </button>
                   {task.error && (
-                    <div className="sup-run-row-error">
-                      <span>{supFriendlyTaskError(task.error)}</span>
-                      <details className="sup-run-row-raw-error">
-                        <summary>技术详情</summary>
-                        <pre>{task.error}</pre>
-                      </details>
-                    </div>
+                    (task.state || '').trim().toLowerCase() === 'cancelled' ? (
+                      <div className="sup-run-row-note">
+                        <span>这一轮被停止了，改动保留在工作目录里。</span>
+                        <details className="sup-run-row-raw-error">
+                          <summary>技术详情</summary>
+                          <pre>{task.error}</pre>
+                        </details>
+                      </div>
+                    ) : (
+                      <div className="sup-run-row-error">
+                        <span>{supFriendlyTaskError(task.error)}</span>
+                        <details className="sup-run-row-raw-error">
+                          <summary>技术详情</summary>
+                          <pre>{task.error}</pre>
+                        </details>
+                      </div>
+                    )
                   )}
                 </div>
               )

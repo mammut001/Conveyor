@@ -1635,6 +1635,12 @@
   font-size: 12px;
 }
 
+.sup-run-row-note {
+  padding: 0 10px 8px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
 /* 运行记录里的失败原因：看得见的一句中文，英文原文收在「技术详情」里。 */
 .sup-run-row-error span {
   display: block;

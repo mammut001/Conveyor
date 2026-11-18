@@ -1422,6 +1422,43 @@ test('mock fixture: cancelled task shows a calm note, not an error banner', asyn
   await expect(infoBanner.locator('pre')).toHaveText('execution did not complete')
 })
 
+test('mock fixture: cancelled task in run history is not attention', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: { 'wt-fix-console': [{ ...CANCELLED_TASK, id: 'task-1' }] }
+  })
+  await page.goto('/#code')
+
+  // Bar shows "失败或等待确认时自动展开"
+  await expect(page.locator('.sup-run-history-hint')).toHaveText('失败或等待确认时自动展开')
+  await expect(page.locator('.sup-run-history-alert')).toBeHidden()
+
+  // Expand history
+  await page.locator('.sup-run-history').click()
+  const row = page.locator('.sup-run-row').first()
+  await expect(row).not.toHaveClass(/is-attention/)
+  await expect(row.locator('.sup-run-row-error')).toBeHidden()
+  await expect(row.locator('.sup-run-row-note')).toContainText('这一轮被停止了')
+  await row.getByText('技术详情', { exact: true }).click()
+  await expect(row.locator('pre')).toHaveText('execution did not complete')
+})
+
+test('mock fixture: cancelled + failed task in run history', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        { ...CANCELLED_TASK, id: 'task-1' },
+        { ...FAILED_QUOTA_TASK, id: 'task-2' }
+      ]
+    }
+  })
+  await page.goto('/#code')
+
+  // Bar shows "1 条需处理或失败"
+  await expect(page.locator('.sup-run-history-alert')).toHaveText('1 条需处理或失败')
+})
+
 test('mock fixture: failed task banner reads well at 390px and the 技术详情 disclosure opens with a real tap', async ({ page }) => {
   await page.setViewportSize(PHONE)
   await installSupervisorMockFixture(page, { initialTasksByWt: { 'wt-fix-console': [FAILED_QUOTA_TASK] } })
