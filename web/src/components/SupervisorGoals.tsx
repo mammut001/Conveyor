@@ -20,6 +20,18 @@ import { readGoalDraft, writeGoalDraft } from './supDrafts'
 // All owner-facing copy is Simplified Chinese; raw backend codes never render.
 // ---------------------------------------------------------------------------
 
+export function roundPromptSummary(prompt: string): string {
+  if (!prompt.startsWith('这是目标「')) return prompt
+  const blankLineIndex = prompt.indexOf('\n\n')
+  if (blankLineIndex === -1) return prompt
+  let summary = prompt.slice(blankLineIndex + 2)
+  if (summary.startsWith('本轮要做：')) {
+    summary = summary.slice(5)
+  }
+  const trimmed = summary.trim()
+  return trimmed || prompt
+}
+
 export type GoalState = 'running' | 'waiting_user' | 'waiting_quota' | 'achieved' | 'stopped' | 'exhausted' | 'failed'
 export type GoalMode = 'outcome' | 'continuous'
 
@@ -279,6 +291,7 @@ function GoalIterationRow({
 }) {
   const taskState = iteration.task_state || iteration.task_final_state
   const prompt = iteration.prompt.trim()
+  const summary = roundPromptSummary(prompt)
   // 只显示任务状态；「继续下一轮 / 已达成 / 需要你决定 / 放弃」只在真的有结论时出现。
   // 任务已经结束但结论还没写出来时，才提示「正在判断下一步…」。
   const decision = (iteration.decision || '').trim()
@@ -295,7 +308,7 @@ function GoalIterationRow({
         ) : null}
       </div>
       <div className={`sup-goal-iteration-prompt ${expanded ? 'is-expanded' : ''}`}>
-        <p>{prompt || '这一轮没有留下指令记录。'}</p>
+        <p>{expanded ? prompt || '这一轮没有留下指令记录。' : summary || '这一轮没有留下指令记录。'}</p>
         {!expanded && (
           <button type="button" className="sup-goal-expand-button" onClick={onToggleExpand}>
             展开全部
