@@ -16,7 +16,12 @@ concurrency:
 jobs:
   backend:
     name: Backend
-    runs-on: ubuntu-latest
+    # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
+    # never run fork PRs on our own machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, greencloud]
+    container:
+      image: python:3.11-bookworm
     timeout-minutes: 15
     env:
       TELEGRAM_BOT_TOKEN: test-token
@@ -27,12 +32,6 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
 
       - name: Create isolated test directories
         run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
@@ -138,7 +137,10 @@ jobs:
 
   web:
     name: Web
-    runs-on: ubuntu-latest
+    # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
+    # never run fork PRs on our own machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, greencloud]
     # Match web/package-lock.json; browser/system dependencies are preinstalled.
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
@@ -195,7 +197,10 @@ jobs:
 
   real-browser:
     name: Local fixture Chromium (required)
-    runs-on: ubuntu-latest
+    # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
+    # never run fork PRs on our own machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, greencloud]
     # Keep the Python package and bundled Chromium build in sync.
     container:
       image: mcr.microsoft.com/playwright/python:v1.65.0-noble
