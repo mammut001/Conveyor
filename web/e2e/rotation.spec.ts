@@ -376,7 +376,7 @@ test.describe('Usage-based rotation (执行者)', () => {
   test('drag the ⠿ handle with the mouse: reorder, 未保存, then 保存顺序 posts the order', async ({ page }) => {
     const api = await installApi(page)
     await open(page)
-    expect(await orderOf(page)).toEqual(['Antigravity', 'Super Grok', 'Codex', 'Claude Code'])
+    await expect.poll(() => orderOf(page)).toEqual(['Antigravity', 'Super Grok', 'Codex', 'Claude Code'])
     await expect(page.getByText('未保存')).toHaveCount(0)
 
     const handle = cardByLabel(page, 'Codex').locator('.worker-drag-handle')
@@ -390,7 +390,7 @@ test.describe('Usage-based rotation (执行者)', () => {
     await expect(page.locator('li.worker-card.drop-before')).toHaveAttribute('aria-label', 'Antigravity')
     await page.mouse.up()
 
-    expect(await orderOf(page)).toEqual(['Codex', 'Antigravity', 'Super Grok', 'Claude Code'])
+    await expect.poll(() => orderOf(page)).toEqual(['Codex', 'Antigravity', 'Super Grok', 'Claude Code'])
     await expect(page.getByText('未保存', { exact: true })).toBeVisible()
     const save = page.getByRole('button', { name: '保存顺序' })
     await expect(save).toHaveClass(/guard-btn-primary/)
@@ -419,7 +419,7 @@ test.describe('Usage-based rotation (执行者)', () => {
     await expect(page.locator('li.worker-card.drop-before')).toHaveAttribute('aria-label', 'Super Grok')
     await shoot(page, 'drop-indicator')
     await page.mouse.up()
-    expect(await orderOf(page)).toEqual(['Antigravity', 'Codex', 'Super Grok', 'Claude Code'])
+    await expect.poll(() => orderOf(page)).toEqual(['Antigravity', 'Codex', 'Super Grok', 'Claude Code'])
     await expect(page.locator('li.worker-card.drop-before')).toHaveCount(0)
   })
 
@@ -431,7 +431,7 @@ test.describe('Usage-based rotation (执行者)', () => {
     await handle.scrollIntoViewIfNeeded()
     const first = (await cardByLabel(page, 'Antigravity').boundingBox())!
     await touchDrag(page, handle, first.y + 6)
-    expect(await orderOf(page)).toEqual(['Claude Code', 'Antigravity', 'Super Grok', 'Codex'])
+    await expect.poll(() => orderOf(page)).toEqual(['Claude Code', 'Antigravity', 'Super Grok', 'Codex'])
     await expect(page.getByText('未保存', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: '保存顺序' }).click()
     await expect(page.getByText('已保存执行者顺序。')).toBeVisible()
@@ -456,7 +456,7 @@ test.describe('Usage-based rotation (执行者)', () => {
     await installApi(page)
     await open(page)
     await page.getByRole('button', { name: '下移 Antigravity' }).click()
-    expect(await orderOf(page)).toEqual(['Super Grok', 'Antigravity', 'Codex', 'Claude Code'])
+    await expect.poll(() => orderOf(page)).toEqual(['Super Grok', 'Antigravity', 'Codex', 'Claude Code'])
     await expect(page.getByText('未保存', { exact: true })).toBeVisible()
     await expect(page.getByText('顺序或开关改过了')).toBeVisible()
   })
@@ -466,11 +466,11 @@ test.describe('Usage-based rotation (执行者)', () => {
     await open(page)
     await page.getByRole('button', { name: '下移 Antigravity' }).click()
     await page.locator('label.worker-toggle', { has: page.getByLabel('启用 Codex') }).click()
-    expect(await orderOf(page)).toEqual(['Super Grok', 'Antigravity', 'Codex', 'Claude Code'])
+    await expect.poll(() => orderOf(page)).toEqual(['Super Grok', 'Antigravity', 'Codex', 'Claude Code'])
 
     await page.getByRole('button', { name: '重新检测' }).click()
     await expect(page.getByText('你还没保存的顺序和开关改动都还在')).toBeVisible()
-    expect(await orderOf(page)).toEqual(['Super Grok', 'Antigravity', 'Codex', 'Claude Code'])
+    await expect.poll(() => orderOf(page)).toEqual(['Super Grok', 'Antigravity', 'Codex', 'Claude Code'])
     await expect(page.getByLabel('启用 Codex')).not.toBeChecked()
     await expect(page.getByText('未保存', { exact: true })).toBeVisible()
     expect(api.calls.some(c => c.path === '/api/workers/detect')).toBe(true)
