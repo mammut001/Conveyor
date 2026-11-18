@@ -16,8 +16,17 @@ concurrency:
 jobs:
   backend:
     name: Backend
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
+    # never run fork PRs on our own machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, greencloud]
+    container:
+      image: python:3.11-bookworm
+      # --init reaps killed children; without it zombies look "alive" to the
+      # process-group lifecycle tests.
+      options: --init
+    # Two full unit-test passes plus smokes take ~16 min on greencloud.
+    timeout-minutes: 30
     env:
       TELEGRAM_BOT_TOKEN: test-token
       TELEGRAM_ALLOWED_USER_ID: "12345"
@@ -28,11 +37,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: pip
+      # The runner (uid ci) owns the checkout but the container runs as root;
+      # without this git refuses the repo ("dubious ownership").
+      - name: Trust the checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Create isolated test directories
         run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
@@ -138,7 +146,10 @@ jobs:
 
   web:
     name: Web
-    runs-on: ubuntu-latest
+    # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
+    # never run fork PRs on our own machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, greencloud]
     # Match web/package-lock.json; browser/system dependencies are preinstalled.
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
@@ -195,7 +206,10 @@ jobs:
 
   real-browser:
     name: Local fixture Chromium (required)
-    runs-on: ubuntu-latest
+    # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
+    # never run fork PRs on our own machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, greencloud]
     # Keep the Python package and bundled Chromium build in sync.
     container:
       image: mcr.microsoft.com/playwright/python:v1.65.0-noble
