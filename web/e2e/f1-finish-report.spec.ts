@@ -30,6 +30,18 @@ const REPORT_TEXT = [
   '改动在工作目录 sup/wt-1，还没有合并到主分支。',
 ].join('\n')
 
+const F1_DONE_GOAL = {
+  id: 'goal-f1-done', repo_id: 'repo-qa-todo', worktree_id: 'wt-1',
+  title: '实现 delete 命令', outcome: '实现 delete 命令并全部测试通过',
+  max_iterations: 20, role_overrides: {}, state: 'exhausted', mode: 'continuous',
+  created_at: '2026-11-18T10:00:00+00:00', updated_at: '2026-11-18T10:30:00+00:00',
+  question: '', summary: '时间到了：一共跑了 1 轮，其中 1 轮通过检查。', stop_reason: 'deadline',
+  last_next_prompt: '', iterations_used: 1, rounds_total: 1, rounds_passed: 1,
+  iterations: [{ n: 1, task_id: 'task-f1', prompt: '实现 delete 命令', decision: 'achieved', decision_reason: '完成',
+    started_at: '2026-11-18T10:00:00+00:00', finished_at: '2026-11-18T10:20:00+00:00', task_final_state: 'completed', task_state: 'completed', passed: true, round_title: '实现delete命令并全部测试通过' }],
+}
+const diffCalls: string[] = []
+
 async function setupMockServer(page: Page) {
   const actionCalls: string[] = []
   const repos: SupervisorRepo[] = [
@@ -58,7 +70,7 @@ async function setupMockServer(page: Page) {
         label: '查看改动',
         action: 'open_project',
         style: 'secondary',
-        payload: { view: 'code', tab: 'workspace', repo_id: 'repo-qa-todo', worktree_id: 'wt-1' },
+        payload: { view: 'code', tab: 'goals', repo_id: 'repo-qa-todo', worktree_id: 'wt-1', goal_id: 'goal-f1-done', show_changes: true },
       },
       {
         id: 'act-merge-branch',
@@ -200,7 +212,17 @@ async function setupMockServer(page: Page) {
     if (path === '/api/supervisor/repositories' && method === 'GET') return json({ repositories: repos })
     if (path === '/api/supervisor/tasks' && method === 'GET') return json({ tasks: [], count: 0 })
     if (path === '/api/supervisor/deployments' && method === 'GET') return json({ deployments: [], count: 0 })
-    if (path === '/api/supervisor/goals' && method === 'GET') return json({ goals: [], count: 0 })
+    if (path === '/api/supervisor/goals' && method === 'GET') return json({ goals: [F1_DONE_GOAL], count: 1 })
+    if (path === '/api/supervisor/goals/goal-f1-done' && method === 'GET') return json(F1_DONE_GOAL)
+    if (path === '/api/supervisor/goals/goal-f1-done/diff' && method === 'GET') {
+      diffCalls.push(path)
+      return json({
+        goal_id: 'goal-f1-done', base_sha: '1111111', head_sha: '2222222',
+        files: [{ path: 'todo.py', status: 'M', additions: 30, deletions: 2 }, { path: 'tests/test_todo.py', status: 'M', additions: 55, deletions: 0 }],
+        diff: ['diff --git a/todo.py b/todo.py', '--- a/todo.py', '+++ b/todo.py', '@@ -1,1 +1,2 @@', ' import sys', '+import json'].join('\n'),
+        truncated: false,
+      })
+    }
     const validationMatch = path.match(/^\/api\/supervisor\/repositories\/([^/]+)\/validation$/)
     if (validationMatch && method === 'GET') {
       return json({
@@ -244,11 +266,15 @@ test('finish report renders with three buttons, 查看改动 navigates, and 合�
   await expect(mergeBtn).toBeVisible()
   await expect(rerunBtn).toBeVisible()
 
-  // Clicking 查看改动 navigates directly to 项目 › 任务与结果 on wt-1 without calling /api/chat/actions
+  // Clicking 查看改动 opens 项目 › 目标 on wt-1 with this goal's changes already expanded
+  // (no /api/chat/actions call, and not the dispatch form).
   await viewBtn.click()
   expect(actionCalls).toEqual([])
   await expect(page.getByRole('heading', { name: 'qa-todo-cli / sup/wt-1' })).toBeVisible()
-  await expect(page.getByRole('tab', { name: '任务与结果' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('tab', { name: '目标' })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.sup-goal-changes-panel')).toBeVisible()
+  await expect(page.locator('.sup-goal-changes-panel')).toContainText('test_todo.py')
+  expect(diffCalls.length).toBeGreaterThan(0)
 
   // Return to 对话 and click 合并到主分支 -> confirmation card opens first
   await page.getByRole('button', { name: /对话/ }).first().click()

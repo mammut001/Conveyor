@@ -413,8 +413,10 @@ class GoalFinishReportTests(unittest.TestCase):
         nav_status, nav_res = chat_intents.execute_action(None, self.settings, btns["查看改动"]["id"])
         self.assertEqual(nav_status, HTTPStatus.OK)
         self.assertFalse(nav_res["card"]["used"])
-        self.assertEqual(nav_res["client_action"]["payload"]["tab"], "workspace")
+        self.assertEqual(nav_res["client_action"]["payload"]["tab"], "goals")
         self.assertEqual(nav_res["client_action"]["payload"]["worktree_id"], wt["id"])
+        self.assertEqual(nav_res["client_action"]["payload"]["goal_id"], goal["id"])
+        self.assertTrue(nav_res["client_action"]["payload"]["show_changes"])
 
         # 合并到主分支 opens confirmation card saying 合并后不能自动撤销
         req_status, req_res = chat_intents.execute_action(None, self.settings, btns["合并到主分支"]["id"])

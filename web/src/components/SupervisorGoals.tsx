@@ -623,6 +623,9 @@ export default function SupervisorGoals({
   onRefreshRepositories,
   draftOutcome,
   onDraftOutcomeUsed,
+  navGoalId,
+  navShowChanges,
+  onNavHandled,
   onOpenWorkers,
   workersData,
   onCreateWorktree,
@@ -649,6 +652,9 @@ export default function SupervisorGoals({
   /** 从「讨论」里点「设为目标」带来的草稿：只填进输入框，绝不自动开始。 */
   draftOutcome?: string | null
   onDraftOutcomeUsed?: () => void
+  navGoalId?: string | null
+  navShowChanges?: boolean
+  onNavHandled?: () => void
   /** Jump to the 执行者 page (used when a start is rejected for a failed executor check). */
   onOpenWorkers?: () => void
   /** Live workers payload from App.tsx: the Pi/pool role badges read Pi's last 测试. */
@@ -807,13 +813,38 @@ export default function SupervisorGoals({
     onDraftOutcomeUsed?.()
   }, [draftOutcome, onDraftOutcomeUsed, pinGoal])
 
+  // 「查看改动」跳转带来的请求：把那个目标放到结果卡上，等它真的显示出来再展开改动
+  // （目标列表可能还没读到；换目标时的「全部收起」也不能把它关掉）。只处理一次。
+  const pendingChangesGoalRef = useRef<string | null>(null)
+  const scrollToChangesRef = useRef(false)
+  const changesPanelRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!navGoalId) return
+    if (navShowChanges) {
+      scrollToChangesRef.current = true
+      if (shownGoal?.id === navGoalId) setChangesOpen(true)
+      else pendingChangesGoalRef.current = navGoalId
+    }
+    pinGoal(navGoalId)
+    onNavHandled?.()
+    // shownGoal is read once per navigation request on purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navGoalId, navShowChanges, onNavHandled, pinGoal])
+  useEffect(() => {
+    if (!changesOpen || !scrollToChangesRef.current) return
+    scrollToChangesRef.current = false
+    changesPanelRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }, [changesOpen])
+
   // 换一个目标看的时候，每一轮默认收起（跑着的时候才默认展开），单轮展开也重置。
   const shownGoalId = shownGoal?.id || ''
   useEffect(() => {
     setTimelineOpen(false)
     setExpandedRound(null)
-    setChangesOpen(false)
     setMergeOpen(false)
+    const wantsChanges = Boolean(shownGoalId) && pendingChangesGoalRef.current === shownGoalId
+    if (wantsChanges) pendingChangesGoalRef.current = null
+    setChangesOpen(wantsChanges)
   }, [shownGoalId])
 
   // Poll the running / waiting_quota goal every 3s while this tab is visible; stop otherwise.
@@ -1321,7 +1352,11 @@ export default function SupervisorGoals({
                     </div>
                   </form>
                 )}
-                {changesOpen && <SupervisorDiffView diffState={goalDiff} />}
+                {changesOpen && (
+                  <div ref={changesPanelRef} className="sup-goal-changes-panel">
+                    <SupervisorDiffView diffState={goalDiff} />
+                  </div>
+                )}
                 {canOfferMerge && (
                   <button
                     type="button"

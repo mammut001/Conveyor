@@ -311,6 +311,8 @@ export default function App() {
     worktreeId?: string
     tab?: 'goals' | 'workspace'
     goalOutcome?: string
+    goalId?: string
+    showChanges?: boolean
   } | null>(null)
   // A message sent from 对话 right now: checklist step ③ ticks before the next poll.
   const [chatMessageSent, setChatMessageSent] = useState(false)
@@ -1585,6 +1587,8 @@ export default function App() {
         worktreeId: req.worktreeId,
         tab: req.tab,
         goalOutcome: req.goalOutcome,
+        goalId: req.goalId,
+        showChanges: req.showChanges,
       }))
       historyModeRef.current = 'push'
       setView('code')

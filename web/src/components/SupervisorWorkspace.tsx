@@ -2182,6 +2182,8 @@ export type SupervisorNavigationRequest = {
   worktreeId?: string
   tab?: 'goals' | 'workspace'
   goalOutcome?: string
+  goalId?: string
+  showChanges?: boolean
 }
 
 export function SupervisorWorkspace({
@@ -2229,6 +2231,9 @@ export function SupervisorWorkspace({
   const [hasActiveGoalInWorktree, setHasActiveGoalInWorktree] = useState(false)
   // 讨论里点「设为目标」带去「目标」页的草稿（目标页填进输入框后就清掉）。
   const [goalDraft, setGoalDraft] = useState<string | null>(null)
+  // 「查看改动」跳转带来的请求（目标页处理完后清掉）。
+  const [navGoalId, setNavGoalId] = useState<string | null>(null)
+  const [navShowChanges, setNavShowChanges] = useState(false)
   // 目标在跑、老板又不在「目标」页时，隔一会儿重新问一次，好让「设为目标」在目标结束后重新能点。
   const [goalProbeTick, setGoalProbeTick] = useState(0)
   // 任务卡片上「合并到主分支…」：点开才读合并预览（默认收起）。
@@ -2579,6 +2584,10 @@ export function SupervisorWorkspace({
       if (navigationRequest.goalOutcome) {
         setGoalDraft(navigationRequest.goalOutcome)
       }
+      if (navigationRequest.goalId) {
+        setNavGoalId(navigationRequest.goalId)
+        setNavShowChanges(Boolean(navigationRequest.showChanges))
+      }
       return
     }
     const repo = repositories.find(r => r.id === navigationRequest.repoId)
@@ -2605,6 +2614,10 @@ export function SupervisorWorkspace({
     }
     if (navigationRequest.goalOutcome) {
       setGoalDraft(navigationRequest.goalOutcome)
+    }
+    if (navigationRequest.goalId) {
+      setNavGoalId(navigationRequest.goalId)
+      setNavShowChanges(Boolean(navigationRequest.showChanges))
     }
   }, [navigationRequest, repositories, selectWorktreeContext])
 
@@ -3639,6 +3652,9 @@ export function SupervisorWorkspace({
             onRefreshRepositories={() => void refreshRepositories()}
             draftOutcome={goalDraft}
             onDraftOutcomeUsed={handleGoalDraftUsed}
+            navGoalId={navGoalId || undefined}
+            navShowChanges={navShowChanges}
+            onNavHandled={() => { setNavGoalId(null); setNavShowChanges(false) }}
             onOpenWorkers={onOpenWorkers}
             workersData={workersData}
             onCreateWorktree={handleCreateWorktree}
