@@ -1707,7 +1707,7 @@ export default function App() {
         </div>
         <div className="stream-chat-column" style={{ display: view === 'chat' ? 'flex' : 'none', flexDirection: 'column', minWidth: 0, minHeight: 0, height: '100%', flex: '1 1 auto', overflow: 'hidden' }} aria-hidden={view !== 'chat'}>
           {selectedAgent
-            ? <AgentWorkspace key={selectedAgent.id} agent={selectedAgent} agents={agentState.agents} onSelectAgent={selectAgent} {...conversationProps} />
+            ? <AgentWorkspace key={selectedAgent.id} agent={selectedAgent} {...conversationProps} />
             : <ChatPanel key="free-chat" {...conversationProps} />}
         </div>
         {view === 'approvals' ? (
