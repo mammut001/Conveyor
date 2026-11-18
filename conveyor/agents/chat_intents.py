@@ -1465,9 +1465,11 @@ def post_goal_finish_report(
                 "style": "secondary",
                 "client_payload": {
                     "view": "code",
-                    "tab": "workspace",
+                    "tab": "goals",
                     "repo_id": repo_id,
                     "worktree_id": worktree_id,
+                    "goal_id": goal_id,
+                    "show_changes": True,
                 },
                 "server_payload": {},
             },

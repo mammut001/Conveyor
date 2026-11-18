@@ -116,6 +116,8 @@ export type ChatPanelProps = {
     worktreeId?: string;
     tab?: 'goals' | 'workspace';
     goalOutcome?: string;
+    goalId?: string;
+    showChanges?: boolean;
   }) => void;
   onOpenWorkers?: () => void;
   /** 最近一次使用或创建过的项目名（来自已加载的目标/仓库列表，不额外轮询）。 */
@@ -964,6 +966,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
         worktreeId: typeof payload.worktree_id === 'string' ? payload.worktree_id : undefined,
         tab: payload.tab === 'goals' ? 'goals' : payload.tab === 'workspace' ? 'workspace' : undefined,
         goalOutcome: typeof payload.goal_outcome === 'string' ? payload.goal_outcome : undefined,
+        goalId: typeof payload.goal_id === 'string' ? payload.goal_id : undefined,
+        showChanges: payload.show_changes === true,
       });
       return;
     }
