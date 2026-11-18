@@ -34,6 +34,8 @@ log = logging.getLogger("conveyor.goal_notify")
 # Web Push kind for goals; `web_push` owns the generic Chinese title it maps to
 # (`web_push.KIND_TITLES`), because that is where the payload is built.
 PUSH_KIND = "goal"
+# Periodic progress digest (Telegram / Feishu only; never Web Push).
+DIGEST_KIND = "digest"
 # Only these transitions are worth interrupting the owner for. `stopped` is not:
 # the owner did that themselves.
 NOTIFY_STATES = ("waiting_user", "achieved", "exhausted", "failed")
@@ -69,6 +71,11 @@ _WORKER_STARTED = False
 def enabled(settings: object) -> bool:
     """Off switch: ``CONVEYOR_GOAL_NOTIFY=false`` (`Settings.goal_notify_enabled`)."""
     return bool(getattr(settings, "goal_notify_enabled", True))
+
+
+def digests_enabled(settings: object) -> bool:
+    """Off switch: ``CONVEYOR_GOAL_DIGESTS=false`` (`Settings.goal_digests_enabled`)."""
+    return bool(getattr(settings, "goal_digests_enabled", True))
 
 
 def _clip(text: object) -> str:
@@ -286,10 +293,18 @@ def _deliver_feishu(settings: Any, goal_id: str, text: str) -> None:
 
 # Resolved by name on every call so a patched/replaced channel is honoured.
 _CHANNELS = ("_deliver_push", "_deliver_telegram", "_deliver_feishu")
+DIGEST_CHANNELS = ("_deliver_telegram", "_deliver_feishu")
 
 
-def _fan_out(settings: Any, goal_id: str, base: str, state: str) -> None:
-    for name in _CHANNELS:
+def _fan_out_channels(
+    settings: Any,
+    goal_id: str,
+    base: str,
+    state: str,
+    *,
+    channels: tuple[str, ...] = _CHANNELS,
+) -> None:
+    for name in channels:
         channel = globals().get(name)
         if channel is None:  # pragma: no cover - defensive
             continue
@@ -301,7 +316,29 @@ def _fan_out(settings: Any, goal_id: str, base: str, state: str) -> None:
             log.debug("goal %s: notification channel %s failed", goal_id, name)
 
 
+def _fan_out(settings: Any, goal_id: str, base: str, state: str) -> None:
+    _fan_out_channels(settings, goal_id, base, state, channels=_CHANNELS)
+
+
+def _deliver_digest(settings: Any, goal: dict) -> None:
+    if not enabled(settings) or not digests_enabled(settings):
+        return
+    goal_id = _goal_id(goal)
+    text = str(goal.get("_digest_text") or "").strip()
+    if not goal_id or not text:
+        return
+    rounds = int(goal.get("_digest_rounds") or 0)
+    digest_at = str(goal.get("_digest_at") or "").strip() or _utc_now()
+    if not _claim(settings, goal_id, DIGEST_KIND, f"{rounds}:{digest_at}"):
+        return
+    _fan_out_channels(settings, goal_id, text, DIGEST_KIND, channels=DIGEST_CHANNELS)
+    log.info("goal %s -> digest (rounds=%s): owner notified", goal_id, rounds)
+
+
 def _deliver(settings: Any, goal: dict, state: str) -> None:
+    if state == DIGEST_KIND:
+        _deliver_digest(settings, goal)
+        return
     if not enabled(settings) or state not in NOTIFY_STATES:
         return
     goal_id = _goal_id(goal)
@@ -342,6 +379,31 @@ def notify_goal_change(settings: Any, goal: dict, new_state: str) -> None:
         _QUEUE.put_nowait((settings, dict(goal), state))
     except queue.Full:
         # The owner would rather miss a notification than have the goal loop stall.
+        pass
+
+
+def notify_goal_digest(
+    settings: Any,
+    goal: dict,
+    text: str,
+    *,
+    rounds: int = 0,
+    digest_at: str = "",
+) -> None:
+    """Queue one owner progress digest for Telegram / Feishu. Never blocks, never raises."""
+    if settings is None or not isinstance(goal, dict):
+        return
+    clean_text = str(text or "").strip()
+    if not clean_text or not enabled(settings) or not digests_enabled(settings) or not _goal_id(goal):
+        return
+    payload = dict(goal)
+    payload["_digest_text"] = clean_text
+    payload["_digest_rounds"] = int(rounds)
+    payload["_digest_at"] = str(digest_at or "").strip()
+    _ensure_worker()
+    try:
+        _QUEUE.put_nowait((settings, payload, DIGEST_KIND))
+    except queue.Full:
         pass
 
 
