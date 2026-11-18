@@ -1669,7 +1669,8 @@ def _resolve_report_scope(
         except Exception:
             pass
 
-    if worktree_path and Path(worktree_path).is_dir() and repo_path and Path(repo_path).is_dir():
+    folder_present = bool(worktree_path) and Path(worktree_path).is_dir()
+    if worktree_path and repo_path and Path(repo_path).is_dir() and (folder_present or branch):
         try:
             from conveyor.agents import supervisor_merge as merge_mod
 
@@ -1679,27 +1680,38 @@ def _resolve_report_scope(
                 settings,
                 {"main_path": repo_path, "worktree_path": worktree_path},
             )
-            if target_branch and merge_mod._branch_exists(settings, worktree_path, target_branch):
-                commits_ahead = merge_mod._commits_ahead(
-                    settings,
-                    {"worktree_path": worktree_path},
-                    target_branch,
-                )
-            else:
-                first_task_id = next(
-                    (str(it.get("task_id") or "") for it in iterations if it.get("task_id")),
-                    "",
-                )
-                first_task = ags.get_task(settings, first_task_id) if first_task_id else None
-                base_sha = str((first_task or {}).get("base_sha") or "").strip()
-                if base_sha:
-                    rc, out, _ = merge_mod._git(
+            if folder_present:
+                if target_branch and merge_mod._branch_exists(settings, worktree_path, target_branch):
+                    commits_ahead = merge_mod._commits_ahead(
                         settings,
-                        worktree_path,
-                        ["rev-list", "--count", f"{base_sha}..HEAD"],
+                        {"worktree_path": worktree_path},
+                        target_branch,
                     )
-                    if rc == 0:
-                        commits_ahead = int(out.strip() or "0")
+                else:
+                    first_task_id = next(
+                        (str(it.get("task_id") or "") for it in iterations if it.get("task_id")),
+                        "",
+                    )
+                    first_task = ags.get_task(settings, first_task_id) if first_task_id else None
+                    base_sha = str((first_task or {}).get("base_sha") or "").strip()
+                    if base_sha:
+                        rc, out, _ = merge_mod._git(
+                            settings,
+                            worktree_path,
+                            ["rev-list", "--count", f"{base_sha}..HEAD"],
+                        )
+                        if rc == 0:
+                            commits_ahead = int(out.strip() or "0")
+            elif branch and target_branch and merge_mod._branch_exists(settings, repo_path, branch):
+                # 文件夹丢了（例如整个 worktrees/supervisor 被删）：分支还在，
+                # 提交数从主工作目录那边数，报告照样说清楚改动在哪。
+                rc, out, _ = merge_mod._git(
+                    settings,
+                    repo_path,
+                    ["rev-list", "--count", f"refs/heads/{target_branch}..refs/heads/{branch}"],
+                )
+                if rc == 0:
+                    commits_ahead = int(out.strip() or "0")
         except Exception:
             pass
 

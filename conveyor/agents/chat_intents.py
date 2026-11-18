@@ -964,8 +964,14 @@ def _summarize_roles_and_overrides(settings: Any) -> tuple[str, dict[str, dict[s
 
 
 def _first_managed_worktree(repo: dict[str, Any]) -> dict[str, Any] | None:
+    """First managed worktree that is actually usable.
+
+    A worktree whose folder is gone (`missing`) still owns its branch, but nothing can
+    run in it until the owner restores it — never hand it to a dispatch or a card.
+    """
     for wt in repo.get("worktrees") or []:
-        if wt.get("managed") and not wt.get("is_main"):
+        if wt.get("managed") and not wt.get("is_main") and not wt.get("missing") \
+                and str(wt.get("state") or "") != "missing":
             return wt
     return None
 

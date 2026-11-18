@@ -80,6 +80,10 @@ _INFLIGHT_STATES = frozenset({
 })
 _ACTIVE_WORKTREE_STATES = _INFLIGHT_STATES | frozenset({"waiting_user"})
 
+# A worktree whose folder was deleted on disk still owns its branch and every commit
+# on it; this is the one sentence every route answers with until it is restored.
+WORKTREE_FOLDER_MISSING_MESSAGE = "工作目录的文件夹丢了，请先在 项目 里点「恢复工作目录」"
+
 _SCHEMA_INIT_LOCK = threading.Lock()
 _INITIALIZED_DBS: set[str] = set()
 
@@ -495,15 +499,17 @@ def _enumerate_git_worktrees(settings: Any, canon_repo: str) -> list[dict[str, A
         if not raw_wt:
             return
         wt_canon = os.path.realpath(raw_wt)
-        if not Path(wt_canon).is_dir():
-            # Prunable / deleted directory on disk: do not advertise phantom worktrees.
-            return
+        # A folder that was deleted on disk leaves a *prunable* entry behind: it is
+        # no usable worktree, but the branch and every commit on it survive. The
+        # entry is kept (flagged ``missing``) so `_sync_repo_worktrees` can still
+        # show a worktree Conveyor itself manages instead of silently dropping it.
         entries.append({
             "path": wt_canon,
             "head": str(item.get("head") or ""),
             "branch": str(item.get("branch") or ""),
             "detached": bool(item.get("detached", False)),
             "git_locked": bool(item.get("locked", False)),
+            "missing": not Path(wt_canon).is_dir(),
         })
 
     for line in proc.stdout.splitlines():
@@ -565,6 +571,110 @@ def _active_tasks_by_worktree(settings: Any) -> dict[str, dict[str, Any]]:
     return mapping
 
 
+def _repo_branch_exists(settings: Any, canon_repo: str, branch: Any) -> bool:
+    """True when the branch itself still exists — the commits survive a deleted folder."""
+    cleaned = str(branch or "").strip()
+    if not cleaned or cleaned.startswith("-"):
+        return False
+    proc = _run_git(
+        settings,
+        canon_repo,
+        ["show-ref", "--verify", "--quiet", f"refs/heads/{cleaned}"],
+        timeout=5.0,
+    )
+    return proc.returncode == 0
+
+
+def _branch_commits_ahead_of_default(settings: Any, canon_repo: str, branch: str) -> int:
+    """Cheap `ahead_of_base` for a worktree whose folder is gone: count from the default branch."""
+    base = _detect_default_branch(settings, canon_repo) or ""
+    if not base or not _repo_branch_exists(settings, canon_repo, base):
+        return 0
+    proc = _run_git(
+        settings,
+        canon_repo,
+        ["rev-list", "--count", f"refs/heads/{base}..refs/heads/{branch}"],
+        timeout=8.0,
+    )
+    if proc.returncode != 0:
+        return 0
+    try:
+        return max(0, int(proc.stdout.strip() or "0"))
+    except ValueError:
+        return 0
+
+
+def _missing_worktree_view(
+    settings: Any,
+    *,
+    repo_id: str,
+    repo_name: str,
+    canon_repo: str,
+    row: dict[str, Any],
+    git_entry: dict[str, Any] | None,
+    active_map: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """List view for a managed worktree whose folder is gone but whose branch lives on.
+
+    Returns None when there is nothing left to show or restore: an unmanaged row,
+    a folder that is actually there, or a branch git no longer knows. The row and
+    the branch are never touched here — only reported.
+    """
+    wt_path = str(row.get("canonical_path") or "")
+    if not wt_path or wt_path == canon_repo or not bool(row.get("managed")):
+        return None
+    if Path(wt_path).is_dir():
+        return None
+    branch = str(row.get("branch") or (git_entry or {}).get("branch") or "").strip()
+    if not branch or not _repo_branch_exists(settings, canon_repo, branch):
+        return None
+    head = str((git_entry or {}).get("head") or "").strip()
+    if not head:
+        head = _run_git(
+            settings,
+            canon_repo,
+            ["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+            timeout=5.0,
+        ).stdout.strip()
+    if not head:
+        return None
+
+    wt_id = str(row["id"])
+    chat_sid = _ensure_worktree_transcript_session(
+        settings,
+        wt_id=wt_id,
+        repo_name=repo_name,
+        branch_label=branch,
+        chat_session_id=str(row["chat_session_id"]) if row.get("chat_session_id") else None,
+    )
+    active_task = active_map.get(wt_path)
+    active_task_id = str(active_task["id"]) if active_task else None
+    active_task_state = (
+        str(active_task.get("state") or "").strip().lower() if active_task else ""
+    )
+    has_runtime_lock = bool(active_task_id) or ags.has_active_task_for_worktree(settings, wt_path)
+    if active_task_state in ("waiting_user", "waiting_for_user", "waiting_for_human"):
+        is_locked = False
+    else:
+        is_locked = bool(has_runtime_lock)
+    return {
+        "id": wt_id,
+        "repo_id": repo_id,
+        "path": wt_path,
+        "branch": branch,
+        "head": head,
+        "is_main": False,
+        "managed": True,
+        "locked": is_locked,
+        "active_task_id": active_task_id,
+        "active_task_state": active_task_state or None,
+        "chat_session_id": chat_sid,
+        "state": "missing",
+        "missing": True,
+        "ahead_of_base": _branch_commits_ahead_of_default(settings, canon_repo, branch),
+    }
+
+
 def _sync_repo_worktrees(
     settings: Any,
     repo_row: dict[str, Any],
@@ -576,6 +686,10 @@ def _sync_repo_worktrees(
     canon_repo = str(repo_row["canonical_path"])
     managed_root = _managed_worktree_root(settings)
     git_wts = _enumerate_git_worktrees(settings, canon_repo)
+    # Only worktrees whose folder is really there may be (re)registered: a
+    # prunable entry is not a worktree, and an external one was never ours.
+    live_wts = [gw for gw in git_wts if not gw.get("missing")]
+    absent_git_wts = {str(gw["path"]): gw for gw in git_wts if gw.get("missing")}
     active_map = active_by_wt if active_by_wt is not None else _active_tasks_by_worktree(settings)
 
     now = _utc_now()
@@ -590,7 +704,7 @@ def _sync_repo_worktrees(
         for r in existing_rows:
             db_by_path[str(r["canonical_path"])] = dict(r)
 
-        for gw in git_wts:
+        for gw in live_wts:
             wt_path = gw["path"]
             is_main = wt_path == canon_repo
             row = db_by_path.get(wt_path)
@@ -639,8 +753,10 @@ def _sync_repo_worktrees(
         conn.close()
 
     results: list[dict[str, Any]] = []
-    for gw in git_wts:
+    live_paths: set[str] = set()
+    for gw in live_wts:
         wt_path = gw["path"]
+        live_paths.add(wt_path)
         row = db_by_path.get(wt_path)
         if not row:
             continue
@@ -684,10 +800,35 @@ def _sync_repo_worktrees(
             "active_task_id": active_task_id,
             "active_task_state": active_task_state or None,
             "chat_session_id": chat_sid,
+            "state": "ready",
+            "missing": False,
         })
 
-    # Sort: main worktree first, then managed worktrees (newest/alphabetical), then unmanaged.
-    results.sort(key=lambda w: (0 if w["is_main"] else (1 if w["managed"] else 2), w["branch"], w["id"]))
+    # Managed worktrees whose folder is gone: the branch (and every commit on it)
+    # survives, so they stay listed as `missing` — restored, never dropped.
+    for wt_path, row in db_by_path.items():
+        if wt_path in live_paths:
+            continue
+        view = _missing_worktree_view(
+            settings,
+            repo_id=repo_id,
+            repo_name=repo_name,
+            canon_repo=canon_repo,
+            row=row,
+            git_entry=absent_git_wts.get(wt_path),
+            active_map=active_map,
+        )
+        if view is not None:
+            results.append(view)
+
+    # Sort: main worktree first, then usable managed worktrees, then the ones whose
+    # folder is missing (they need restoring before anything can run on them), then unmanaged.
+    results.sort(key=lambda w: (
+        0 if w["is_main"] else (1 if w["managed"] else 2),
+        1 if w.get("missing") else 0,
+        w["branch"],
+        w["id"],
+    ))
     return results
 
 
@@ -970,6 +1111,171 @@ def create_managed_worktree(
     raise SupervisorServiceError(
         HTTPStatus.INTERNAL_SERVER_ERROR,
         "工作目录已经建好，但读取不到它的信息",
+    )
+
+
+def _path_inside_managed_root(managed_root: Path, raw_path: str) -> bool:
+    """True when `raw_path` sits inside (or is) the managed supervisor worktree root."""
+    if not raw_path:
+        return False
+    candidate = Path(os.path.realpath(raw_path))
+    root = Path(os.path.realpath(managed_root))
+    return candidate == root or root in candidate.parents
+
+
+def _restore_target_path(
+    settings: Any,
+    managed_root: Path,
+    original_path: str,
+) -> str:
+    """The original path whenever it can be reused, else a fresh one under the same root.
+
+    Reusing the recorded path is the whole point: goals, tasks and chat sessions
+    reference the worktree by id, and their stored paths keep pointing at a
+    directory that exists again.
+    """
+    if _path_inside_managed_root(managed_root, original_path) and not _path_occupied(
+        Path(original_path)
+    ):
+        return original_path
+    managed_root.mkdir(parents=True, exist_ok=True)
+    for _ in range(8):
+        candidate = str(managed_root / f"sup-{os.urandom(6).hex()}")
+        if not _path_occupied(Path(candidate)):
+            return candidate
+    raise SupervisorServiceError(
+        HTTPStatus.CONFLICT,
+        "没能给恢复的工作目录找到一个可用的位置，请稍后再试",
+        code="worktree_path_unavailable",
+    )
+
+
+def restore_missing_worktree(settings: Any, worktree_id: Any) -> dict[str, Any]:
+    """Recreate a managed worktree whose folder was deleted (branch and commits intact).
+
+    `git worktree prune` drops the stale admin entry, then `git worktree add`
+    recreates the very same directory from the surviving branch, and the stored
+    path is only rewritten when the original one cannot be reused. Nothing is
+    deleted here: the row, the branch and every commit on it are left alone.
+    """
+    require_enabled(settings)
+    wid = _validate_id_token(worktree_id, "worktree_id")
+    conn = _connect(settings)
+    try:
+        row = conn.execute(
+            "SELECT * FROM supervisor_worktrees WHERE id = ?",
+            (wid,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise SupervisorServiceError(
+            HTTPStatus.NOT_FOUND,
+            f"找不到这个工作目录（{wid}）",
+            code="worktree_not_found",
+        )
+    repo_row = _get_repo_row(settings, str(row["repo_id"]))
+    canon_repo = str(repo_row["canonical_path"])
+    if not Path(canon_repo).is_dir() or not ags.repo_is_git_dir(canon_repo):
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            "这个仓库在磁盘上已经不见了，或者不再是 Git 仓库",
+            code="invalid_repository",
+        )
+    original_path = str(row["canonical_path"] or "")
+    if not original_path or original_path == canon_repo or not bool(row["managed"]):
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            "只有受 Supervisor 托管的工作目录才能恢复",
+            code="unmanaged_worktree",
+        )
+    if Path(original_path).is_dir():
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            "这个工作目录的文件夹已经在位了，不用恢复",
+            code="worktree_not_missing",
+        )
+
+    # The branch is read before pruning: git still knows it from the stale entry.
+    branch = str(row["branch"] or "").strip()
+    if not branch:
+        for gw in _enumerate_git_worktrees(settings, canon_repo):
+            if str(gw.get("path") or "") == original_path and gw.get("branch"):
+                branch = str(gw["branch"]).strip()
+                break
+    if not branch or not _repo_branch_exists(settings, canon_repo, branch):
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            "这个工作目录的分支已经不在了，没有办法恢复；仓库里的提交没有被动过",
+            code="branch_missing",
+        )
+
+    prune = _run_git(settings, canon_repo, ["worktree", "prune"], timeout=30.0)
+    if prune.returncode != 0:
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            "清理失效的工作目录记录失败了，请稍后再试",
+            code="worktree_prune_failed",
+        )
+
+    managed_root = _managed_worktree_root(settings)
+    wt_path = _restore_target_path(settings, managed_root, original_path)
+    add = _run_git(settings, canon_repo, ["worktree", "add", wt_path, branch], timeout=60.0)
+    if add.returncode != 0:
+        detail = redact_text((add.stderr or add.stdout or "git worktree add failed").strip())
+        if "already checked out" in detail or "already used by" in detail:
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                f"分支 {branch} 正在别的工作目录里用着，先把它停下来再恢复",
+                code="branch_in_use",
+            )
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            f"恢复工作目录失败：{truncate(detail, 240)}",
+            code="worktree_restore_failed",
+        )
+
+    wt_canon = os.path.realpath(wt_path)
+    valid_ok, valid_reason = ags.validate_worktree(settings, canon_repo, wt_canon)
+    if not valid_ok:
+        _run_git(settings, canon_repo, ["worktree", "remove", "--force", wt_canon], timeout=15.0)
+        raise SupervisorServiceError(
+            HTTPStatus.BAD_REQUEST,
+            f"恢复的工作目录没有通过安全检查：{valid_reason}",
+            code="worktree_policy_violation",
+        )
+
+    now = _utc_now()
+    conn = _connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                """UPDATE supervisor_worktrees
+                   SET canonical_path = ?, managed = 1, branch = ?, updated_at = ?
+                   WHERE id = ?""",
+                (wt_canon, branch, now, wid),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "这个位置已经被别的工作目录占用了，请稍后再试",
+                code="worktree_path_unavailable",
+            ) from exc
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    synced = _sync_repo_worktrees(settings, repo_row)
+    for item in synced:
+        if str(item["id"]) == wid:
+            return item
+    raise SupervisorServiceError(
+        HTTPStatus.INTERNAL_SERVER_ERROR,
+        "工作目录已经恢复，但读取不到它的信息",
     )
 
 
@@ -1843,6 +2149,15 @@ def create_scoped_task(settings: Any, body: dict[str, Any]) -> tuple[dict[str, A
             HTTPStatus.CONFLICT,
             "任务只能在新建的工作目录里跑；主仓库和外部工作目录是只读的",
             code="unmanaged_worktree",
+        )
+
+    if bool(wt.get("missing")) or str(wt.get("state") or "") == "missing":
+        # The folder is gone (branch and commits are not): say the one thing that
+        # helps instead of the generic "this path is not a git worktree".
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            WORKTREE_FOLDER_MISSING_MESSAGE,
+            code="worktree_folder_missing",
         )
 
     ok_wt, reason_wt = ags.validate_worktree(settings, repo["path"], wt["path"])

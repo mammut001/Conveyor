@@ -513,6 +513,28 @@ Rules (all enforced in code, each failure is a blocker with a Chinese message):
 8. Merges are serialized per repository (module-level lock registry) and hold the worktree's runtime lock for
    the whole operation, so no task can be dispatched mid-merge.
 
+### 工作目录的文件夹丢了
+
+A worktree whose **folder was deleted on disk** (e.g. the whole `<task root>/worktrees/supervisor` directory was
+removed by a bug) is *not* dropped: the branch and every commit on it survive, so
+`GET /api/supervisor/repositories` keeps listing it with `"state": "missing"`, `"missing": true` and
+`"ahead_of_base"` (commits on that branch that the default branch does not have). The row and the branch are
+never deleted automatically, and while it is missing the preview and POST answer `worktree_folder_missing`
+「工作目录的文件夹丢了，请先在 项目 里点「恢复工作目录」」 instead of a git error.
+
+| Method & path | Purpose |
+| --- | --- |
+| `POST /api/supervisor/worktrees/<worktree_id>/restore` | recreate the folder from the surviving branch |
+
+`POST .../restore` (owner-only, same auth + same-site header check as `POST /api/supervisor/projects`) runs
+`git worktree prune` in the repository and then `git worktree add <original path> <branch>` — the **same path**,
+so goals, tasks and chat sessions that reference it keep working. When the original path cannot be reused, a
+fresh path under the same supervisor root is created and the stored `canonical_path` is updated. The result is
+re-validated with `agent_supervisor.validate_worktree` and the refreshed worktree is returned. Refusals:
+`409 branch_missing` (the branch is gone — nothing to restore), `409 worktree_not_missing` (the folder is
+already there), `409 branch_in_use` (another worktree has that branch checked out), `409 unmanaged_worktree`,
+`400 worktree_policy_violation`.
+
 ---
 
 ## 项目笔记

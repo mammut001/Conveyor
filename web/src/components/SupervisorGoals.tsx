@@ -10,7 +10,7 @@ import type {
   SupervisorWorkersData,
 } from './SupervisorWorkspace'
 import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChecks'
-import { SupervisorReadOnlyWorktreeCard, SupervisorRoleBar, supExecutorLabel, supStageLabel, supStateLabel } from './SupervisorWorkspace'
+import { SupervisorMissingWorktreeCard, SupervisorReadOnlyWorktreeCard, SupervisorRoleBar, supExecutorLabel, supStageLabel, supStateLabel } from './SupervisorWorkspace'
 import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 import { readGoalDraft, writeGoalDraft } from './supDrafts'
@@ -587,6 +587,10 @@ export default function SupervisorGoals({
   visible,
   readOnly,
   locked,
+  missing,
+  onRestoreWorktree,
+  restoreBusyWorktreeId,
+  restoreWorktreeError,
   capabilities,
   effectiveRoles,
   onChangeRole,
@@ -606,6 +610,12 @@ export default function SupervisorGoals({
   visible: boolean
   readOnly: boolean
   locked: boolean
+  /** 工作目录的文件夹丢了：表单换成「恢复工作目录」卡，等恢复完再继续。 */
+  missing?: boolean
+  /** 「恢复工作目录」。 */
+  onRestoreWorktree?: (worktreeId: string) => void | Promise<unknown>
+  restoreBusyWorktreeId?: string
+  restoreWorktreeError?: { worktreeId: string; message: string } | null
   capabilities: SupervisorCapabilities | null
   effectiveRoles: RoleOverrides
   onChangeRole: (role: SupervisorRoleKey, patch: Partial<RoleOverrideEntry>) => void
@@ -694,8 +704,12 @@ export default function SupervisorGoals({
   const finishedGoals = useMemo(() => goals.filter(g => !isActiveGoalState(g.state) && g.id !== shownGoal?.id), [goals, shownGoal])
   // 目标跑完之后（达成 / 用完轮数 / 失败 / 停止）结果卡继续挂在最上面，表单藏起来。
   const goalFinished = shownGoal ? !isActiveGoalState(shownGoal.state) : false
-  const showForm = !hasActiveGoal && !shownGoal && !readOnly
+  const showForm = !hasActiveGoal && !shownGoal && !readOnly && !missing
   const showTimeline = !goalFinished || timelineOpen
+  // 这个工作目录上「恢复工作目录」失败的那一句（按工作目录 id 对，别串到别的卡上）。
+  const missingRestoreError = restoreWorktreeError && restoreWorktreeError.worktreeId === worktree.id
+    ? restoreWorktreeError.message
+    : ''
 
   const loadDetail = useCallback(
     async (goalId: string) => {
@@ -821,7 +835,7 @@ export default function SupervisorGoals({
     async (event: FormEvent) => {
       event.preventDefault()
       const text = outcome.trim()
-      if (!text || creating || readOnly || locked) return
+      if (!text || creating || readOnly || locked || missing) return
       const payload: Record<string, unknown> = {
         outcome: text,
         repo_id: repo.id,
@@ -882,6 +896,7 @@ export default function SupervisorGoals({
       effectiveRoles,
       locked,
       maxRounds,
+      missing,
       outcome,
       readOnly,
       refresh,
@@ -1081,7 +1096,14 @@ export default function SupervisorGoals({
           </div>
         )}
 
-        {readOnly ? (
+        {missing ? (
+          <SupervisorMissingWorktreeCard
+            worktree={worktree}
+            busy={restoreBusyWorktreeId === worktree.id}
+            error={missingRestoreError}
+            onRestore={(worktreeId) => onRestoreWorktree?.(worktreeId)}
+          />
+        ) : readOnly ? (
           <SupervisorReadOnlyWorktreeCard
             repo={repo}
             worktree={worktree}
@@ -1188,6 +1210,7 @@ export default function SupervisorGoals({
                 {lastTaskId && (
                   <p className="sup-goal-result-where">
                     改动在工作目录 <code>{worktree.branch}</code> 里{worktree.is_main ? '。' : '（还没有合并到主分支）。'}
+                    {missing && ' 这个工作目录的文件夹丢了，先在 项目 里点「恢复工作目录」再合并。'}
                   </p>
                 )}
                 <div className="sup-goal-result-actions">
