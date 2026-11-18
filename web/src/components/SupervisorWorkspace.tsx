@@ -90,6 +90,7 @@ export type SupervisorRepo = {
   source_machine?: string
   /** "env" = server admin configured, "repo" = owner picked, "none" = nothing selected. */
   validation_source?: 'env' | 'repo' | 'none'
+  archived_at?: string | null
 }
 
 export type SupervisorTask = {
@@ -644,6 +645,7 @@ export function pickMostRecentContext(
     candidate: { at: number; locked: boolean },
   ) => !current || candidate.at > current.at || (candidate.at === current.at && current.locked && !candidate.locked)
   for (const repo of repos) {
+    if (repo.archived_at) continue
     for (const wt of repo.worktrees || []) {
       // 主分支和未托管目录都只读，不能作为「接着干活」的落点。
       if (wt.is_main || !wt.managed) continue
@@ -663,7 +665,8 @@ export function pickMostRecentContext(
   }
   if (busiest) return { repoId: busiest.repoId, worktreeId: busiest.worktreeId }
   if (newest) return { repoId: newest.repoId, worktreeId: newest.worktreeId }
-  return { repoId: repos[0]?.id || '', worktreeId: '' }
+  const firstActive = repos.find(r => !r.archived_at)
+  return { repoId: firstActive?.id || '', worktreeId: '' }
 }
 
 /**
@@ -847,6 +850,13 @@ function SupervisorRepoSidebar({
   onCreateProject,
   onCreateWorktree,
   onRestoreWorktree,
+  onArchiveRepo,
+  onUnarchiveRepo,
+  archiveBusyRepoId,
+  archiveError,
+  onClearArchiveError,
+  unarchiveBusyRepoId,
+  unarchiveError,
   restoreBusyWorktreeId,
   restoreWorktreeError,
   registerBusy,
@@ -872,6 +882,13 @@ function SupervisorRepoSidebar({
   onCreateWorktree: (repoId: string, branch?: string, baseRef?: string) => Promise<boolean>
   /** 文件夹丢了的工作目录：「恢复工作目录」。 */
   onRestoreWorktree: (worktreeId: string) => void | Promise<unknown>
+  onArchiveRepo: (repoId: string) => Promise<boolean>
+  onUnarchiveRepo: (repoId: string) => void | Promise<unknown>
+  archiveBusyRepoId: string
+  archiveError: { repoId: string; message: string } | null
+  onClearArchiveError: () => void
+  unarchiveBusyRepoId: string
+  unarchiveError: string
   restoreBusyWorktreeId: string
   restoreWorktreeError: { worktreeId: string; message: string } | null
   registerBusy: boolean
@@ -891,16 +908,34 @@ function SupervisorRepoSidebar({
   const [repoName, setRepoName] = useState('')
   const [newBranch, setNewBranch] = useState('')
   const [newBaseRef, setNewBaseRef] = useState('')
+  const [confirmArchiveRepoId, setConfirmArchiveRepoId] = useState('')
+
+  const activeRepositories = useMemo(
+    () => repositories.filter(repo => !repo.archived_at),
+    [repositories],
+  )
+  const archivedRepositories = useMemo(
+    () => repositories.filter(repo => Boolean(repo.archived_at)),
+    [repositories],
+  )
+
+  const matchesSearch = useCallback((repo: SupervisorRepo, q: string) => (
+    repo.name.toLowerCase().includes(q)
+    || repo.path.toLowerCase().includes(q)
+    || (repo.worktrees || []).some(wt => wt.branch.toLowerCase().includes(q) || wt.path.toLowerCase().includes(q))
+  ), [])
 
   const filteredRepos = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q) return repositories
-    return repositories.filter(repo =>
-      repo.name.toLowerCase().includes(q)
-      || repo.path.toLowerCase().includes(q)
-      || (repo.worktrees || []).some(wt => wt.branch.toLowerCase().includes(q) || wt.path.toLowerCase().includes(q)),
-    )
-  }, [repositories, searchQuery])
+    if (!q) return activeRepositories
+    return activeRepositories.filter(repo => matchesSearch(repo, q))
+  }, [activeRepositories, matchesSearch, searchQuery])
+
+  const filteredArchivedRepos = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return archivedRepositories
+    return archivedRepositories.filter(repo => matchesSearch(repo, q))
+  }, [archivedRepositories, matchesSearch, searchQuery])
 
   const submitCreateProject = async (event: FormEvent) => {
     event.preventDefault()
@@ -1051,8 +1086,9 @@ function SupervisorRepoSidebar({
 
       <div className="sup-repo-tree" role="tree" aria-label="仓库与工作目录列表">
         {filteredRepos.map(repo => {
-          const isExpanded = expandedRepos[repo.id] ?? (repo.id === selectedRepoId || repositories.length <= 3)
+          const isExpanded = expandedRepos[repo.id] ?? (repo.id === selectedRepoId || activeRepositories.length <= 3)
           const isCreatingHere = openCreateForRepoId === repo.id
+          const isConfirmingArchive = confirmArchiveRepoId === repo.id
           return (
             <div key={repo.id} className={`sup-repo-node ${repo.id === selectedRepoId ? 'is-selected-repo' : ''}`} role="treeitem" aria-expanded={isExpanded}>
               <div className="sup-repo-row">
@@ -1069,7 +1105,53 @@ function SupervisorRepoSidebar({
                   </span>
                   <span className="sup-worktree-count">{(repo.worktrees || []).length}</span>
                 </button>
+                <button
+                  type="button"
+                  className="sup-repo-archive-btn"
+                  title={`归档 ${repo.name}`}
+                  disabled={archiveBusyRepoId === repo.id}
+                  onClick={() => {
+                    setConfirmArchiveRepoId(prev => (prev === repo.id ? '' : repo.id))
+                    onClearArchiveError()
+                  }}
+                >
+                  归档
+                </button>
               </div>
+
+              {isConfirmingArchive && (
+                <div className="sup-repo-archive-confirm" role="region" aria-label={`确认归档 ${repo.name}`}>
+                  <p>归档后这个项目会从列表里隐藏，代码、分支和目标记录都不会删除，随时可以恢复。</p>
+                  {archiveError && archiveError.repoId === repo.id && (
+                    <p className="sup-inline-error" role="alert">{archiveError.message}</p>
+                  )}
+                  <div className="sup-form-actions">
+                    <button
+                      type="button"
+                      className="shell-button"
+                      disabled={archiveBusyRepoId === repo.id}
+                      onClick={() => {
+                        setConfirmArchiveRepoId('')
+                        onClearArchiveError()
+                      }}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="shell-button primary"
+                      disabled={archiveBusyRepoId === repo.id}
+                      onClick={() => {
+                        void onArchiveRepo(repo.id).then(ok => {
+                          if (ok) setConfirmArchiveRepoId('')
+                        })
+                      }}
+                    >
+                      {archiveBusyRepoId === repo.id ? '正在归档…' : '确认归档'}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {isExpanded && (
                 <div className="sup-worktree-list" role="group" aria-label={`${repo.name} 的工作目录`}>
@@ -1211,10 +1293,42 @@ function SupervisorRepoSidebar({
 
         {!filteredRepos.length && (
           <div className="sup-empty-tree">
-            {repositories.length === 0
-              ? '还没有项目。点上面的「新建项目」创建一个空仓库，或点「注册仓库」登记已有的 Git 路径。'
+            {activeRepositories.length === 0
+              ? archivedRepositories.length > 0
+                ? '当前没有显示中的项目。可以在下方「已归档」里恢复，或点上面的「新建项目」。'
+                : '还没有项目。点上面的「新建项目」创建一个空仓库，或点「注册仓库」登记已有的 Git 路径。'
               : '没有匹配的仓库或分支。'}
           </div>
+        )}
+
+        {filteredArchivedRepos.length > 0 && (
+          <details className="sup-archived-section">
+            <summary className="sup-archived-summary">
+              已归档（{filteredArchivedRepos.length}）
+            </summary>
+            <div className="sup-archived-list" role="list" aria-label="已归档项目">
+              {unarchiveError && (
+                <p className="sup-inline-error" role="alert">{unarchiveError}</p>
+              )}
+              {filteredArchivedRepos.map(repo => (
+                <div key={repo.id} className="sup-archived-item" role="listitem">
+                  <div className="sup-repo-info">
+                    <strong>{repo.name}</strong>
+                    <small title={repo.path}>{repo.path}</small>
+                  </div>
+                  <button
+                    type="button"
+                    className="shell-button sup-repo-unarchive-btn"
+                    title={`恢复 ${repo.name}`}
+                    disabled={unarchiveBusyRepoId === repo.id}
+                    onClick={() => void onUnarchiveRepo(repo.id)}
+                  >
+                    {unarchiveBusyRepoId === repo.id ? '正在恢复…' : '恢复'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </details>
         )}
       </div>
     </div>
@@ -2117,6 +2231,10 @@ export function SupervisorWorkspace({
   // 文件夹丢了的工作目录：「恢复工作目录」的进行中 / 失败（按工作目录 id 记，哪个卡片说哪句）。
   const [restoreBusyWorktreeId, setRestoreBusyWorktreeId] = useState('')
   const [restoreWorktreeError, setRestoreWorktreeError] = useState<{ worktreeId: string; message: string } | null>(null)
+  const [archiveBusyRepoId, setArchiveBusyRepoId] = useState('')
+  const [archiveError, setArchiveError] = useState<{ repoId: string; message: string } | null>(null)
+  const [unarchiveBusyRepoId, setUnarchiveBusyRepoId] = useState('')
+  const [unarchiveError, setUnarchiveError] = useState('')
   const [retryPrepNote, setRetryPrepNote] = useState('')
 
   // Per-context isolated drafts and data snapshots
@@ -2232,7 +2350,7 @@ export function SupervisorWorkspace({
     if (!token) return
     const [capRes, repoRes] = await Promise.allSettled([
       apiCall<SupervisorCapabilities>('/api/supervisor/capabilities'),
-      apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories'),
+      apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories?include_archived=1'),
     ])
     if (capRes.status === 'fulfilled') {
       setCapabilities(capRes.value)
@@ -2243,16 +2361,17 @@ export function SupervisorWorkspace({
 
     if (repoRes.status === 'fulfilled') {
       const repos = Array.isArray(repoRes.value.repositories) ? repoRes.value.repositories : []
+      const activeRepos = repos.filter(r => !r.archived_at)
       setRepositories(repos)
       setReposError('')
       // 保存的上下文还有效就别动它；失效（或从没保存过）时先读最近的活动，再决定落在哪。
-      const savedRepo = repos.find(r => r.id === savedContext.repoId)
+      const savedRepo = activeRepos.find(r => r.id === savedContext.repoId)
       const savedWorktree = savedRepo?.worktrees?.find(w => w.id === savedContext.worktreeId)
       const activity = savedRepo && savedWorktree
         ? undefined
-        : await loadActivitySnapshot(repos)
+        : await loadActivitySnapshot(activeRepos)
       setSelectedRepoId(prevRepoId => {
-        const next = reconcileSelection(repos, prevRepoId, selectedWorktreeId, activity)
+        const next = reconcileSelection(activeRepos, prevRepoId, selectedWorktreeId, activity)
         if (next.worktreeId !== selectedWorktreeId) {
           setSelectedWorktreeId(next.worktreeId)
         }
@@ -2268,7 +2387,7 @@ export function SupervisorWorkspace({
   // Re-read the repository list so validation_source badges stay honest after a save.
   const refreshRepositories = useCallback(async () => {
     try {
-      const repoRes = await apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories')
+      const repoRes = await apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories?include_archived=1')
       const repos = Array.isArray(repoRes.repositories) ? repoRes.repositories : []
       setRepositories(repos)
       setReposError('')
@@ -2469,8 +2588,9 @@ export function SupervisorWorkspace({
   }, [navigationRequest, repositories, selectWorktreeContext])
 
   const toggleRepo = useCallback((repoId: string) => {
+    const activeCount = repositories.filter(r => !r.archived_at).length
     setExpandedRepos(prev => {
-      const current = prev[repoId] ?? (repoId === selectedRepoId || repositories.length <= 3)
+      const current = prev[repoId] ?? (repoId === selectedRepoId || activeCount <= 3)
       return { ...prev, [repoId]: !current }
     })
     if (repoId !== selectedRepoId) {
@@ -2611,6 +2731,81 @@ export function SupervisorWorkspace({
       setRestoreBusyWorktreeId('')
     }
   }, [apiCall, repositories, restoreBusyWorktreeId, selectWorktreeContext])
+
+  const handleArchiveRepo = useCallback(async (repoId: string): Promise<boolean> => {
+    if (!repoId || archiveBusyRepoId) return false
+    setArchiveBusyRepoId(repoId)
+    setArchiveError(null)
+    try {
+      const updated = await apiCall<SupervisorRepo>(
+        `/api/supervisor/repositories/${encodeURIComponent(repoId)}/archive`,
+        {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({}),
+        },
+      )
+      setRepositories(prev => {
+        const exists = prev.some(r => r.id === updated.id)
+        return exists ? prev.map(r => (r.id === updated.id ? updated : r)) : [...prev, updated]
+      })
+      if (selectedRepoId === repoId) {
+        const nextActive = repositories.filter(r => !r.archived_at && r.id !== repoId)
+        const next = reconcileSelection(nextActive, '', '')
+        if (next.repoId && next.worktreeId) {
+          selectWorktreeContext(next.repoId, next.worktreeId)
+        } else {
+          contextGenRef.current += 1
+          contextAbortRef.current?.abort()
+          setSelectedRepoId(next.repoId)
+          setSelectedWorktreeId(next.worktreeId)
+          saveContext(next.repoId, next.worktreeId)
+        }
+      }
+      return true
+    } catch (err) {
+      setArchiveError({
+        repoId,
+        message: err instanceof Error ? err.message : '归档项目失败，请稍后再试',
+      })
+      return false
+    } finally {
+      setArchiveBusyRepoId('')
+    }
+  }, [apiCall, archiveBusyRepoId, reconcileSelection, repositories, selectWorktreeContext, selectedRepoId])
+
+  const handleUnarchiveRepo = useCallback(async (repoId: string) => {
+    if (!repoId || unarchiveBusyRepoId) return
+    setUnarchiveBusyRepoId(repoId)
+    setUnarchiveError('')
+    try {
+      const updated = await apiCall<SupervisorRepo>(
+        `/api/supervisor/repositories/${encodeURIComponent(repoId)}/unarchive`,
+        {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({}),
+        },
+      )
+      setRepositories(prev => {
+        const exists = prev.some(r => r.id === updated.id)
+        return exists ? prev.map(r => (r.id === updated.id ? updated : r)) : [...prev, updated]
+      })
+      if (!selectedRepoId) {
+        const wts = updated.worktrees || []
+        const preferred = wts.find(w => w.managed && !w.is_main && !w.locked)
+          || wts.find(w => w.managed && !w.is_main)
+          || wts[0]
+        if (preferred) {
+          selectWorktreeContext(updated.id, preferred.id)
+        }
+      }
+    } catch (err) {
+      setUnarchiveError(err instanceof Error ? err.message : '恢复项目失败，请稍后再试')
+    } finally {
+      setUnarchiveBusyRepoId('')
+    }
+  }, [apiCall, selectWorktreeContext, selectedRepoId, unarchiveBusyRepoId])
 
   const currentDraft: WorktreeDraft = useMemo(() => {
     if (!contextKey) return { goal: '', acceptanceCriteria: '' }
@@ -3212,6 +3407,13 @@ export function SupervisorWorkspace({
           onCreateProject={handleCreateProject}
           onCreateWorktree={handleCreateWorktree}
           onRestoreWorktree={(worktreeId) => void handleRestoreWorktree(worktreeId)}
+          onArchiveRepo={handleArchiveRepo}
+          onUnarchiveRepo={(repoId) => void handleUnarchiveRepo(repoId)}
+          archiveBusyRepoId={archiveBusyRepoId}
+          archiveError={archiveError}
+          onClearArchiveError={() => setArchiveError(null)}
+          unarchiveBusyRepoId={unarchiveBusyRepoId}
+          unarchiveError={unarchiveError}
           restoreBusyWorktreeId={restoreBusyWorktreeId}
           restoreWorktreeError={restoreWorktreeError}
           registerBusy={registerBusy}

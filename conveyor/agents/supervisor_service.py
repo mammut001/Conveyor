@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 from conveyor.agents import agent_supervisor as ags
 from conveyor.core.redaction import redact_text, truncate
@@ -93,7 +94,8 @@ CREATE TABLE IF NOT EXISTS supervisor_repositories (
     name TEXT NOT NULL,
     canonical_path TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    archived_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS supervisor_worktrees (
@@ -210,6 +212,13 @@ def _connect(settings: Any) -> sqlite3.Connection:
 
 def _migrate_web_schema(conn: sqlite3.Connection) -> None:
     """Additive columns for databases created by older builds."""
+    repo_cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(supervisor_repositories)").fetchall()}
+    if "archived_at" not in repo_cols:
+        try:
+            conn.execute("ALTER TABLE supervisor_repositories ADD COLUMN archived_at TEXT")
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
     cols = {str(r[1]) for r in conn.execute("PRAGMA table_info(supervisor_worktrees)").fetchall()}
     if "branch" not in cols:
         # The branch a managed worktree was created on; the merge refuses to
@@ -840,6 +849,8 @@ def _format_repository(
 ) -> dict[str, Any]:
     canon_repo = str(repo_row["canonical_path"])
     worktrees = _sync_repo_worktrees(settings, repo_row, active_by_wt=active_by_wt)
+    raw_archived = repo_row.get("archived_at")
+    archived_at = str(raw_archived).strip() if raw_archived else None
     return {
         "id": str(repo_row["id"]),
         "name": str(repo_row["name"]),
@@ -847,6 +858,7 @@ def _format_repository(
         "validation_source": _repo_validation_source(settings, str(repo_row["id"])),
         "default_branch": _detect_default_branch(settings, canon_repo),
         "created_at": str(repo_row["created_at"]),
+        "archived_at": archived_at or None,
         "worktrees": worktrees,
     }
 
@@ -925,6 +937,7 @@ def register_repository(
                 "canonical_path": canon_repo,
                 "created_at": now,
                 "updated_at": now,
+                "archived_at": None,
             }
             created = True
             conn.commit()
@@ -937,20 +950,148 @@ def register_repository(
     return _format_repository(settings, repo_row), created
 
 
-def list_repositories(settings: Any) -> list[dict[str, Any]]:
+def list_repositories(settings: Any, *, include_archived: bool = False) -> list[dict[str, Any]]:
     require_enabled(settings)
     conn = _connect(settings)
     try:
-        rows = [
-            dict(r)
-            for r in conn.execute(
-                "SELECT * FROM supervisor_repositories ORDER BY created_at ASC, id ASC"
-            ).fetchall()
-        ]
+        sql = "SELECT * FROM supervisor_repositories"
+        if not include_archived:
+            sql += " WHERE archived_at IS NULL OR TRIM(archived_at) = ''"
+        sql += " ORDER BY created_at ASC, id ASC"
+        rows = [dict(r) for r in conn.execute(sql).fetchall()]
     finally:
         conn.close()
     active_map = _active_tasks_by_worktree(settings)
     return [_format_repository(settings, row, active_by_wt=active_map) for row in rows]
+
+
+def _repo_has_active_task(settings: Any, repo_row: dict[str, Any]) -> bool:
+    """True when any worktree or task belonging to this repo is still active."""
+    rid = str(repo_row["id"])
+    canon_repo = _canonical_internal_path(str(repo_row["canonical_path"]))
+    conn = _connect(settings)
+    try:
+        wt_paths = {
+            _canonical_internal_path(str(r["canonical_path"]))
+            for r in conn.execute(
+                "SELECT canonical_path FROM supervisor_worktrees WHERE repo_id = ?",
+                (rid,),
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    if canon_repo:
+        wt_paths.add(canon_repo)
+    for wt_path in wt_paths:
+        if wt_path and ags.has_active_task_for_worktree(settings, wt_path):
+            return True
+    for task in ags.list_tasks(settings, limit=500):
+        if str(task.get("state") or "") not in _ACTIVE_WORKTREE_STATES:
+            continue
+        meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if meta.get("repo_id") == rid:
+            return True
+        if canon_repo and _canonical_internal_path(str(task.get("repo_path") or "")) == canon_repo:
+            return True
+        if _canonical_internal_path(str(task.get("worktree_path") or "")) in wt_paths:
+            return True
+    return False
+
+
+def _repo_has_running_goal(settings: Any, repo_id: str) -> bool:
+    """True when the goals DB has a running/waiting goal for `repo_id`."""
+    try:
+        from conveyor.agents import supervisor_goals as goals_mod
+
+        db_file = goals_mod._db_path(settings)
+    except Exception:
+        return False
+    if not Path(db_file).exists():
+        return False
+    try:
+        conn = sqlite3.connect(f"file:{quote(str(db_file))}?mode=ro", uri=True, timeout=5.0)
+    except sqlite3.Error:
+        return False
+    try:
+        conn.row_factory = sqlite3.Row
+        active_states = (
+            goals_mod.GOAL_RUNNING,
+            goals_mod.GOAL_WAITING_QUOTA,
+            goals_mod.GOAL_WAITING_USER,
+        )
+        placeholders = ",".join("?" for _ in active_states)
+        row = conn.execute(
+            f"SELECT 1 FROM supervisor_goals WHERE repo_id = ? AND state IN ({placeholders}) LIMIT 1",
+            (repo_id, *active_states),
+        ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+
+
+def archive_repository(settings: Any, repo_id: str) -> dict[str, Any]:
+    """Hide a repository from active lists without touching code, branches, or history."""
+    require_enabled(settings)
+    repo_row = _get_repo_row(settings, repo_id)
+    rid = str(repo_row["id"])
+    if _repo_has_running_goal(settings, rid) or _repo_has_active_task(settings, repo_row):
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            "这个项目还有正在跑的目标或任务，先停下再归档。",
+            code="repository_busy",
+        )
+    now = _utc_now()
+    conn = _connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """UPDATE supervisor_repositories
+               SET archived_at = COALESCE(NULLIF(TRIM(archived_at), ''), ?),
+                   updated_at = ?
+               WHERE id = ?""",
+            (now, now, rid),
+        )
+        updated = conn.execute(
+            "SELECT * FROM supervisor_repositories WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    assert updated is not None
+    return _format_repository(settings, dict(updated))
+
+
+def unarchive_repository(settings: Any, repo_id: str) -> dict[str, Any]:
+    """Restore an archived repository back into the active project list."""
+    require_enabled(settings)
+    repo_row = _get_repo_row(settings, repo_id)
+    rid = str(repo_row["id"])
+    now = _utc_now()
+    conn = _connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE supervisor_repositories SET archived_at = NULL, updated_at = ? WHERE id = ?",
+            (now, rid),
+        )
+        updated = conn.execute(
+            "SELECT * FROM supervisor_repositories WHERE id = ?",
+            (rid,),
+        ).fetchone()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    assert updated is not None
+    return _format_repository(settings, dict(updated))
 
 
 def _get_repo_row(settings: Any, repo_id: str) -> dict[str, Any]:
@@ -1906,6 +2047,12 @@ def _resolve_repo_and_worktree(
                 f"worktree not found: {wid}",
                 code="worktree_not_found",
             )
+        if repo_row.get("archived_at") and str(repo_row["archived_at"]).strip():
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "这个项目已经归档了，先恢复再开始。",
+                code="repository_archived",
+            )
         return _format_repository(settings, repo_row), wt
 
     if legacy_repo_path and legacy_worktree_path:
@@ -1925,7 +2072,14 @@ def _resolve_repo_and_worktree(
                 "请先注册这个仓库，再新建任务",
                 code="unregistered_repository",
             )
-        repo_fmt = _format_repository(settings, dict(row))
+        repo_dict = dict(row)
+        if repo_dict.get("archived_at") and str(repo_dict["archived_at"]).strip():
+            raise SupervisorServiceError(
+                HTTPStatus.CONFLICT,
+                "这个项目已经归档了，先恢复再开始。",
+                code="repository_archived",
+            )
+        repo_fmt = _format_repository(settings, repo_dict)
         wt = next((w for w in repo_fmt["worktrees"] if w["path"] == canon_wt), None)
         if wt is None:
             raise SupervisorServiceError(
@@ -2429,11 +2583,27 @@ def dispatch_scoped_task(
     conn = _connect(settings)
     try:
         wt_row = conn.execute(
-            "SELECT managed FROM supervisor_worktrees WHERE canonical_path = ?",
+            "SELECT repo_id, managed FROM supervisor_worktrees WHERE canonical_path = ?",
             (wt_path,),
         ).fetchone()
+        if wt_row is not None:
+            repo_archived = conn.execute(
+                "SELECT archived_at FROM supervisor_repositories WHERE id = ?",
+                (wt_row["repo_id"],),
+            ).fetchone()
+        else:
+            repo_archived = conn.execute(
+                "SELECT archived_at FROM supervisor_repositories WHERE canonical_path = ?",
+                (repo_path,),
+            ).fetchone()
     finally:
         conn.close()
+    if repo_archived is not None and repo_archived["archived_at"] and str(repo_archived["archived_at"]).strip():
+        raise SupervisorServiceError(
+            HTTPStatus.CONFLICT,
+            "这个项目已经归档了，先恢复再开始。",
+            code="repository_archived",
+        )
     if wt_row is not None and not bool(wt_row["managed"]):
         raise SupervisorServiceError(
             HTTPStatus.CONFLICT,

@@ -985,7 +985,7 @@ def _ensure_ready_worktree(settings: Any, repo: dict[str, Any]) -> dict[str, Any
 
 def _safe_list_repos(settings: Any) -> list[dict[str, Any]]:
     try:
-        return svc.list_repositories(settings)
+        return [r for r in svc.list_repositories(settings) if not r.get("archived_at")]
     except svc.SupervisorServiceError:
         return []
 
@@ -2155,22 +2155,25 @@ def _handle_resume_intent(
     target_repo: dict[str, Any] | None = matched_repo
     last_goal: dict[str, Any] | None = None
 
+    active_repo_ids = {str(r.get("id") or "") for r in repos}
     if target_repo is not None:
         repo_goals = [g for g in goals if g.get("repo_id") == target_repo.get("id")]
         non_active = [g for g in repo_goals if g.get("state") not in _ACTIVE_GOAL_STATES]
         last_goal = non_active[0] if non_active else (repo_goals[0] if repo_goals else None)
     else:
         recent_id = _get_session_state(settings, session_id).get("recent_repo_id", "")
-        if recent_id:
+        if recent_id and recent_id in active_repo_ids:
             recent_goals = [g for g in goals if g.get("repo_id") == recent_id]
             if recent_goals:
                 non_active = [g for g in recent_goals if g.get("state") not in _ACTIVE_GOAL_STATES]
                 last_goal = non_active[0] if non_active else recent_goals[0]
                 target_repo = _find_repo_by_id(repos, recent_id)
         if last_goal is None and goals:
-            non_active = [g for g in goals if g.get("state") not in _ACTIVE_GOAL_STATES]
-            last_goal = non_active[0] if non_active else goals[0]
-            target_repo = _find_repo_by_id(repos, str(last_goal.get("repo_id") or ""))
+            eligible_goals = [g for g in goals if str(g.get("repo_id") or "") in active_repo_ids]
+            non_active = [g for g in eligible_goals if g.get("state") not in _ACTIVE_GOAL_STATES]
+            last_goal = non_active[0] if non_active else (eligible_goals[0] if eligible_goals else None)
+            if last_goal is not None:
+                target_repo = _find_repo_by_id(repos, str(last_goal.get("repo_id") or ""))
 
     if target_repo is None or last_goal is None:
         return "之前还没有做过项目目标，请直接告诉我你想在哪个项目上做什么。", None

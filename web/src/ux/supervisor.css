@@ -113,18 +113,130 @@
   border-color: #e4c4b8;
 }
 
+.sup-repo-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
 .sup-repo-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
-  padding: 9px 10px;
+  padding: 9px 6px 9px 10px;
   border: 0;
   background: transparent;
   color: #1f2328;
   text-align: left;
   cursor: pointer;
+}
+
+.sup-repo-archive-btn {
+  flex: none;
+  margin-right: 8px;
+  padding: 2px 7px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  background: #fff;
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.sup-repo-archive-btn:hover:not(:disabled) {
+  border-color: #d0d5dd;
+  background: #f9fafb;
+  color: #1f2328;
+}
+
+.sup-repo-archive-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.sup-repo-archive-confirm {
+  padding: 8px 10px;
+  border-top: 1px solid #f0f1f3;
+  background: #fdfbfa;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sup-repo-archive-confirm p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #4b5563;
+}
+
+.sup-archived-section {
+  margin-top: 6px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+  overflow: hidden;
+}
+
+.sup-archived-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #6b7280;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.sup-archived-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sup-archived-summary::before {
+  content: "▸";
+  width: 10px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.sup-archived-section[open] > .sup-archived-summary::before {
+  content: "▾";
+}
+
+.sup-archived-summary:hover {
+  color: #1f2328;
+}
+
+.sup-archived-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 8px 8px;
+  border-top: 1px solid #eceef0;
+}
+
+.sup-archived-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #eceef0;
+  min-width: 0;
+}
+
+.sup-repo-unarchive-btn {
+  flex: none;
+  padding: 3px 9px;
+  font-size: 12px;
 }
 
 .sup-repo-toggle:hover {
