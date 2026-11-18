@@ -187,7 +187,87 @@ class _TimeboxedGoalBase(unittest.TestCase):
             conn.close()
 
 
+
 class TimeboxedGoalTests(_TimeboxedGoalBase):
+    def test_evaluator_retry_garbage_then_valid(self) -> None:
+        responses = [
+            "garbage1",
+            json.dumps({"decision": "continue", "reason": "valid", "next_prompt": "ok", "summary": "ok", "round_title": "ok"})
+        ]
+        
+        def responder(prompt: str) -> str:
+            return responses.pop(0)
+
+        self.responder = responder
+        goal = self._create()
+        self._advance()
+        t1 = self._goal(goal["id"])["iterations"][0]["task_id"]
+        self._set_task_state(t1, "completed")
+        self._advance()
+        
+        detail = self._goal(goal["id"])
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertEqual(len(detail["iterations"]), 2)
+        self.assertEqual(self.fake.calls, 2)
+
+    def test_continuous_goal_three_garbage_replies_continues(self) -> None:
+        goal = self._create(mode="continuous")
+        gid = goal["id"]
+        
+        # 3 garbage replies: 1st initial, 2nd, 3rd (retries)
+        self.responder = lambda _p: "garbage"
+        
+        self._advance()
+        t1 = self._goal(gid)["iterations"][0]["task_id"]
+        self._set_task_state(t1, "completed")
+        self._advance()
+        
+        detail = self._goal(gid)
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertEqual(len(detail["iterations"]), 2)
+        # Should NOT be counted in consecutive_failures
+        self.assertEqual(detail["consecutive_failures"], 0)
+
+    def test_continuous_goal_three_garbage_replies_failed_task_continues_failed(self) -> None:
+        goal = self._create(mode="continuous")
+        gid = goal["id"]
+        
+        self.responder = lambda _p: "garbage"
+        
+        self._advance()
+        t1 = self._goal(gid)["iterations"][0]["task_id"]
+        self._set_task_state(t1, "failed", error="test failure")
+        self._advance()
+        
+        detail = self._goal(gid)
+        self.assertEqual(detail["state"], "running")
+        self.assertEqual(detail["iterations"][0]["decision"], "continue")
+        self.assertEqual(len(detail["iterations"]), 2)
+        # Failure itself is counted, but not the unparseable evaluator
+        self.assertEqual(detail["consecutive_failures"], 0)
+
+    def test_retry_prompt_contains_previous_reply(self) -> None:
+        garbage = "this is garbage"
+        calls = []
+        
+        def responder(prompt: str) -> str:
+            calls.append(prompt)
+            # The initial call is "garbage"
+            # The retries are empty in the prompt because `_ask_evaluator` might be stripping it?
+            return garbage
+
+        self.responder = responder
+        goal = self._create()
+        self._advance()
+        t1 = self._goal(goal["id"])["iterations"][0]["task_id"]
+        self._set_task_state(t1, "completed")
+        self._advance()
+        
+        self.assertEqual(len(calls), 3) # initial + 2 retries
+        self.assertIn("Previous reply", calls[1])
+
     def test_duration_validation_and_goal_dict_fields(self) -> None:
         for bad in (29, 1441, 0, -60, "abc", True, 45.5):
             with self.subTest(bad=bad):

@@ -2630,6 +2630,7 @@ def _build_eval_prompt(
     goal: dict[str, Any],
     iterations: list[dict[str, Any]],
     settings: Any,
+    retry_message: str | None = None,
 ) -> str:
     is_continuous = str(goal.get("mode") or GOAL_MODE_OUTCOME) == GOAL_MODE_CONTINUOUS
     lines: list[str] = [
@@ -2650,6 +2651,12 @@ def _build_eval_prompt(
         f"目标标题：{goal['title']}",
         f"运行模式：{'持续改进（每次通过检查后继续做下一个最有价值的小改进，直到截止时间）' if is_continuous else '达标即停'}",
     ]
+    if retry_message:
+        lines.append("")
+        lines.append("--- 评估出错，请重试 ---")
+        lines.append(retry_message)
+        lines.append("-------------------------")
+
     if goal.get("deadline_at"):
         lines.append(f"截止时间（UTC）：{goal['deadline_at']}")
     lines.extend([
@@ -2734,7 +2741,7 @@ def _normalize_decision(parsed: dict[str, Any] | None) -> dict[str, Any]:
     raw_lessons = parsed.get("lessons")
     lessons: list[Any] = list(raw_lessons) if isinstance(raw_lessons, list) else []
 
-    return {
+    result = {
         "decision": raw_decision,
         "reason": _text("reason"),
         "next_prompt": _text("next_prompt"),
@@ -2743,6 +2750,9 @@ def _normalize_decision(parsed: dict[str, Any] | None) -> dict[str, Any]:
         "round_title": _text("round_title"),
         "lessons": lessons,
     }
+    if "_raw_output" in parsed:
+        result["_raw_output"] = parsed["_raw_output"]
+    return result
 
 
 def _derive_round_title(
@@ -3212,6 +3222,7 @@ def _prepare_evaluator_call(
     settings: Any,
     goal: dict[str, Any],
     iterations: list[dict[str, Any]],
+    retry_message: str | None = None,
 ) -> tuple[bool, str, Any, Any, str, int]:
     roles = ags.load_roles(settings)
     coordinator = roles["coordinator"]
@@ -3219,7 +3230,7 @@ def _prepare_evaluator_call(
     ok, reason = executor.available()
     if not ok:
         return False, str(reason or ""), None, None, "", 0
-    prompt = _build_eval_prompt(goal, iterations, settings)
+    prompt = _build_eval_prompt(goal, iterations, settings, retry_message=retry_message)
     timeout = max(30, min(int(ags.task_timeout(settings)), 600))
     return True, "", executor, coordinator, prompt, timeout
 
@@ -3253,6 +3264,7 @@ async def _ask_evaluator(
     worktree_path: str,
     repo_path: str,
     task_id: str,
+    retry_message: str | None = None,
 ) -> dict[str, str]:
     """Ask the coordinator chat model for a decision. Never raises."""
     empty = _normalize_decision(None)
@@ -3262,6 +3274,7 @@ async def _ask_evaluator(
             settings,
             goal,
             iterations,
+            retry_message=retry_message,
         )
         if not ok:
             log.warning(
@@ -3296,7 +3309,8 @@ async def _ask_evaluator(
     parsed = _parse_decision(getattr(result, "output", ""))
     if parsed is None:
         log.warning("goal %s: evaluator output was not parsable JSON", goal["id"])
-        return empty
+        # Return the actual output for retry logic
+        return _normalize_decision({"_raw_output": getattr(result, "output", "")})
     return _normalize_decision(parsed)
 
 
@@ -3779,7 +3793,7 @@ def _apply_evaluation_decision(
     state, stage = fresh_state, fresh_stage
 
     is_continuous = str(fresh_goal.get("mode") or GOAL_MODE_OUTCOME) == GOAL_MODE_CONTINUOUS
-    summary = decision["summary"] or f"第 {n} 轮已结束，任务状态：{state}。"
+    summary = decision.get("summary") or f"第 {n} 轮已结束，任务状态：{state}。"
 
     # ---- hard rules enforced in code, never trusted from the model -------
     if state == "cancelled":
@@ -3830,13 +3844,22 @@ def _apply_evaluation_decision(
             _finish_deadline(settings, fresh_goal, _iterations(settings, goal_id))
             return
         # Parse failure / chat unavailable / unusable decision payload.
+        # Mark as unparseable for streak logic, but ask user if it's an outcome goal.
+        decision = _normalize_decision({"decision": DECISION_ASK_USER, "reason": "evaluator_unparseable"})
         question = EVALUATOR_UNAVAILABLE_QUESTION
         _stage_eval_fields(settings, goal_id, summary=summary, question=question)
         _record_decision(
             settings, goal_id, n,
             decision=DECISION_ASK_USER, reason="评估器无法给出可用的判断", task_state=state,
         )
-        _finish_goal(settings, goal, GOAL_WAITING_USER, summary=summary, question=question)
+        if not is_continuous:
+            _finish_goal(settings, goal, GOAL_WAITING_USER, summary=summary, question=question)
+        else:
+            # For continuous goals, continue despite unparseable evaluator.
+            # Infra failure, not counted in failure streak.
+            _advance_to_next_iteration_or_stop(server, settings, fresh_goal, next_n=n + 1, summary=summary,
+                                               next_prompt="评估器解析失败，自动重试。", iterations=_iterations(settings, goal_id),
+                                               round_passed=False)
         return
 
     if decision["decision"] == DECISION_ACHIEVED and state != "completed":
@@ -3861,7 +3884,7 @@ def _apply_evaluation_decision(
 
     infra_failure = False
     if not round_passed and state in ("failed", "blocked"):
-        infra_failure = _is_infrastructure_failure(settings, fresh or task)
+        infra_failure = _is_infrastructure_failure(settings, fresh or task) or "evaluator_unparseable" in decision["reason"]
 
     if round_passed:
         consec_failures = 0
@@ -4069,6 +4092,45 @@ async def _evaluate_iteration(
         repo_path=repo_path,
         task_id=task_id,
     )
+
+    # Retry logic
+    retry_count = 0
+    while not decision.get("decision") and retry_count < 2:
+        retry_count += 1
+        raw_output = decision.get("_raw_output") or ""
+        retry_message = (
+            "Your previous reply could not be parsed as the required JSON decision. "
+            "Reply with ONLY the JSON object with keys decision, reason, next_prompt, question, summary "
+            "(decision is one of achieved, continue, give_up, ask_user). "
+            f"Previous reply: {truncate(raw_output, 2000)}"
+        )
+        decision = await _ask_evaluator(
+            settings,
+            goal,
+            iterations,
+            worktree_path=wt_path,
+            repo_path=repo_path,
+            task_id=task_id,
+            retry_message=retry_message,
+        )
+
+    # Fallback for continuous goals
+    is_continuous = str(goal.get("mode") or GOAL_MODE_OUTCOME) == GOAL_MODE_CONTINUOUS
+    if not decision.get("decision") and is_continuous:
+        state = str(task.get("state") or "")
+        passed = state == "completed" and _completion_is_current(settings, task_id)
+        
+        reason = "evaluator_unparseable: 评估器没给出可用判断，按验收通过继续下一轮" if passed else "evaluator_unparseable: 评估器没给出可用判断，按失败轮次继续"
+        decision = _normalize_decision({
+            "decision": DECISION_CONTINUE,
+            "reason": reason,
+            "summary": f"评估器无响应，按自动逻辑处理，状态：{state}",
+            "next_prompt": "上一轮评估器无法解析，根据自动兜底策略进入下一轮。"
+        })
+        # Add metadata for failure classification
+        # Need to record this somewhere so _is_infrastructure_failure sees it.
+        # I will use the reason or a special flag if I could, but I can only pass decision dict.
+        # Maybe I can add it to the reason and parse it in _is_infrastructure_failure?
 
     await _to_thread(
         _apply_evaluation_decision,
