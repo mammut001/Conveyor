@@ -423,6 +423,20 @@
   font-size: 12px;
 }
 
+.sup-context-archived {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #f3d0a8;
+  border-radius: 8px;
+  background: #fffaf2;
+  color: #b54708;
+  font-size: 12px;
+}
+
 .sup-missing-card {
   border-color: #f3d0a8;
   background: #fffaf2;

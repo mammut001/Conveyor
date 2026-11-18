@@ -2248,6 +2248,8 @@ export function SupervisorWorkspace({
 
   const savedContext = useMemo(() => loadSavedContext(), [])
   const [selectedRepoId, setSelectedRepoId] = useState(savedContext.repoId)
+  // Repo the owner opened through a navigation request (chat card) this session; an archived one stays selected.
+  const navOpenedRepoIdRef = useRef('')
   const [selectedWorktreeId, setSelectedWorktreeId] = useState(savedContext.worktreeId)
 
   const userPickedContextRef = useRef(false)
@@ -2429,7 +2431,12 @@ export function SupervisorWorkspace({
         : await loadActivitySnapshot(activeRepos)
       if (!userPickedContextRef.current) {
         setSelectedRepoId(prevRepoId => {
-          const next = reconcileSelection(activeRepos, prevRepoId, selectedWorktreeIdRef.current, activity)
+          // An archived project the owner opened on purpose (e.g. 打开项目 on an old chat card)
+          // stays selected and shows the archived note; otherwise only active projects are candidates.
+          const candidates = activeRepos.concat(
+            repos.filter(r => r.archived_at && r.id === prevRepoId && r.id === navOpenedRepoIdRef.current),
+          )
+          const next = reconcileSelection(candidates, prevRepoId, selectedWorktreeIdRef.current, activity)
           if (next.worktreeId !== selectedWorktreeIdRef.current) {
             setSelectedWorktreeId(next.worktreeId)
           }
@@ -2628,6 +2635,7 @@ export function SupervisorWorkspace({
     const repo = repositories.find(r => r.id === navigationRequest.repoId)
     if (!repo) return
     handledNavNonceRef.current = navigationRequest.nonce
+    navOpenedRepoIdRef.current = repo.id
     const targetWt = (
       (navigationRequest.worktreeId
         ? (repo.worktrees || []).find(w => w.id === navigationRequest.worktreeId)
@@ -3579,6 +3587,20 @@ export function SupervisorWorkspace({
                   >
                     {restoreBusyWorktreeId === selectedWorktree.id ? '正在恢复…' : '恢复工作目录'}
                   </button>
+                </div>
+              )}
+              {selectedRepo?.archived_at && (
+                <div className="sup-context-archived" role="status">
+                  <span>这个项目已归档，不在项目列表里。要继续使用，请先恢复。</span>
+                  <button
+                    type="button"
+                    className="shell-button primary"
+                    disabled={unarchiveBusyRepoId === selectedRepo.id}
+                    onClick={() => void handleUnarchiveRepo(selectedRepo.id)}
+                  >
+                    {unarchiveBusyRepoId === selectedRepo.id ? '正在恢复…' : '恢复项目'}
+                  </button>
+                  {unarchiveError && <div role="alert">{unarchiveError}</div>}
                 </div>
               )}
             </div>

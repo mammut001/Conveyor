@@ -20,8 +20,9 @@ function createMockCapabilities(): SupervisorCapabilities {
   }
 }
 
-async function setupMockServer(page: Page, options: { noChecksConfirmCard?: boolean } = {}) {
+async function setupMockServer(page: Page, options: { noChecksConfirmCard?: boolean; createdArchived?: boolean } = {}) {
   const actionCalls: Array<{ action_id?: string }> = []
+  const unarchiveCalls: string[] = []
   let repos: SupervisorRepo[] = options.noChecksConfirmCard
     ? [
         {
@@ -160,6 +161,7 @@ async function setupMockServer(page: Page, options: { noChecksConfirmCard?: bool
             path: '/srv/projects/todo-app',
             source_machine: 'dev-workstation',
             validation_source: 'none',
+            archived_at: options.createdArchived ? '2026-11-18T12:00:00+00:00' : null,
             worktrees: [
               { id: 'wt-todo-main', path: '/srv/projects/todo-app', branch: 'main', head: '1111111', is_main: true, managed: false, locked: false },
               { id: 'wt-todo-1', path: '/srv/projects/todo-app/.worktrees/wt-1', branch: 'sup/wt-1', head: '1111111', is_main: false, managed: true, locked: false, chat_session_id: 'web:web-console:supwt-todo-1' },
@@ -277,6 +279,13 @@ async function setupMockServer(page: Page, options: { noChecksConfirmCard?: bool
 
     if (path === '/api/supervisor/capabilities' && method === 'GET') return json(createMockCapabilities())
     if (path === '/api/supervisor/repositories' && method === 'GET') return json({ repositories: repos })
+    const unarchiveMatch = path.match(/^\/api\/supervisor\/repositories\/([^/]+)\/unarchive$/)
+    if (unarchiveMatch && method === 'POST') {
+      const repoId = decodeURIComponent(unarchiveMatch[1])
+      unarchiveCalls.push(repoId)
+      repos = repos.map(r => (r.id === repoId ? { ...r, archived_at: null } : r))
+      return json(repos.find(r => r.id === repoId) || {})
+    }
     if (path === '/api/supervisor/tasks' && method === 'GET') return json({ tasks: [], count: 0 })
     if (path === '/api/supervisor/deployments' && method === 'GET') return json({ deployments: [], count: 0 })
     if (path === '/api/supervisor/goals' && method === 'GET') return json({ goals: [], count: 0 })
@@ -294,7 +303,7 @@ async function setupMockServer(page: Page, options: { noChecksConfirmCard?: bool
     return json({})
   })
 
-  return { actionCalls }
+  return { actionCalls, unarchiveCalls }
 }
 
 test('create project action card navigates to 项目 and timed goal 开始 disables card', async ({ page }) => {
@@ -441,4 +450,39 @@ test('no-checks repo timed-goal card renders 每轮等我确认 and each button 
     { action_id: 'act-cancel-goal-2' },
     { action_id: 'act-edit-goal-3' },
   ])
+})
+
+test('R23: 打开项目 on a card for a project archived since shows an archived note with 恢复项目', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 860 })
+  const { unarchiveCalls } = await setupMockServer(page, { createdArchived: true })
+  await page.goto('/')
+  await page.getByRole('button', { name: /对话/ }).first().click()
+  const composer = page.getByRole('textbox', { name: '给 Conveyor 发消息', exact: true })
+  await composer.fill('帮我创建一个 repo 叫 todo-app')
+  await composer.press('Enter')
+  await page.getByRole('button', { name: '打开项目', exact: true }).click()
+
+  await expect(page.getByRole('heading', { name: 'todo-app / sup/wt-1' })).toBeVisible()
+  const note = page.locator('.sup-context-archived')
+  await expect(note).toBeVisible()
+  await expect(note).toHaveAttribute('role', 'status')
+  await expect(note).toContainText('这个项目已归档，不在项目列表里。要继续使用，请先恢复。')
+
+  await note.getByRole('button', { name: '恢复项目', exact: true }).click()
+  await expect.poll(() => unarchiveCalls).toEqual(['repo-todo-app'])
+  await expect(page.locator('.sup-context-archived')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'todo-app / sup/wt-1' })).toBeVisible()
+})
+
+test('R23: an active project shows no archived note', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 860 })
+  await setupMockServer(page)
+  await page.goto('/')
+  await page.getByRole('button', { name: /对话/ }).first().click()
+  const composer = page.getByRole('textbox', { name: '给 Conveyor 发消息', exact: true })
+  await composer.fill('帮我创建一个 repo 叫 todo-app')
+  await composer.press('Enter')
+  await page.getByRole('button', { name: '打开项目', exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'todo-app / sup/wt-1' })).toBeVisible()
+  await expect(page.locator('.sup-context-archived')).toHaveCount(0)
 })
