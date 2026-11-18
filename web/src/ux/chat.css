@@ -893,6 +893,9 @@
   }
   .primary-interface .mobile-ui .chat-panel-container .composer.chat-composer { padding: 6px 12px 10px; }
   .primary-interface .mobile-ui .chat-panel-container .event-stream { padding-bottom: 16px; }
+  /* Phones switch sessions with the 当前会话 picker in the bar above, so the topic rail
+     (a desktop-only repeat of that picker) never takes a third of the chat width. */
+  .primary-interface .chat-topic-rail { display: none !important; }
   /* The legacy ≤760px rule makes every table its own scroll box; Markdown tables already scroll
      inside .formatted-table-scroll, so they stay real, full-width tables with a single scroll area. */
   .primary-interface .mobile-ui .formatted-table-scroll > .formatted-table {
@@ -1040,13 +1043,6 @@
   overflow: hidden;
 }
 
-.primary-interface .chat-rail-divider {
-  width: 28px;
-  height: 1px;
-  margin: 2px 0;
-  background: #dcdfe5;
-}
-
 .primary-interface .chat-rail-item {
   position: relative;
   display: flex;
@@ -1117,42 +1113,6 @@
   font-size: 8px;
   font-weight: 700;
   line-height: 12px;
-}
-
-.primary-interface .chat-rail-avatar {
-  position: relative;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  color: #fff;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.primary-interface .chat-rail-dot {
-  position: absolute;
-  right: -1px;
-  bottom: -1px;
-  width: 8px;
-  height: 8px;
-  border: 1.5px solid #f5f6f8;
-  border-radius: 50%;
-  background: #10b981;
-}
-.primary-interface .chat-rail-dot.is-waiting { background: #f59e0b; }
-
-.primary-interface .chat-rail-item.is-active.chat-rail-agent {
-  background: rgba(255, 255, 255, .75);
-  color: #1f2328;
-}
-.primary-interface .chat-rail-item.is-active.chat-rail-agent::before {
-  background: #6b7280;
-}
-.primary-interface .chat-rail-item.is-active.chat-rail-agent .chat-rail-avatar {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px #bd5c40;
 }
 
 .primary-interface .chat-rail-label {
@@ -1301,10 +1261,5 @@
 @media (forced-colors: active) {
   .primary-interface :is(.chat-send-button, .chat-voice-button, .chat-composer .chat-new-button, .chat-copy-button, .chat-jump-latest, .chat-rail-toggle, .chat-rail-item) {
     border: 1px solid ButtonText !important;
-  }
-  .primary-interface .chat-rail-dot {
-    forced-color-adjust: none;
-    border: 1px solid ButtonText !important;
-    background: currentColor !important;
   }
 }
