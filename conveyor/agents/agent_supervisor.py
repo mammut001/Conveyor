@@ -11,6 +11,7 @@ process identity, and advances task state only from real execution results.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import contextvars
@@ -3750,6 +3751,37 @@ def _git_head(worktree_path: str) -> str:
         return ""
 
 
+def _get_python_outline(file_path: str) -> str:
+    try:
+        if os.path.getsize(file_path) > 2 * 1024 * 1024:
+            return ""
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            tree = ast.parse(f.read())
+        outline = []
+        entry_count = 0
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if entry_count >= 250:
+                    break
+                if isinstance(node, ast.ClassDef):
+                    outline.append(f"L{node.lineno} class {node.name}")
+                    entry_count += 1
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            if entry_count >= 250:
+                                break
+                            outline.append(f"  L{item.lineno} {item.name}")
+                            entry_count += 1
+                else:
+                    outline.append(f"L{node.lineno} def {node.name}")
+                    entry_count += 1
+        if entry_count >= 250:
+            outline.append("… (outline truncated; grep for more)")
+        return "\n".join(outline)
+    except Exception:
+        return ""
+
+
 def build_reading_guide(worktree_path: str, *, role: str) -> str:
     """Return a guide for reading files in the repository."""
     if os.environ.get("CONVEYOR_READING_GUIDE", "1") == "0":
@@ -3797,7 +3829,34 @@ def build_reading_guide(worktree_path: str, *, role: str) -> str:
         if capped:
             guide += f"  ... and {len(file_list) - 120} more files\n"
 
+        # Outline section: only when at least one large .py file has entries.
+        outline_text = ""
+        outline_size = 0
+        outline_capped = False
+        
+        for f, size in file_list:
+            if size > 20 * 1024 and f.endswith(".py"):
+                file_outline = _get_python_outline(os.path.join(canon, f))
+                if file_outline:
+                    # Need to check if adding this outline exceeds 24 KB
+                    if outline_size + len(file_outline) + len(f) + 20 > 24 * 1024:
+                        outline_text += f"  {f} outline: … (outline truncated; grep for more)\n"
+                        outline_capped = True
+                        break
+                    
+                    outline_text += f"  {f} outline:\n"
+                    # Indent the outline lines
+                    indented_outline = "\n".join([f"    {line}" for line in file_outline.splitlines()])
+                    outline_text += indented_outline + "\n"
+                    outline_size += len(file_outline) + len(f) + 20
+        
+        if outline_capped:
+            outline_text += "  … (outline section truncated; grep for more)\n"
+        if outline_text:
+            guide += "\nOutline (large .py files, use these line numbers):\n" + outline_text
+
         guide += "\nReading rules:\n"
+        guide += "- Use the outline line numbers with read offset/limit instead of paging through a file.\n"
         guide += "- Files over 20 KB (marked LARGE): do not read them whole. grep for the names you need first, then read only those line ranges with read offset/limit.\n"
         guide += "- Never read the same range of a file twice; keep notes instead.\n"
         guide += "- Issue independent reads/greps in the same turn.\n"
