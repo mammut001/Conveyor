@@ -637,6 +637,40 @@ class ChatIntentsFlowTests(unittest.TestCase):
         val_state = supervisor_validation.get_repo_validation(self.settings, repo_id)
         self.assertEqual(val_state["selected"], ["make-test"])
 
+    def test_duration_clamp_note(self) -> None:
+        svc.create_managed_project(self.settings, name="test-proj")
+
+        # 1. 20 分钟 → 30 (clamped)
+        port1 = self._send("在 test-proj 上持续迭代 20 分钟")
+        text1 = port1.events[0][1]["text"]
+        self.assertIn("半小时", text1)
+        self.assertIn("你说的是 20 分钟，最短是半小时，所以按半小时安排。", text1)
+
+        # 2. 30 小时 → 1440 (clamped)
+        port2 = self._send("在 test-proj 上持续迭代 30 小时")
+        text2 = port2.events[0][1]["text"]
+        self.assertIn("24 小时", text2)
+        self.assertIn("你说的是 30 小时，最长是 24 小时，所以按 24 小时安排。", text2)
+
+        # 3. 2 小时 → 120 (not clamped)
+        port3 = self._send("在 test-proj 上持续迭代 2 小时")
+        text3 = port3.events[0][1]["text"]
+        self.assertIn("2 小时", text3)
+        self.assertNotIn("你说的是", text3)
+
+    def test_duration_clamp_note_survives_project_picker(self) -> None:
+        svc.create_managed_project(self.settings, name="alpha-proj")
+        svc.create_managed_project(self.settings, name="beta-proj")
+        port = self._send("迭代 20 分钟，加一个帮助说明")
+        card = port.events[0][1]["action_card"]
+        pick = next(b for b in card["buttons"] if b["label"] == "beta-proj")
+        status, res = chat_intents.execute_action(None, self.settings, pick["id"])
+        self.assertEqual(status, HTTPStatus.OK)
+        follow_up = json.dumps(res, ensure_ascii=False)
+        self.assertIn("准备在 beta-proj 上持续改进 半小时", follow_up)
+        self.assertIn("你说的是 20 分钟，最短是半小时，所以按半小时安排。", follow_up)
+
+
 
 class ChatActionsHttpTests(unittest.TestCase):
     def setUp(self) -> None:

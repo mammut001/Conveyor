@@ -559,7 +559,7 @@ class UsageCopyTests(_UsageCase):
                          "runs_without_usage": 0}
         # 10000 cached / 34000 total = 29.4% -> 29%
         text = self._report(goal)
-        self.assertIn("用了约 3.4 万 token（其中约 29% 命中缓存）", text)
+        self.assertIn("用了约 3.4 万 token（约 29% 命中缓存）", text)
 
     def test_finish_report_without_partial_reporting_has_no_note(self) -> None:
         goal = self._create_goal()
@@ -647,6 +647,7 @@ class UsageCopyTests(_UsageCase):
         self.assertIn("已跑 3 轮 / 通过 1 轮", text)
         self.assertIn("这个目标是在开始记录用量之前跑的", text)
         self.assertNotIn("token", text)
+
 
 
 if __name__ == "__main__":

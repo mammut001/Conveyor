@@ -402,15 +402,20 @@ export function goalUsageLine(goal?: { usage?: GoalUsage | null } | null): strin
   }
   const total = (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0)
   let phrase = `已用${formatTokens(total)}`
+  const notes: string[] = []
+
   const cached = usage.cached_input_tokens ?? 0
   if (cached > 0 && total > 0) {
     const pct = Math.round(100 * cached / total)
-    if (pct > 0) phrase += `（其中约 ${pct}% 命中缓存）`
+    if (pct > 0) notes.push(`约 ${pct}% 命中缓存`)
   }
-  let note = ''
-  if (runsWithoutUsage > 0) note = '（部分执行者没有报告用量）'
-  else if (runsBeforeRecording > 0) note = '（更早的轮次还没开始记录用量）'
-  return `${phrase}${note}`
+  if (runsWithoutUsage > 0) notes.push('部分执行者没有报告用量')
+  else if (runsBeforeRecording > 0) notes.push('更早的轮次还没开始记录用量')
+
+  if (notes.length > 0) {
+    phrase += `（${notes.join('；')}）`
+  }
+  return phrase
 }
 
 // 每一步对应哪个角色：执行记录里找不到正在跑的那条时，用任务里登记的角色执行者。

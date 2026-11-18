@@ -116,6 +116,7 @@ class Intent:
     kind: str  # "create_project" | "start_timed_goal"
     project_name: str | None = None
     duration_minutes: int | None = None
+    original_duration_minutes: int | None = None
     goal_text: str = ""
     mentions_github: bool = False
 
@@ -322,7 +323,7 @@ def _clean_project_candidate(raw: str | None) -> str | None:
     return cleaned
 
 
-def _parse_duration_match(match: re.Match[str]) -> int | None:
+def _parse_duration_match(match: re.Match[str]) -> tuple[int, int | None]:
     minutes: int | None = None
     if match.group("half"):
         minutes = 30
@@ -335,7 +336,7 @@ def _parse_duration_match(match: re.Match[str]) -> int | None:
         try:
             hours = float(match.group("hours_num"))
         except ValueError:
-            return None
+            return 0, None
         minutes = int(round(hours * 60))
     elif match.group("hours_cn"):
         val = _CN_DIGITS.get(match.group("hours_cn"))
@@ -345,10 +346,11 @@ def _parse_duration_match(match: re.Match[str]) -> int | None:
         try:
             minutes = int(match.group("mins"))
         except ValueError:
-            return None
+            return 0, None
     if minutes is None or minutes <= 0:
-        return None
-    return max(MIN_DURATION_MINUTES, min(MAX_DURATION_MINUTES, minutes))
+        return 0, None
+    clamped = max(MIN_DURATION_MINUTES, min(MAX_DURATION_MINUTES, minutes))
+    return clamped, minutes if clamped != minutes else None
 
 
 _FILLER_AND_PUNCT_EDGE_CHARS = r"吧呢啊呀嘛哈\s,，.。:：!！;；、~～"
@@ -451,8 +453,8 @@ def detect_intent(text: str) -> Intent | None:
     # 2. start_timed_goal checks (requires BOTH action verb and duration).
     timed_match = _TIMED_VERB_DURATION_RE.search(raw) or _DURATION_VERB_RE.search(raw)
     if timed_match:
-        duration_minutes = _parse_duration_match(timed_match)
-        if duration_minutes is not None:
+        clamped_dur, orig_dur = _parse_duration_match(timed_match)
+        if clamped_dur > 0:
             proj_name: str | None = None
             for proj_match in _PROJECT_IN_TIMED_RE.finditer(raw):
                 for grp in proj_match.groups():
@@ -466,7 +468,8 @@ def detect_intent(text: str) -> Intent | None:
             return Intent(
                 kind="start_timed_goal",
                 project_name=proj_name,
-                duration_minutes=duration_minutes,
+                duration_minutes=clamped_dur,
+                original_duration_minutes=orig_dur,
                 goal_text=goal_text,
                 mentions_github=mentions_github,
             )
@@ -615,6 +618,7 @@ async def classify_intent(
         kind="start_timed_goal",
         project_name=project_name,
         duration_minutes=dur,
+        original_duration_minutes=None,
         goal_text=goal_text.strip(),
         mentions_github=mentions_github,
     )
@@ -1091,11 +1095,22 @@ def _repo_has_validation(settings: Any, repo_id: str) -> bool:
     return str(info.get("source") or "none") != "none"
 
 
+def _duration_clamp_note(requested: int, applied: int) -> str:
+    """One sentence telling the user their requested duration was out of range."""
+    def label(minutes: int) -> str:
+        # 「半小时」 sits flush against Chinese; 「20 分钟」 gets a leading space.
+        text = _format_duration_zh(minutes)
+        return f" {text}" if text[:1].isdigit() else text
+    bound = "最短" if requested < applied else "最长"
+    return f"你说的是{label(requested)}，{bound}是{label(applied)}，所以按{label(applied)}安排。"
+
+
 def _build_timed_goal_confirmation_card(
     settings: Any,
     session_id: str,
     repo: dict[str, Any],
     duration_minutes: int,
+    original_duration_minutes: int | None,
     goal_text: str,
 ) -> tuple[str, dict[str, Any]]:
     repo_id = str(repo.get("id") or "")
@@ -1109,8 +1124,10 @@ def _build_timed_goal_confirmation_card(
     has_validation = _repo_has_validation(settings, repo_id)
     text = (
         f"准备在 {repo_name} 上持续改进 {duration_label}：{goal_display}。"
-        f"{roles_summary}。时间到或者模型额度用完会自动停。"
     )
+    if original_duration_minutes and original_duration_minutes != duration_minutes:
+        text += _duration_clamp_note(original_duration_minutes, duration_minutes)
+    text += f"{roles_summary}。时间到或者模型额度用完会自动停。"
     if not has_validation:
         text += (
             "这个项目还没有自动检查：会让执行者先写一个 scripts/check.sh 跑真正的测试，"
@@ -1182,6 +1199,7 @@ def _build_pick_project_card(
     goal_text: str,
     *,
     prefix_text: str = "",
+    original_duration_minutes: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
     prompt_text = prefix_text or "在哪个项目上干？"
     buttons: list[dict[str, Any]] = []
@@ -1194,6 +1212,9 @@ def _build_pick_project_card(
             "server_payload": {
                 "repo_id": str(repo["id"]),
                 "duration_minutes": int(duration_minutes),
+                "original_duration_minutes": (
+                    int(original_duration_minutes) if original_duration_minutes else None
+                ),
                 "goal_text": goal_text,
             },
         })
@@ -1634,6 +1655,7 @@ def _handle_start_timed_goal_intent(
             duration_minutes,
             intent.goal_text,
             prefix_text=prefix,
+            original_duration_minutes=intent.original_duration_minutes,
         )
 
     _set_recent_repo(settings, session_id, str(target_repo["id"]))
@@ -1642,6 +1664,7 @@ def _handle_start_timed_goal_intent(
         session_id,
         target_repo,
         duration_minutes,
+        intent.original_duration_minutes,
         intent.goal_text,
     )
 
@@ -2211,7 +2234,8 @@ def _handle_decider_timed_goal_intent(
         )
 
     timed_match = _TIMED_VERB_DURATION_RE.search(raw_text) or _DURATION_VERB_RE.search(raw_text)
-    duration_minutes = _parse_duration_match(timed_match) if timed_match else None
+    clamped_dur, original_dur = _parse_duration_match(timed_match) if timed_match else (0, None)
+    duration_minutes = clamped_dur if clamped_dur > 0 else None
     goal_text = _extract_goal_text(raw_text, verb_span=timed_match.span()) if timed_match else _strip_goal_edges(raw_text)
 
     if duration_minutes is not None:
@@ -2221,6 +2245,7 @@ def _handle_decider_timed_goal_intent(
             Intent(
                 kind="start_timed_goal",
                 duration_minutes=duration_minutes,
+                original_duration_minutes=original_dur,
                 goal_text=goal_text,
                 mentions_github=bool(_GITHUB_RE.search(raw_text)),
             ),
@@ -2596,6 +2621,8 @@ def execute_action(
         repo_id = str(server_payload.get("repo_id") or "")
         raw_dur = server_payload.get("duration_minutes")
         duration_minutes = int(raw_dur) if raw_dur is not None else 60
+        raw_orig = server_payload.get("original_duration_minutes")
+        original_duration_minutes = int(raw_orig) if isinstance(raw_orig, int) and raw_orig > 0 else None
         goal_text = str(server_payload.get("goal_text") or "")
         repo = _find_repo_by_id(_safe_list_repos(settings), repo_id)
         if repo is None:
@@ -2617,6 +2644,7 @@ def execute_action(
                     session_id,
                     repo,
                     duration_minutes,
+                    original_duration_minutes,
                     goal_text,
                 )
     elif action == "pick_timed_goal_duration":
@@ -2635,6 +2663,7 @@ def execute_action(
                 session_id,
                 repo,
                 duration_minutes,
+                None,
                 goal_text,
             )
     elif action == "confirm_stop_goal":
