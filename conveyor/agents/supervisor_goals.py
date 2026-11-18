@@ -86,6 +86,9 @@ MAX_QUESTION_CHARS = 1000
 MAX_SUMMARY_CHARS = 1200
 MAX_REASON_CHARS = 500
 MAX_NEXT_PROMPT_CHARS = 6000
+LATE_ROUND_FRACTION = 0.5
+# Phrase in the summary of a goal stopped because the next round would not fit.
+LATE_ROUND_MARKER = "不够再跑一轮"
 MAX_EVAL_EXCERPT_CHARS = 3000
 # Every previous iteration is included (max_iterations is clamped to 20 below).
 EVAL_STALE_SECONDS = 1800
@@ -1772,6 +1775,8 @@ def _build_finish_report_bundle(
     eff_state = str(state if state is not None else goal.get("state") or "").strip()
     stop_reason = str(goal.get("stop_reason") or "").strip()
     label = goal_status_label(eff_state, stop_reason)
+    if stop_reason == STOP_REASON_DEADLINE and LATE_ROUND_MARKER in str(goal.get("summary") or ""):
+        label = "时间快到了，剩下的时间不够再跑一轮"
 
     iterations = _resolve_report_iterations(settings, goal)
     if iterations:
@@ -2169,16 +2174,60 @@ def _finish_goal(
     return updated
 
 
+def _min_round_start_seconds() -> int:
+    raw = os.getenv("CONVEYOR_GOAL_MIN_ROUND_START_SECONDS", "300")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 300
+
+
+def _zh_minutes(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    return "不到 1 分钟" if minutes < 1 else f"约 {minutes} 分钟"
+
+
+def _late_round_note(
+    goal: dict[str, Any], iterations: list[dict[str, Any]], *, first_round: bool = False,
+) -> str | None:
+    """Plain-Chinese stop note when a time-boxed goal has too little time left to
+    start another round; None when the round should start."""
+    min_seconds = _min_round_start_seconds()
+    deadline_dt = _parse_utc(goal.get("deadline_at"))
+    if min_seconds <= 0 or deadline_dt is None:
+        return None
+    remaining = (deadline_dt - _now()).total_seconds()
+    durations: list[float] = []
+    for item in iterations:
+        start, end = _parse_utc(item.get("started_at")), _parse_utc(item.get("finished_at"))
+        if start is not None and end is not None and end > start:
+            durations.append((end - start).total_seconds())
+    durations.sort()
+    typical = durations[len(durations) // 2] if durations else 0.0
+    threshold = min_seconds if first_round else max(min_seconds, LATE_ROUND_FRACTION * typical)
+    if remaining >= threshold:
+        return None
+    note = f"时间快到了：只剩{_zh_minutes(remaining)}，不够再跑一轮"
+    if typical and not first_round:
+        note += f"（每轮大约 {max(1, round(typical / 60))} 分钟）"
+    note += "，就在这里停了。"
+    if not first_round:
+        enriched = _enrich_goal_dict(goal, iterations)
+        note += f"一共跑了 {int(enriched['rounds_total'])} 轮，其中 {int(enriched['rounds_passed'])} 轮通过检查。"
+    return note
+
+
 def _finish_deadline(
     settings: Any,
     goal: dict[str, Any],
     iterations: list[dict[str, Any]] | None = None,
+    note: str | None = None,
 ) -> dict[str, Any]:
     iters = iterations if iterations is not None else _iterations(settings, str(goal["id"]))
     enriched = _enrich_goal_dict(goal, iters)
     total = int(enriched["rounds_total"])
     passed = int(enriched["rounds_passed"])
-    summary = f"时间到了：一共跑了 {total} 轮，其中 {passed} 轮通过检查。"
+    summary = note or f"时间到了：一共跑了 {total} 轮，其中 {passed} 轮通过检查。"
     return _finish_goal(
         settings,
         goal,
@@ -3385,6 +3434,11 @@ def _advance_to_next_iteration_or_stop(
         _finish_deadline(settings, fresh_goal, iterations)
         return
 
+    late_note = _late_round_note(fresh_goal, iterations)
+    if late_note:
+        _finish_deadline(settings, fresh_goal, iterations, note=late_note)
+        return
+
     used = len(iterations)
     max_iterations = int(fresh_goal["max_iterations"])
     if used >= max_iterations:
@@ -4190,6 +4244,12 @@ async def _advance_one_goal(server: Any, settings: Any, goal: dict[str, Any]) ->
         if _deadline_passed(goal):
             await _to_thread(_finish_deadline, settings, goal, iterations)
             return
+
+        late_note = _late_round_note(goal, iterations, first_round=True)
+        if late_note:
+            await _to_thread(_finish_deadline, settings, goal, iterations, note=late_note)
+            return
+
         await _to_thread(
             _start_iteration,
             server,
