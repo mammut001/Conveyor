@@ -456,3 +456,33 @@ test('达成后继续 follows 最多尝试几轮 directly, with no reserved empt
   // The checkbox starts right under the field (label + 4px gap + input + 10px form gap).
   expect(checkBox!.y - (roundsBox!.y + roundsBox!.height)).toBeLessThan(40)
 })
+
+test('an unlocked managed worktree with a stopped goal shows no 已锁定 banner', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installFixture(page, {
+    goals: [goal('goal-stopped', 'repo-conveyor', 'wt-fix-console', OLD_GOAL_AT)],
+    savedContext: { repoId: 'repo-conveyor', worktreeId: 'wt-fix-console' },
+  })
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  // The worktree is unlocked (locked: false, no active task), so the lock banner must stay hidden.
+  await expect(page.getByText('当前工作目录已锁定')).toHaveCount(0)
+})
+
+test('a locked worktree with a running task and no active goal shows the 已锁定 banner', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const fixture = await installFixture(page, {
+    savedContext: { repoId: 'repo-conveyor', worktreeId: 'wt-fix-console' },
+  })
+  const worktree = fixture.repos[0].worktrees[1]
+  worktree.locked = true
+  worktree.active_task_id = 'task-running-1'
+  worktree.active_task_state = 'running'
+  await page.goto('/#code')
+  await page.getByRole('tab', { name: '目标' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  await expect(page.getByText('当前工作目录已锁定（有任务正在执行）')).toBeVisible()
+})
