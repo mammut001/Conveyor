@@ -154,11 +154,12 @@ async function installSupervisorMockFixture(
     diffsByTask?: Record<string, SupervisorDiff>
     diffsByGoal?: Record<string, SupervisorDiff>
     diffMissingFor?: string[]
+    extraRepos?: SupervisorRepo[]
   } = {},
 ) {
   const featureEnabled = options.featureEnabled ?? true
   let capabilities = options.capabilities || createMockCapabilities()
-  const repos = createInitialRepos()
+  const repos = [...createInitialRepos(), ...(options.extraRepos || [])]
   const tasksByWt: Record<string, SupervisorTaskDetail[]> = {
     'wt-fix-console': [],
     'wt-no-chat': [],
@@ -1948,4 +1949,38 @@ test('mock fixture: supervisor stage label sanitization', async ({ page }) => {
   // No raw backend keys in the stage line
   const metaText = (await meta.allInnerTexts()).join('\n')
   expect(metaText).not.toMatch(/recovered|repair_limit_exceeded|some_new_stage/)
+})
+
+function pickRepo(worktrees: SupervisorRepo['worktrees']): SupervisorRepo {
+  return { id: 'repo-pick', name: 'qa-pick', path: '/srv/projects/qa-pick', source_machine: 'dev-workstation', validation_source: 'none', worktrees }
+}
+const PICK_MAIN = { id: 'wt-pick-main', path: '/srv/projects/qa-pick', branch: 'main', head: '1111111', is_main: true, managed: false, locked: false }
+
+test('R24: tapping another project lands on its managed worktree, not main', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    extraRepos: [pickRepo([
+      PICK_MAIN,
+      { id: 'wt-pick-x', path: '/srv/wt/pick-x', branch: 'sup/x', head: '2222222', is_main: false, managed: true, locked: false },
+    ])],
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  await page.locator('.sup-repo-tree').getByText('qa-pick', { exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'qa-pick / sup/x', exact: true })).toBeVisible()
+})
+
+test('R24: a managed worktree whose folder is missing is skipped when another one exists', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    extraRepos: [pickRepo([
+      PICK_MAIN,
+      { id: 'wt-pick-gone', path: '/srv/wt/pick-gone', branch: 'sup/gone', head: '3333333', is_main: false, managed: true, locked: false, missing: true },
+      { id: 'wt-pick-y', path: '/srv/wt/pick-y', branch: 'sup/y', head: '4444444', is_main: false, managed: true, locked: false },
+    ])],
+  })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  await page.locator('.sup-repo-tree').getByText('qa-pick', { exact: true }).click()
+  await expect(page.getByRole('heading', { name: 'qa-pick / sup/y', exact: true })).toBeVisible()
 })

@@ -2672,9 +2672,15 @@ export function SupervisorWorkspace({
     })
     if (repoId !== selectedRepoId) {
       const repo = repositories.find(r => r.id === repoId)
-      const firstWt = repo?.worktrees?.[0]
-      if (repo && firstWt) {
-        selectWorktreeContext(repo.id, firstWt.id)
+      if (repo && repo.worktrees) {
+        const wts = repo.worktrees
+        const preferred = wts.find(w => w.managed && !w.is_main && !w.locked && !isMissingWorktree(w))
+          || wts.find(w => w.managed && !w.is_main && !isMissingWorktree(w))
+          || wts.find(w => w.managed && !w.is_main)
+          || wts[0]
+        if (preferred) {
+          selectWorktreeContext(repo.id, preferred.id)
+        }
       }
     }
   }, [repositories, selectWorktreeContext, selectedRepoId])
