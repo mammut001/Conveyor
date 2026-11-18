@@ -1491,3 +1491,77 @@ class ProgressDigestTests(_TimeboxedGoalBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LateRoundStartTests(_TimeboxedGoalBase):
+    """R11: a time-boxed goal does not start a round it cannot finish in time."""
+
+    def test_new_30_minute_goal_still_starts_round_one(self) -> None:
+        goal = self._create(duration_minutes=30)
+        self._advance()
+        fresh = self._goal(goal["id"])
+        self.assertEqual(fresh["state"], "running")
+        self.assertEqual(len(fresh["iterations"]), 1)
+
+    def test_first_round_with_four_minutes_left_finishes_with_reason(self) -> None:
+        goal = self._create(duration_minutes=30)
+        self.clock.advance(minutes=26)
+        self._advance()
+        done = self._goal(goal["id"])
+        self.assertEqual(done["state"], goals.GOAL_EXHAUSTED)
+        self.assertEqual(done["stop_reason"], goals.STOP_REASON_DEADLINE)
+        self.assertIn("只剩约 4 分钟，不够再跑一轮", done["summary"])
+        self.assertEqual(len(done["iterations"]), 0)
+
+    def test_env_zero_disables_the_check(self) -> None:
+        with patch.dict(os.environ, {"CONVEYOR_GOAL_MIN_ROUND_START_SECONDS": "0"}):
+            goal = self._create(duration_minutes=30)
+            self.clock.advance(minutes=29)
+            self._advance()
+            self.assertEqual(len(self._goal(goal["id"])["iterations"]), 1)
+
+    def test_malformed_env_falls_back_to_default(self) -> None:
+        with patch.dict(os.environ, {"CONVEYOR_GOAL_MIN_ROUND_START_SECONDS": "abc"}):
+            self.assertEqual(goals._min_round_start_seconds(), 300)
+
+    def _round(self, start_min_ago: float, length_min: float) -> dict[str, Any]:
+        start = self.clock.now() - timedelta(minutes=start_min_ago)
+        return {
+            "started_at": goals._format_utc(start),
+            "finished_at": goals._format_utc(start + timedelta(minutes=length_min)),
+            "passed": True,
+        }
+
+    def _deadline_goal(self, minutes_left: float) -> dict[str, Any]:
+        return {"id": "g", "deadline_at": goals._format_utc(self.clock.now() + timedelta(minutes=minutes_left))}
+
+    def test_long_rounds_and_nine_minutes_left_stop(self) -> None:
+        iterations = [self._round(60, 20), self._round(40, 24)]
+        with patch.object(goals, "_enrich_goal_dict", return_value={"rounds_total": 2, "rounds_passed": 2}):
+            note = goals._late_round_note(self._deadline_goal(9), iterations)
+        self.assertIsNotNone(note)
+        self.assertIn("只剩约 9 分钟，不够再跑一轮（每轮大约 24 分钟）", note)
+        self.assertIn("一共跑了 2 轮，其中 2 轮通过检查。", note)
+
+    def test_short_rounds_and_fifteen_minutes_left_continue(self) -> None:
+        iterations = [self._round(30, 10), self._round(20, 10)]
+        self.assertIsNone(goals._late_round_note(self._deadline_goal(15), iterations))
+
+    def test_under_a_minute_left_wording(self) -> None:
+        note = goals._late_round_note(self._deadline_goal(0.3), [], first_round=True)
+        self.assertIn("只剩不到 1 分钟", note)
+
+    def test_goal_without_deadline_is_unaffected(self) -> None:
+        self.assertIsNone(goals._late_round_note({"id": "g", "deadline_at": None}, [self._round(30, 10)]))
+
+    def test_unparseable_timestamps_are_ignored(self) -> None:
+        bad = [{"started_at": "garbage", "finished_at": None}, {"started_at": "", "finished_at": "x"}]
+        self.assertIsNone(goals._late_round_note(self._deadline_goal(20), bad))
+
+    def test_finish_report_explains_early_deadline_stop(self) -> None:
+        goal = self._create(duration_minutes=30)
+        self.clock.advance(minutes=27)
+        self._advance()
+        done = goals._get_goal_row(self.settings, goal["id"])
+        report = goals.build_finish_report_text(self.settings, done)
+        self.assertIn("的目标结束了：时间快到了，剩下的时间不够再跑一轮。", report)
