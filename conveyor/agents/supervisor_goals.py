@@ -46,7 +46,7 @@ from conveyor.agents import supervisor_service as svc
 from conveyor.agents import workers
 from conveyor.agents import worker_usage
 from conveyor.agents.goal_notify import NOTIFY_STATES as GOAL_NOTIFY_STATES
-from conveyor.agents.goal_notify import goal_status_label, notify_goal_change
+from conveyor.agents.goal_notify import goal_status_label, notify_goal_change, notify_goal_digest
 from conveyor.core.redaction import redact_text, truncate
 
 log = logging.getLogger("conveyor.supervisor_goals")
@@ -99,6 +99,9 @@ MAX_DURATION_MINUTES = 1440
 DEFAULT_QUOTA_PAUSE_MINUTES = 30
 CONTINUOUS_CONSECUTIVE_FAILURE_LIMIT = 3
 MAX_PASSED_ROUND_TITLES_IN_PROMPT = 30
+DIGEST_EVERY_ROUNDS = 3
+DIGEST_INTERVAL_SECONDS = 3600
+DIGEST_RECENT_TITLES = 3
 MIN_EXTEND_ROUNDS = 1
 MAX_EXTEND_ROUNDS = 10
 MAX_EXTEND_MESSAGE_CHARS = 2000
@@ -181,7 +184,9 @@ CREATE TABLE IF NOT EXISTS supervisor_goals (
     mode TEXT NOT NULL DEFAULT 'outcome',
     resume_at TEXT,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
-    origin_session_id TEXT
+    origin_session_id TEXT,
+    last_digest_at TEXT,
+    last_digest_rounds INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS supervisor_goal_iterations (
@@ -230,6 +235,8 @@ _GOAL_SCHEMA_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     ("supervisor_goals", "resume_at", "TEXT"),
     ("supervisor_goals", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"),
     ("supervisor_goals", "origin_session_id", "TEXT"),
+    ("supervisor_goals", "last_digest_at", "TEXT"),
+    ("supervisor_goals", "last_digest_rounds", "INTEGER"),
     ("supervisor_goal_iterations", "passed", "INTEGER NOT NULL DEFAULT 0"),
     ("supervisor_goal_iterations", "round_title", "TEXT NOT NULL DEFAULT ''"),
 )
@@ -353,6 +360,8 @@ def _goal_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     raw_resume = row["resume_at"] if "resume_at" in keys else None
     raw_consec = row["consecutive_failures"] if "consecutive_failures" in keys else 0
     raw_origin = row["origin_session_id"] if "origin_session_id" in keys else None
+    raw_last_digest_at = row["last_digest_at"] if "last_digest_at" in keys else None
+    raw_last_digest_rounds = row["last_digest_rounds"] if "last_digest_rounds" in keys else None
     return {
         "id": str(row["id"]),
         "repo_id": str(row["repo_id"]),
@@ -373,6 +382,8 @@ def _goal_row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         "resume_at": str(raw_resume) if raw_resume else None,
         "consecutive_failures": int(raw_consec or 0),
         "origin_session_id": str(raw_origin).strip() if raw_origin else None,
+        "last_digest_at": str(raw_last_digest_at) if raw_last_digest_at else None,
+        "last_digest_rounds": int(raw_last_digest_rounds) if raw_last_digest_rounds is not None else None,
     }
 
 
@@ -400,6 +411,19 @@ def _iteration_ran(iteration: dict[str, Any]) -> bool:
         or iteration.get("decision")
         or iteration.get("task_final_state")
     )
+
+
+def _iteration_completed(iteration: dict[str, Any]) -> bool:
+    return bool(
+        iteration.get("finished_at")
+        or iteration.get("decision")
+        or iteration.get("task_final_state")
+    )
+
+
+def digests_enabled(settings: Any) -> bool:
+    """Off switch: ``CONVEYOR_GOAL_DIGESTS=false`` (`Settings.goal_digests_enabled`)."""
+    return bool(getattr(settings, "goal_digests_enabled", True))
 
 
 def _compute_remaining_seconds(deadline_at: str | None) -> int | None:
@@ -723,6 +747,8 @@ def _update_goal(settings: Any, goal_id: str, **fields: Any) -> dict[str, Any]:
         "mode",
         "resume_at",
         "consecutive_failures",
+        "last_digest_at",
+        "last_digest_rounds",
     }
     assignments = []
     values: list[Any] = []
@@ -1539,21 +1565,28 @@ def _clip_report_detail(text: Any, limit: int = 200) -> str:
     return collapsed
 
 
+def _format_zh_hm(elapsed_seconds: int) -> str:
+    total_mins = max(0, int(elapsed_seconds)) // 60
+    if total_mins <= 0:
+        return "不到 1 分钟"
+    hours, mins = divmod(total_mins, 60)
+    if hours == 0:
+        return f"{mins} 分"
+    if mins == 0:
+        return f"{hours} 小时"
+    return f"{hours} 小时 {mins} 分"
+
+
 def _format_elapsed_zh(created_at: Any, updated_at: Any) -> str:
     start_dt = _parse_utc(created_at)
     if start_dt is None:
         return "用时不到 1 分钟"
     end_dt = _parse_utc(updated_at) or _now()
     elapsed_seconds = max(0, int((end_dt - start_dt).total_seconds()))
-    total_mins = elapsed_seconds // 60
-    if total_mins <= 0:
+    hm = _format_zh_hm(elapsed_seconds)
+    if hm == "不到 1 分钟":
         return "用时不到 1 分钟"
-    hours, mins = divmod(total_mins, 60)
-    if hours == 0:
-        return f"用时 {mins} 分"
-    if mins == 0:
-        return f"用时 {hours} 小时"
-    return f"用时 {hours} 小时 {mins} 分"
+    return f"用时 {hm}"
 
 
 def _resolve_report_iterations(settings: Any, goal: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1853,6 +1886,205 @@ def _record_finish_report_card(settings: Any, goal_id: str, card_id: str) -> Non
         conn.close()
 
 
+def _report_target_session_id(goal: dict[str, Any]) -> str:
+    return str(goal.get("origin_session_id") or "").strip() or _default_report_session_id()
+
+
+def _resolve_repo_name(settings: Any, goal: dict[str, Any]) -> str:
+    repo_name = str(goal.get("repo_name") or "").strip()
+    if repo_name:
+        return repo_name
+    repo_id = str(goal.get("repo_id") or "").strip()
+    if settings is not None and getattr(settings, "codex_memory_root", "") and repo_id:
+        try:
+            conn = svc._connect(settings)
+            try:
+                repo_row = conn.execute(
+                    "SELECT name FROM supervisor_repositories WHERE id = ?",
+                    (repo_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if repo_row is not None:
+                repo_name = str(repo_row["name"] or "").strip()
+        except Exception:
+            pass
+    return repo_name or str(goal.get("title") or "").strip() or "当前项目"
+
+
+def _format_digest_remaining_zh(deadline_dt: datetime, now_dt: datetime) -> str:
+    rem_seconds = max(0, int((deadline_dt - now_dt).total_seconds()))
+    if rem_seconds < 60:
+        return "还剩不到 1 分钟"
+    rem_mins = math.ceil(rem_seconds / 60)
+    if rem_mins < 60:
+        return f"还剩约 {rem_mins} 分钟"
+    hours, mins = divmod(rem_mins, 60)
+    if mins == 0:
+        return f"还剩约 {hours} 小时"
+    return f"还剩约 {hours} 小时 {mins} 分"
+
+
+def _digest_usage_line(
+    settings: Any,
+    goal: dict[str, Any],
+    iterations: list[dict[str, Any]],
+) -> str:
+    usage = goal.get("usage")
+    if not isinstance(usage, dict):
+        usage = _goal_usage(settings, iterations)
+    if not isinstance(usage, dict) or int(usage.get("runs_with_usage") or 0) <= 0:
+        return ""
+    phrase = ags.usage_summary_phrase(usage)
+    if not phrase:
+        return ""
+    if phrase.startswith("用了"):
+        return f"已用{phrase[2:]}。"
+    return f"{phrase}。"
+
+
+def build_progress_digest_text(
+    settings: Any,
+    goal: dict[str, Any],
+    iterations: list[dict[str, Any]] | None = None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Build one short Simplified-Chinese progress digest for a running time-boxed goal."""
+    now_dt = now or _now()
+    iters = iterations if iterations is not None else _resolve_report_iterations(settings, goal)
+    completed = [it for it in iters if _iteration_completed(it)]
+    rounds_total = len(completed)
+    rounds_passed = sum(
+        1 for it in completed
+        if bool(it.get("passed")) or it.get("decision") == DECISION_ACHIEVED
+    )
+
+    repo_name = _resolve_repo_name(settings, goal)
+    start_dt = _parse_utc(goal.get("created_at"))
+    if start_dt is None:
+        elapsed_phrase = "已经不到 1 分钟"
+    else:
+        hm = _format_zh_hm(max(0, int((now_dt - start_dt).total_seconds())))
+        elapsed_phrase = "已经不到 1 分钟" if hm == "不到 1 分钟" else f"已经 {hm}"
+
+    parts = [elapsed_phrase, f"跑了 {rounds_total} 轮、通过 {rounds_passed} 轮"]
+    deadline_dt = _parse_utc(goal.get("deadline_at"))
+    if deadline_dt is not None:
+        parts.append(_format_digest_remaining_zh(deadline_dt, now_dt))
+
+    head = f"{repo_name} 还在跑：{'，'.join(parts)}。"
+
+    last_three_failed = len(completed) >= 3 and all(
+        not (bool(it.get("passed")) or it.get("decision") == DECISION_ACHIEVED)
+        for it in completed[-3:]
+    )
+    if last_three_failed:
+        body = f"{head}最近 3 轮都没通过检查，正在继续修。"
+    else:
+        passed_titles = [
+            str(it.get("round_title") or "").strip()
+            for it in completed
+            if (bool(it.get("passed")) or it.get("decision") == DECISION_ACHIEVED)
+            and str(it.get("round_title") or "").strip()
+        ]
+        recent_titles = passed_titles[-DIGEST_RECENT_TITLES:]
+        if recent_titles:
+            body = f"{head}最近完成：{'、'.join(recent_titles)}。"
+        else:
+            body = head
+
+    usage_line = _digest_usage_line(settings, goal, completed)
+    if usage_line:
+        return f"{body}\n{usage_line}"
+    return body
+
+
+def _claim_progress_digest(
+    settings: Any,
+    goal_id: str,
+    *,
+    digest_at: str,
+    rounds: int,
+) -> bool:
+    if settings is None or not goal_id or rounds <= 0:
+        return False
+    conn = _connect(settings)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cur = conn.execute(
+            """UPDATE supervisor_goals
+               SET last_digest_at = ?, last_digest_rounds = ?
+               WHERE id = ?
+                 AND state = ?
+                 AND deadline_at IS NOT NULL
+                 AND TRIM(deadline_at) != ''
+                 AND COALESCE(last_digest_rounds, 0) < ?""",
+            (digest_at, int(rounds), goal_id, GOAL_RUNNING, int(rounds)),
+        )
+        claimed = cur.rowcount == 1
+        conn.commit()
+        return claimed
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        conn.close()
+
+
+def _maybe_post_progress_digest(
+    settings: Any,
+    goal: dict[str, Any],
+    iterations: list[dict[str, Any]],
+) -> bool:
+    """Post a short progress digest when a running time-boxed goal hits 3 rounds or 60 minutes."""
+    if settings is None or not isinstance(goal, dict):
+        return False
+    if not getattr(settings, "codex_memory_root", "") or not digests_enabled(settings):
+        return False
+    goal_id = str(goal.get("id") or "").strip()
+    if not goal_id or str(goal.get("state") or "") != GOAL_RUNNING:
+        return False
+    now_dt = _now()
+    deadline_dt = _parse_utc(goal.get("deadline_at"))
+    if deadline_dt is None or now_dt >= deadline_dt:
+        return False
+
+    completed = [it for it in iterations if _iteration_completed(it)]
+    completed_rounds = len(completed)
+    last_rounds = int(goal.get("last_digest_rounds") or 0)
+    if completed_rounds <= last_rounds:
+        return False
+
+    baseline_at = _parse_utc(goal.get("last_digest_at")) or _parse_utc(goal.get("created_at"))
+    elapsed_since_last = (now_dt - baseline_at).total_seconds() if baseline_at is not None else 0.0
+    if (completed_rounds - last_rounds) < DIGEST_EVERY_ROUNDS and elapsed_since_last < DIGEST_INTERVAL_SECONDS:
+        return False
+
+    digest_at = _format_utc(now_dt)
+    if not _claim_progress_digest(settings, goal_id, digest_at=digest_at, rounds=completed_rounds):
+        return False
+
+    text = build_progress_digest_text(settings, goal, completed, now=now_dt)
+    target_session_id = _report_target_session_id(goal)
+    try:
+        from conveyor.agents import chat_intents
+
+        chat_intents.post_goal_progress_digest(
+            settings,
+            session_id=target_session_id,
+            text=text,
+        )
+    except Exception:
+        log.warning("goal %s: failed to post progress digest", goal_id, exc_info=True)
+
+    notify_goal_digest(settings, goal, text, rounds=completed_rounds, digest_at=digest_at)
+    return True
+
+
 def _on_goal_terminal(settings: Any, goal: dict[str, Any]) -> None:
     """Post the finish report once to the origin (or default main) web-chat session."""
     if settings is None or not isinstance(goal, dict):
@@ -1863,7 +2095,7 @@ def _on_goal_terminal(settings: Any, goal: dict[str, Any]) -> None:
     state = str(goal.get("state") or "").strip()
     if not goal_id or state not in GOAL_TERMINAL_STATES:
         return
-    target_session_id = str(goal.get("origin_session_id") or "").strip() or _default_report_session_id()
+    target_session_id = _report_target_session_id(goal)
     if not _claim_finish_report(settings, goal_id, target_session_id):
         return
     try:
@@ -3156,6 +3388,7 @@ def _advance_to_next_iteration_or_stop(
         updates["last_next_prompt"] = next_prompt
     _update_goal(settings, goal_id, **updates)
     _start_iteration(server, settings, fresh_goal, next_n, prompt)
+    _maybe_post_progress_digest(settings, _get_goal_row(settings, goal_id), iterations)
 
 
 def _reapply_decision(

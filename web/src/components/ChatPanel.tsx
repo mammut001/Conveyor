@@ -270,7 +270,11 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const contentRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastScrollTopRef = useRef(0);
+  const lastClientHeightRef = useRef(0);
   const followStreamRef = useRef(true);
+  const adjustingLayoutRef = useRef(false);
+  const adjustingRafRef = useRef<number | null>(null);
+  const lastUserScrollAtRef = useRef(0);
   const sendingRef = useRef(false);
   const requestRef = useRef<AbortController | null>(null);
   const historyVersionRef = useRef(0);
@@ -416,6 +420,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const openConversation = useCallback((sid: string) => {
     historyVersionRef.current++;
     followStreamRef.current = true;
+    lastUserScrollAtRef.current = 0;
     failedSendRef.current = null;
     setShowLatest(false);
     setUnseen(false);
@@ -479,15 +484,35 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     };
   }, [active, sessionId, busy, token, mapHistoryMessages]);
 
-  const scrollToLatest = useCallback(() => {
-    const node = streamRef.current;
-    if (node) {
-      node.scrollTo({ top: node.scrollHeight, behavior: 'instant' });
-      lastScrollTopRef.current = node.scrollTop;
+  const scheduleClearAdjusting = useCallback(() => {
+    if (adjustingRafRef.current !== null) {
+      cancelAnimationFrame(adjustingRafRef.current);
+    }
+    adjustingRafRef.current = requestAnimationFrame(() => {
+      adjustingRafRef.current = null;
+      adjustingLayoutRef.current = false;
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (adjustingRafRef.current !== null) {
+      cancelAnimationFrame(adjustingRafRef.current);
+      adjustingRafRef.current = null;
     }
   }, []);
 
-  useEffect(() => {
+  const scrollToLatest = useCallback(() => {
+    const node = streamRef.current;
+    if (node) {
+      adjustingLayoutRef.current = true;
+      node.scrollTo({ top: node.scrollHeight, behavior: 'instant' });
+      lastScrollTopRef.current = node.scrollTop;
+      lastClientHeightRef.current = node.clientHeight;
+      scheduleClearAdjusting();
+    }
+  }, [scheduleClearAdjusting]);
+
+  useLayoutEffect(() => {
     if (active && followStreamRef.current) scrollToLatest();
   }, [active, messages, streamingDelta, statusText, subagents, error, scrollToLatest]);
 
@@ -516,6 +541,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     // message list's scroll position; put the reader back where they were.
     const stream = streamRef.current;
     const previousTop = stream?.scrollTop ?? 0;
+    lastUserScrollAtRef.current = 0;
+    adjustingLayoutRef.current = true;
     node.style.height = 'auto';
     const max = parseFloat(getComputedStyle(node).maxHeight) || 200;
     node.style.height = `${Math.min(node.scrollHeight, max)}px`;
@@ -523,16 +550,22 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     if (stream) {
       stream.scrollTo({ top: followStreamRef.current ? stream.scrollHeight : previousTop, behavior: 'instant' });
       lastScrollTopRef.current = stream.scrollTop;
+      lastClientHeightRef.current = stream.clientHeight;
     }
-  }, []);
+    scheduleClearAdjusting();
+  }, [scheduleClearAdjusting]);
   useLayoutEffect(() => { resizeComposer(); }, [input, active, resizeComposer]);
   useEffect(() => {
     window.addEventListener('resize', resizeComposer);
     return () => window.removeEventListener('resize', resizeComposer);
   }, [resizeComposer]);
+  useEffect(() => {
+    if (streamRef.current) lastClientHeightRef.current = streamRef.current.clientHeight;
+  }, []);
 
   const jumpToLatest = () => {
     followStreamRef.current = true;
+    lastUserScrollAtRef.current = 0;
     setShowLatest(false);
     setUnseen(false);
     scrollToLatest();
@@ -541,6 +574,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const handleNewChat = () => {
     historyVersionRef.current++;
     followStreamRef.current = true;
+    lastUserScrollAtRef.current = 0;
     failedSendRef.current = null;
     setShowLatest(false);
     setUnseen(false);
@@ -622,6 +656,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     sendingRef.current = true;
     historyVersionRef.current++;
     followStreamRef.current = true;
+    lastUserScrollAtRef.current = 0;
     failedSendRef.current = null;
     setShowLatest(false);
     setUnseen(false);
@@ -968,11 +1003,44 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div className="chat-stream-wrap" style={{ position: 'relative', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <div className="event-stream" ref={streamRef} style={{ flex: 1, overflowY: 'auto' }}
+        onWheel={e => {
+          if (e.deltaY < 0) lastUserScrollAtRef.current = performance.now();
+        }}
+        onTouchMove={() => {
+          lastUserScrollAtRef.current = performance.now();
+        }}
+        onKeyDown={e => {
+          if (e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Home' || (e.key === ' ' && e.shiftKey)) {
+            lastUserScrollAtRef.current = performance.now();
+          }
+        }}
+        onPointerDown={e => {
+          if (e.target === e.currentTarget) lastUserScrollAtRef.current = performance.now();
+        }}
         onScroll={e => {
           const node = e.currentTarget;
+          const isSyntheticScroll = !e.nativeEvent.isTrusted;
+          const recentUserInput = performance.now() - lastUserScrollAtRef.current < 250;
+          const resized = node.clientHeight !== lastClientHeightRef.current;
+          const scrollDecreased = node.scrollTop < lastScrollTopRef.current;
+
+          // Ignore layout/resize-induced scroll clamping unless a real user scroll or explicit synthetic scroll occurred.
+          if (adjustingLayoutRef.current && !recentUserInput && !isSyntheticScroll) {
+            lastScrollTopRef.current = node.scrollTop;
+            lastClientHeightRef.current = node.clientHeight;
+            return;
+          }
+
+          lastClientHeightRef.current = node.clientHeight;
           const nearBottom = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-          if (nearBottom) followStreamRef.current = true;
-          else if (node.scrollTop < lastScrollTopRef.current) followStreamRef.current = false;
+          if (nearBottom) {
+            followStreamRef.current = true;
+          } else if (
+            scrollDecreased
+            && (recentUserInput || isSyntheticScroll || (!adjustingLayoutRef.current && !resized))
+          ) {
+            followStreamRef.current = false;
+          }
           lastScrollTopRef.current = node.scrollTop;
           setShowLatest(!followStreamRef.current);
           if (followStreamRef.current) setUnseen(false);
