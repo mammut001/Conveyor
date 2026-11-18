@@ -339,6 +339,43 @@ class PiBackendGuardTests(unittest.TestCase):
             self.assertFalse(any(dump_data["shims"].values()), dump_data["shims"])
             self.assertEqual(child_env["PATH"].split(os.pathsep)[0], "/usr/bin")
 
+    def test_non_confirmed_job_without_path_keeps_the_system_default_behind_the_guard(self) -> None:
+        """A missing PATH must not shrink the child PATH to the guard dir alone.
+
+        Before the guard, a child with no PATH resolved commands through the
+        system default (``os.defpath``). Prepending the guard dir on top of a
+        missing PATH would leave it as the only entry, so `env python3` stopped
+        resolving; the default entries have to survive behind it.
+        """
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            settings = _make_settings(tmp)
+            dump = tmp / "env-nopath.json"
+            fake_pi = _write_fake_pi(tmp, "fake-pi-nopath", dump)
+            no_path_env = _base_env()
+            del no_path_env["PATH"]
+            with patch.dict(os.environ, no_path_env, clear=True):
+                backend = PiBackend(settings)
+                backend.pi_bin = str(fake_pi)
+                job = self._job(settings, tmp)
+                _run_pi(backend, job)
+            self.assertEqual(job.return_code, 0, job.error)
+
+            dump_data = json.loads(dump.read_text(encoding="utf-8"))
+            child_env = dump_data["env"]
+            guard_dir = Path(dump_data["first_path"])
+            entries = child_env["PATH"].split(os.pathsep)
+            # The guard dir is still first, so the shims win...
+            self.assertEqual(entries[0], str(guard_dir))
+            for shim in ("rm", "rmdir", "unlink", "shred"):
+                self.assertTrue(dump_data["shims"][shim], shim)
+            # ...and the system default PATH entries survive behind it, so
+            # plain commands (`env python3`) still resolve.
+            for entry in os.defpath.split(os.pathsep):
+                if entry:
+                    self.assertIn(entry, entries)
+            self.assertFalse(guard_dir.exists())
+
     def test_question_only_prompt_tells_the_agent_to_only_read(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             backend = PiBackend(_make_settings(Path(raw)))

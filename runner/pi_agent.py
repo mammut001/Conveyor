@@ -1109,7 +1109,12 @@ class PiBackend(CodexRunner):
                 job.error = f"无法创建删除防护目录（{exc}），已停止，避免在无防护的情况下执行。"
                 job.return_code = 1
                 return
-            prepend_guard_to_path(env, guard_dir)
+            # A missing PATH would otherwise leave the guard dir as the only
+            # entry, so plain commands (`env python3`) stopped resolving.
+            # Fall back to the system default, the same resolution a missing
+            # PATH had before the guard was prepended.
+            base = env.get("PATH") or os.defpath
+            env["PATH"] = str(guard_dir) + os.pathsep + base
 
         try:
             await self._run_pi_attempt(job, command, env, selection, on_progress)
