@@ -17,6 +17,16 @@ class TestReadingGuide(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp_dir)
 
+    def test_no_outline_header_without_large_python_files(self):
+        with open(os.path.join(self.repo_dir, "small.py"), "w") as f:
+            f.write("def tiny():\n    return 1\n")
+        with open(os.path.join(self.repo_dir, "big.txt"), "wb") as f:
+            f.write(b"x" * 30 * 1024)
+        subprocess.run(["git", "add", "."], cwd=self.repo_dir, check=True)
+        guide = build_reading_guide(self.repo_dir, role="analyst")
+        self.assertIn("big.txt", guide)
+        self.assertNotIn("Outline", guide)
+
     def test_guide_features(self):
         # Create a large file (25KB) and a small file (1KB)
         large_file = os.path.join(self.repo_dir, "large.txt")
@@ -79,6 +89,71 @@ class TestReadingGuide(unittest.TestCase):
             self.assertNotIn("Repository files (tracked, size):", prompt_no_guide)
         finally:
             del os.environ["CONVEYOR_READING_GUIDE"]
+
+    def test_python_outline(self):
+        # Create a large Python file
+        large_py = os.path.join(self.repo_dir, "large.py")
+        with open(large_py, "w") as f:
+            f.write("a" * 21 * 1024 + "\n") # Line 1
+            f.write("class MyClass:\n")     # Line 2
+            f.write("    def method1(self):\n") # Line 3
+            f.write("        pass\n")           # Line 4
+            f.write("    def method2(self):\n") # Line 5
+            f.write("        pass\n")           # Line 6
+            f.write("    def method3(self):\n") # Line 7
+            f.write("        pass\n")           # Line 8
+            f.write("\n")                       # Line 9
+            f.write("def my_func():\n")         # Line 10
+            f.write("    pass\n")               # Line 11
+        subprocess.run(["git", "add", "."], cwd=self.repo_dir, check=True)
+        
+        guide = build_reading_guide(self.repo_dir, role="analyst")
+        
+        self.assertIn("large.py outline:", guide)
+        self.assertIn("L2 class MyClass", guide)
+        self.assertIn("L3 method1", guide)
+        self.assertIn("L5 method2", guide)
+        self.assertIn("L7 method3", guide)
+        self.assertIn("L10 def my_func", guide)
+        
+        # New reading rule
+        self.assertIn("- Use the outline line numbers with read offset/limit instead of paging through a file.", guide)
+
+    def test_non_python_large_file(self):
+        large_txt = os.path.join(self.repo_dir, "large.txt")
+        with open(large_txt, "wb") as f:
+            f.write(b"a" * 21 * 1024)
+        subprocess.run(["git", "add", "."], cwd=self.repo_dir, check=True)
+        
+        guide = build_reading_guide(self.repo_dir, role="analyst")
+        self.assertIn("large.txt  21 KB LARGE", guide)
+        self.assertNotIn("large.txt outline:", guide)
+
+    def test_syntax_error_python(self):
+        large_py = os.path.join(self.repo_dir, "broken.py")
+        with open(large_py, "w") as f:
+            f.write("a" * 21 * 1024 + "\n")
+            f.write("class MyClass:") # Incomplete
+        subprocess.run(["git", "add", "."], cwd=self.repo_dir, check=True)
+        
+        guide = build_reading_guide(self.repo_dir, role="analyst")
+        self.assertIn("broken.py  21 KB LARGE", guide)
+        # Guide should still be returned, no outline for this file
+        self.assertNotIn("broken.py outline:", guide)
+        self.assertIn("Reading rules:", guide)
+
+    def test_per_file_cap(self):
+        large_py = os.path.join(self.repo_dir, "large.py")
+        with open(large_py, "w") as f:
+            f.write("a" * 21 * 1024 + "\n")
+            # Create more than 250 entries
+            for i in range(300):
+                f.write(f"def func{i}(): pass\n")
+        subprocess.run(["git", "add", "."], cwd=self.repo_dir, check=True)
+        
+        guide = build_reading_guide(self.repo_dir, role="analyst")
+        self.assertIn("large.py outline:", guide)
+        self.assertIn("… (outline truncated; grep for more)", guide)
 
 if __name__ == "__main__":
     unittest.main()
