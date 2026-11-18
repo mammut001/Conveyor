@@ -3278,6 +3278,13 @@ def recover_on_startup(settings: Any, *, owner_alive: Any = None) -> list[dict[s
       ``implementing``, ``reviewing``, or ``repair_pending`` to ``interrupted``.
     """
     recovered: list[dict[str, Any]] = []
+    try:
+        from conveyor.agents import supervisor_service as svc
+        removed = svc.clear_stale_project_create_markers(settings)
+        if removed > 0:
+            log.info("removed %d stale project-create marker(s)", removed)
+    except Exception:
+        log.debug("stale project marker cleanup failed", exc_info=True)
     running_rows = [
         r for r in list_executions(settings, limit=500)
         if r.get("status") in ("spawning", "running")
