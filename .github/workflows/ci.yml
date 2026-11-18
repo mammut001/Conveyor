@@ -37,6 +37,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v5
 
+      # The runner (uid ci) owns the checkout but the container runs as root;
+      # without this git refuses the repo ("dubious ownership").
+      - name: Trust the checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Create isolated test directories
         run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
 
