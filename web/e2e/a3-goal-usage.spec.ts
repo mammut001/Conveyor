@@ -218,8 +218,7 @@ test('goal card shows 已用约 X token plus the partial-reporting note', async 
 
   const card = page.getByRole('region', { name: '目标进度' })
   // 30000 + 4000 = 34000 → 万 with one decimal; 9000 cached is already inside input.
-  await expect(card).toContainText('已用约 3.4 万 token')
-  await expect(card).toContainText('（部分执行者没有报告用量）')
+  await expect(card).toContainText('已用约 3.4 万 token（约 26% 命中缓存；部分执行者没有报告用量）')
   // 10 万以上 only whole 万, and never raw backend codes.
   const cardText = await card.innerText()
   expect(cardText.toLowerCase()).not.toContain('input_tokens')
@@ -297,8 +296,7 @@ test('goal card notes pre-recording rounds next to a real token amount', async (
   await page.getByRole('tab', { name: '目标' }).click()
 
   const card = page.getByRole('region', { name: '目标进度' })
-  await expect(card).toContainText('已用约 3.4 万 token')
-  await expect(card).toContainText('（更早的轮次还没开始记录用量）')
+  await expect(card).toContainText('已用约 3.4 万 token（更早的轮次还没开始记录用量）')
   // 真的没报告用量的执行者才有那条备注，这里没有。
   await expect(card).not.toContainText('（部分执行者没有报告用量）')
   const cardText = await card.innerText()

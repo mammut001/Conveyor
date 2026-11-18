@@ -3023,16 +3023,18 @@ def usage_summary_phrase(usage: Any) -> str:
         return ""
     total = usage_total_tokens(usage)
     phrase = f"用了{format_tokens(total)}"
+    notes = []
     cached = int(usage.get("cached_input_tokens") or 0)
     if cached > 0 and total > 0:
         pct = round(100 * cached / total)
         if pct > 0:
-            phrase += f"（其中约 {pct}% 命中缓存）"
-
+            notes.append(f"约 {pct}% 命中缓存")
     if without_usage > 0:
-        phrase += "（部分执行者没有报告用量）"
+        notes.append("部分执行者没有报告用量")
     elif before_recording > 0:
-        phrase += "（更早的轮次还没开始记录用量）"
+        notes.append("更早的轮次还没开始记录用量")
+    if notes:
+        phrase += f"（{'；'.join(notes)}）"
     return phrase
 
 
