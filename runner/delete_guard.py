@@ -205,6 +205,7 @@ def prepend_guard_to_path(env: dict[str, str], guard_dir: Path) -> str:
     which would silently widen the child's command search path.
     """
     entries = [str(guard_dir)]
-    entries += [entry for entry in str(env.get("PATH", "")).split(os.pathsep) if entry]
+    base = env.get("PATH") or os.defpath
+    entries += [entry for entry in base.split(os.pathsep) if entry]
     env["PATH"] = os.pathsep.join(entries)
     return env["PATH"]
