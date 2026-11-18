@@ -19,8 +19,6 @@ type Pane = 'chat' | 'inbox' | 'tasks'
 type SecondaryView = Exclude<Pane, 'chat'>
 type Props = ChatPanelProps & {
   agent: Agent
-  agents?: Agent[]
-  onSelectAgent?: (agent: Agent) => void
 }
 
 // Agent-to-agent messages and delegated tasks are secondary views of the conversation.
@@ -30,7 +28,7 @@ const STATUS_LABELS: Record<string, string> = {
 }
 const KIND_LABELS: Record<string, string> = { message: '消息', task_request: '任务请求', task_result: '任务结果' }
 
-export function AgentWorkspace({ agent, agents, onSelectAgent, token, ...chatProps }: Props) {
+export function AgentWorkspace({ agent, token, ...chatProps }: Props) {
   const [features, setFeatures] = useState<Features | null>(null)
   const [pane, setPane] = useState<Pane>('chat')
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -62,14 +60,15 @@ export function AgentWorkspace({ agent, agents, onSelectAgent, token, ...chatPro
   const views = (['inbox', 'tasks'] as const).filter(view => features?.enabled && features[view])
   // Phones: the conversation title gets the row; the two record views fold into a "⋯" menu.
   const compactBar = useMediaQuery('(max-width: 480px)')
-  const narrowRail = useMediaQuery('(max-width: 820px)')
-  const veryNarrow = useMediaQuery('(max-width: 340px)')
+  // ≤820px is the phone layout: sessions and agents are switched with the pickers in the bar
+  // above (and the 助手 drawer), so the vertical rail is desktop-only there.
+  const phoneLayout = useMediaQuery('(max-width: 820px)')
   const toggleView = (view: SecondaryView) => setPane(current => current === view ? 'chat' : view)
 
   const chat = conversationReady && <ChatPanel key={`${agent.id}:${conversation}`} {...chatProps} token={token}
     agentSessionId={conversation} agentName={agent.name} agentColor={agent.color} onBusyChange={setChatBusy}
     active={chatProps.active !== false && pane === 'chat'} />
-  const showTopicRail = !veryNarrow && (narrowRail || conversations.length > 1)
+  const showTopicRail = !phoneLayout && conversations.length > 1
 
   return (
     <section className="agent-screen" aria-label={`和 ${agent.name} 的对话`}>
@@ -92,12 +91,10 @@ export function AgentWorkspace({ agent, agents, onSelectAgent, token, ...chatPro
         {showTopicRail && (
           <ChatTopicRail
             agent={agent}
-            agents={narrowRail ? agents : undefined}
             conversations={conversations}
             selectedConversation={conversation}
             busy={chatBusy}
             onSelectConversation={chooseConversation}
-            onSelectAgent={onSelectAgent}
           />
         )}
         <div className="chat-main-column" style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
@@ -110,42 +107,39 @@ export function AgentWorkspace({ agent, agents, onSelectAgent, token, ...chatPro
   )
 }
 
-/** Telegram-style vertical topic & agent rail on the left edge of the chat stream. */
+/** Telegram-style vertical topic rail on the left edge of the chat stream (desktop only). */
 function ChatTopicRail({
   agent,
-  agents,
   conversations,
   selectedConversation,
   busy,
   onSelectConversation,
-  onSelectAgent,
 }: {
   agent: Agent
-  agents?: Agent[]
   conversations: Conversation[]
   selectedConversation: string
   busy: boolean
   onSelectConversation: (session: string) => void
-  onSelectAgent?: (agent: Agent) => void
 }) {
+  // Collapsed by default: it repeats the 当前会话 picker above, so it starts as a bare icon
+  // and the message column keeps its width. The choice is remembered per browser.
   const [collapsed, setCollapsed] = useState(() => {
-    try { return sessionStorage.getItem('conveyor-topic-rail-collapsed') === '1' }
-    catch { return false }
+    try { return localStorage.getItem('conveyor-topic-rail-collapsed') !== '0' }
+    catch { return true }
   })
   const toggleRail = () => {
     setCollapsed(prev => {
       const next = !prev
-      try { sessionStorage.setItem('conveyor-topic-rail-collapsed', next ? '1' : '0') } catch { /* ignore */ }
+      try { localStorage.setItem('conveyor-topic-rail-collapsed', next ? '1' : '0') } catch { /* storage unavailable */ }
       return next
     })
   }
   const topicItems = conversations.length > 0
     ? conversations.slice(0, 5)
     : [{ id: agent.id, title: '主会话', origin_channel: 'web', session_id: agent.session_id }]
-  const agentList = agents && agents.length > 1 ? agents.slice(0, 6) : []
 
   return (
-    <nav className={`chat-topic-rail ${collapsed ? 'is-collapsed' : ''}`} aria-label="话题与助手栏">
+    <nav className={`chat-topic-rail ${collapsed ? 'is-collapsed' : ''}`} aria-label="话题栏">
       <button
         type="button"
         className="chat-rail-toggle"
@@ -187,30 +181,6 @@ function ChatTopicRail({
                   {row.origin_channel === 'feishu' && <i className="chat-rail-badge">飞</i>}
                 </span>
                 <span className="chat-rail-label">{shortTitle}</span>
-              </button>
-            )
-          })}
-          {agentList.length > 0 && <span className="chat-rail-divider" aria-hidden="true" />}
-          {agentList.map(item => {
-            const isSelected = item.id === agent.id
-            const initial = (item.name.trim()[0] || 'C').toUpperCase()
-            return (
-              <button
-                key={item.id}
-                type="button"
-                className={`chat-rail-item chat-rail-agent ${isSelected ? 'is-active' : ''}`}
-                aria-label={`${item.name}（直达）`}
-                aria-pressed={isSelected}
-                title={item.name}
-                onClick={() => { if (!isSelected) onSelectAgent?.(item) }}
-              >
-                <span className="chat-rail-avatar" style={{ background: item.color || '#bd5c40' }} aria-hidden="true">
-                  {initial}
-                  {item.status && item.status !== 'idle' && (
-                    <i className={`chat-rail-dot is-${item.status}`} />
-                  )}
-                </span>
-                <span className="chat-rail-label">{item.name}</span>
               </button>
             )
           })}
