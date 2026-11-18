@@ -25,7 +25,8 @@ jobs:
       # --init reaps killed children; without it zombies look "alive" to the
       # process-group lifecycle tests.
       options: --init
-    timeout-minutes: 15
+    # Two full unit-test passes plus smokes take ~16 min on greencloud.
+    timeout-minutes: 30
     env:
       TELEGRAM_BOT_TOKEN: test-token
       TELEGRAM_ALLOWED_USER_ID: "12345"
