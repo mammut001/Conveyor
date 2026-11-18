@@ -735,7 +735,10 @@ class TestApprovalRelayEndToEndHandoff(unittest.TestCase):
 class TestApprovalRelayFakeBotScript(unittest.TestCase):
     def setUp(self):
         clear_all_pending()
-        self.tmp = tempfile.TemporaryDirectory()
+        # SQLite can still be writing its journal next to the db while the
+        # directory is removed (seen on the greencloud runner): don't fail the
+        # test on that cleanup race.
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.tmpdir = Path(self.tmp.name)
         (self.tmpdir / "memory").mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.tmpdir / "fake_bot_relay.db")
