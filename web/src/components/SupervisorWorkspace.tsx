@@ -2206,6 +2206,13 @@ export function SupervisorWorkspace({
   const savedContext = useMemo(() => loadSavedContext(), [])
   const [selectedRepoId, setSelectedRepoId] = useState(savedContext.repoId)
   const [selectedWorktreeId, setSelectedWorktreeId] = useState(savedContext.worktreeId)
+
+  const userPickedContextRef = useRef(false)
+  const selectedWorktreeIdRef = useRef(selectedWorktreeId)
+  useEffect(() => {
+    selectedWorktreeIdRef.current = selectedWorktreeId
+  }, [selectedWorktreeId])
+
   const [expandedRepos, setExpandedRepos] = useState<Record<string, boolean>>({})
   const [searchQuery, setSearchQuery] = useState('')
   const [subTab, setSubTab] = useState<'goals' | 'workspace' | 'chat' | 'deploy'>('workspace')
@@ -2349,6 +2356,7 @@ export function SupervisorWorkspace({
   }, [apiCall])
 
   const loadBootstrap = useCallback(async () => {
+    userPickedContextRef.current = false
     if (!token) return
     const [capRes, repoRes] = await Promise.allSettled([
       apiCall<SupervisorCapabilities>('/api/supervisor/capabilities'),
@@ -2373,14 +2381,16 @@ export function SupervisorWorkspace({
       const activity = savedRepo && savedWorktree
         ? undefined
         : await loadActivitySnapshot(activeRepos)
-      setSelectedRepoId(prevRepoId => {
-        const next = reconcileSelection(activeRepos, prevRepoId, selectedWorktreeId, activity)
-        if (next.worktreeId !== selectedWorktreeId) {
-          setSelectedWorktreeId(next.worktreeId)
-        }
-        saveContext(next.repoId, next.worktreeId)
-        return next.repoId
-      })
+      if (!userPickedContextRef.current) {
+        setSelectedRepoId(prevRepoId => {
+          const next = reconcileSelection(activeRepos, prevRepoId, selectedWorktreeIdRef.current, activity)
+          if (next.worktreeId !== selectedWorktreeIdRef.current) {
+            setSelectedWorktreeId(next.worktreeId)
+          }
+          saveContext(next.repoId, next.worktreeId)
+          return next.repoId
+        })
+      }
     } else {
       setReposError(repoRes.reason instanceof Error ? repoRes.reason.message : '无法读取仓库列表')
     }
@@ -2533,6 +2543,7 @@ export function SupervisorWorkspace({
   }, [active, loadContextData, selectedRepo, selectedWorktree])
 
   const selectWorktreeContext = useCallback((repoId: string, worktreeId: string) => {
+    userPickedContextRef.current = true
     contextGenRef.current += 1
     contextAbortRef.current?.abort()
     setDispatchError('')

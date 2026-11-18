@@ -361,6 +361,7 @@ test('read-only main shows one card instead of the unusable dispatch form', asyn
   await installFixture(page)
   await page.goto('/#code')
 
+  await expect(page.locator('.sup-worktree-item').filter({ hasText: 'main' }).first()).toBeVisible()
   await page.locator('.sup-worktree-item').filter({ hasText: 'main' }).first().click()
   await expect(page.getByRole('heading', { name: 'Conveyor / main' })).toBeVisible()
 
@@ -486,3 +487,26 @@ test('a locked worktree with a running task and no active goal shows the 已锁�
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
   await expect(page.getByText('当前工作目录已锁定（有任务正在执行）')).toBeVisible()
 })
+
+test('race condition: explicit selection is not overridden by bootstrap', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installFixture(page)
+
+  // Delay the response for /api/supervisor/goals to simulate slow load
+  await page.route('**/api/supervisor/goals', async (route) => {
+    await new Promise(r => setTimeout(r, 800))
+    await route.continue()
+  })
+
+  await page.goto('/#code')
+
+  // Click the Conveyor main worktree before it resolves
+  await page.locator('.sup-worktree-item').filter({ hasText: 'main' }).first().click()
+
+  // Wait for the response to resolve (800ms) plus buffer
+  await page.waitForTimeout(1500)
+
+  // Assert 'Conveyor / main' stays visible
+  await expect(page.getByRole('heading', { name: 'Conveyor / main' })).toBeVisible()
+})
+
