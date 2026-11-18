@@ -4314,6 +4314,18 @@ class PiExecutor:
         self.settings = settings
         from runner.pi_agent import resolve_pi_bin
         self.binary = resolve_pi_bin(settings)
+        # No per-run mutable state here: one PiExecutor may serve several
+        # concurrent runs, so the thinking level is passed per call to _argv.
+
+    def get_thinking_level(self, role: RoleConfig) -> str:
+        role_name = role.name.upper()
+        env_var = f"CONVEYOR_PI_THINKING_{role_name}"
+        level = os.getenv(env_var)
+        if level in ("off", "minimal", "low", "medium", "high", "xhigh", "max"):
+            return level
+        if role_name == "IMPLEMENTER":
+            return "medium"
+        return "low"
 
     def available(self) -> tuple[bool, str]:
         if not _executable_exists(self.binary):
@@ -4327,7 +4339,8 @@ class PiExecutor:
             return False, status["hint"] or "Pi 提供商配置不完整。此检查没有验证远程登录。"
         return True, "ok"
 
-    def _argv(self, role: RoleConfig, _cwd: str | None = None) -> list[str]:
+    def _argv(self, role: RoleConfig, _cwd: str | None = None, *,
+              thinking: str | None = None) -> list[str]:
         ok_pol, reason_pol = _validate_role_policy(role)
         if not ok_pol:
             raise SupervisorStateError(reason_pol)
@@ -4337,6 +4350,7 @@ class PiExecutor:
         selection = resolve_pi_provider(self.settings, model_fallback="", chat_model=False)
         # Write the same config _apply_pi_child_env will point at. No secret on argv.
         _apply_pi_child_env({}, self.settings, selection)
+        thinking = thinking or self.get_thinking_level(role)
         cmd = [
             self.binary,
             "-p",
@@ -4350,6 +4364,7 @@ class PiExecutor:
             "--no-context-files",
             "--offline",
             "--no-approve",
+            "--thinking", thinking,
         ]
         # pi requires --model whenever --provider is given, so pass both or
         # neither. With no model configured, omit both and let Pi pick its own
@@ -4362,12 +4377,31 @@ class PiExecutor:
     async def run(self, *, role: RoleConfig, prompt: str, worktree_path: str,
                   timeout_seconds: int, task_id: str = "",
                   context: ExecutionContext | None = None) -> ExecutionResult:
-        return await _spawn_cli(
+        def _argv_with(level: str) -> Any:
+            # Per-call builder: the thinking level lives in this closure, not
+            # on the shared instance, so concurrent runs never see each other's.
+            return lambda r, cwd: self._argv(r, cwd, thinking=level)
+
+        result = await _spawn_cli(
             self.settings, role=role, prompt=prompt,
             worktree_path=worktree_path, timeout_seconds=timeout_seconds,
-            argv_builder=self._argv, executors="pi",
+            argv_builder=_argv_with(self.get_thinking_level(role)), executors="pi",
             parser=_parse_pi_stream, task_id=task_id, context=context,
             stdout_line_filter=_pi_stdout_line_filter)
+
+        meta = result.evidence.get("meta", {})
+        if not result.success and meta.get("stop_reason") == "length":
+            new_prompt = prompt + "\n\nKeep the answer short: at most 400 words, no long code listings unless required."
+            result = await _spawn_cli(
+                self.settings, role=role, prompt=new_prompt,
+                worktree_path=worktree_path, timeout_seconds=timeout_seconds,
+                argv_builder=_argv_with("minimal"), executors="pi",
+                parser=_parse_pi_stream, task_id=task_id, context=context,
+                stdout_line_filter=_pi_stdout_line_filter)
+            if not result.success:
+                result.error = "模型两次都因为回答太长被截断，这一轮没做成。"
+
+        return result
 
     async def cancel(self, execution_id: str) -> bool:
         return cancel_execution(self.settings, execution_id)
@@ -4727,7 +4761,9 @@ def _parse_pi_stream(stdout: str) -> tuple[str, dict[str, Any]]:
     final_text = ""
     error_text = ""
     final_events = 0
+    final_events = 0
     usage_totals: dict[str, int] = {}
+    stop_reason: str | None = None
     for line in stdout.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -4748,14 +4784,20 @@ def _parse_pi_stream(stdout: str) -> tuple[str, dict[str, Any]]:
         if event.get("type") == "agent_end":
             final_events += 1
             # Only the last assistant message in the terminal event is final.
+            messages = event.get("messages") if isinstance(event.get("messages"), list) else []
+            if messages:
+                message = messages[-1]
+                if isinstance(message, dict):
+                    stop_reason = message.get("stopReason")
+
             # Intermediate message_end text can precede further tool calls.
             if parsed.result:
                 final_text = parsed.result
     if error_text:
-        return "", {"is_error": True, "subtype": "agent_error", "error": error_text}
+        return "", {"is_error": True, "subtype": "agent_error", "error": error_text, "stop_reason": stop_reason}
     if final_events != 1 or not final_text.strip():
-        return "", {"is_error": True, "subtype": "missing_result", "error": "missing unambiguous final pi result"}
-    meta: dict[str, Any] = {"is_error": False, "subtype": "success", "error": ""}
+        return "", {"is_error": True, "subtype": "missing_result", "error": "missing unambiguous final pi result", "stop_reason": stop_reason}
+    meta: dict[str, Any] = {"is_error": False, "subtype": "success", "error": "", "stop_reason": stop_reason}
     if usage_totals:
         meta["usage"] = usage_totals
     return final_text, meta

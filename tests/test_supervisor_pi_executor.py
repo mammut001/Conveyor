@@ -634,5 +634,122 @@ print(json.dumps({"type": "result", "result": "done", "is_error": False}))
         self.assertNotIn("raw", result.error)
 
 
+class PiRetryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="pi-retry-"))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.repo, self.wt, self.head = _make_repo_and_worktree(self.tmp)
+        self.settings = _make_settings(self.tmp)
+
+    def test_thinking_level_env_overrides(self) -> None:
+        # Analyst default is low.
+        with patch.dict(os.environ, _clean_env(), clear=True):
+            argv = PiExecutor(self.settings)._argv(ANALYST, "/tmp")
+            self.assertIn("--thinking", argv)
+            self.assertEqual(argv[argv.index("--thinking") + 1], "low")
+        
+        # Override
+        with patch.dict(os.environ, _clean_env(CONVEYOR_PI_THINKING_ANALYST="high"), clear=True):
+            argv = PiExecutor(self.settings)._argv(ANALYST, "/tmp")
+            self.assertEqual(argv[argv.index("--thinking") + 1], "high")
+
+    def test_length_retry_succeeds(self) -> None:
+        # First call length error, second call success.
+        fake_script = r'''#!__PY__
+import json, sys, os
+cwd = os.getcwd()
+with open(os.path.join(cwd, "calls.txt"), "a") as f:
+    f.write(" ".join(sys.argv) + "\n")
+stdin = sys.stdin.read()
+with open(os.path.join(cwd, "stdin.txt"), "a") as f:
+    f.write(stdin + "\n---END---\n")
+if not os.path.exists(os.path.join(cwd, "retry.marker")):
+    with open(os.path.join(cwd, "retry.marker"), "w") as f: f.write("1")
+    # First: error "length"
+    print(json.dumps({"type": "agent_end", "messages": [
+        {"role": "assistant", "stopReason": "length", "content": [{"type": "text", "text": "too long"}]}]}))
+else:
+    # Second: success
+    print(json.dumps({"type": "agent_end", "messages": [
+        {"role": "assistant", "stopReason": "stop", "content": [{"type": "text", "text": "just right"}]}]}))
+'''
+        fake_pi = _write_fake_pi(self.tmp / "fake-pi-retry", fake_script)
+        task = ags.create_task(self.settings, goal="retry", repo_path=str(self.repo),
+                               worktree_path=str(self.wt), base_sha=self.head)
+        
+        env = _clean_env(
+            CONVEYOR_PI_BIN=str(fake_pi),
+            CALLS_PATH=str(self.tmp / "calls.txt"),
+            STDIN_PATH=str(self.tmp / "stdin.txt"),
+            MARKER_PATH=str(self.tmp / "retry.marker")
+        )
+        with patch.dict(os.environ, env, clear=True):
+            ex = PiExecutor(self.settings)
+            result = asyncio.run(ex.run(
+                role=IMPLEMENTER, prompt="do something",
+                worktree_path=str(self.wt), timeout_seconds=30, task_id=task["id"]))
+        
+        self.assertTrue(result.success, result.error)
+        self.assertEqual(result.output, "just right")
+        
+        # Verify 2 calls
+        calls = (self.wt / "calls.txt").read_text().splitlines()
+        self.assertEqual(len(calls), 2)
+        # Verify 2nd call had minimal thinking and short prompt line
+        self.assertIn("--thinking minimal", calls[1])
+        
+        # Verify 2nd call prompt has extra line
+        stains = (self.wt / "stdin.txt").read_text().split("---END---\n")
+        self.assertIn("Keep the answer short", stains[1])
+
+    def test_concurrent_runs_keep_their_own_thinking_level(self) -> None:
+        # One shared PiExecutor, two concurrent runs: run A hits a length stop
+        # and retries with minimal thinking; run B is normal. B builds its argv
+        # while A's retry is in flight and must still get the role default.
+        argvs: dict[str, list[list[str]]] = {"A": [], "B": []}
+
+        async def scenario() -> tuple[ags.ExecutionResult, ags.ExecutionResult]:
+            a_retry_in_flight = asyncio.Event()
+            b_argv_built = asyncio.Event()
+
+            async def fake_spawn(settings, *, role, prompt, worktree_path,
+                                 timeout_seconds, argv_builder, **_kw):
+                run_id = "A" if prompt.startswith("run-a") else "B"
+                if run_id == "B":
+                    await a_retry_in_flight.wait()
+                argv = ags._build_argv_for_spawn(argv_builder, role, worktree_path)
+                argvs[run_id].append(argv)
+                if run_id == "B":
+                    b_argv_built.set()
+                    return ags.ExecutionResult(success=True, output="b ok")
+                if len(argvs["A"]) == 1:
+                    return ags.ExecutionResult(
+                        success=False, error="too long",
+                        evidence={"meta": {"stop_reason": "length"}})
+                a_retry_in_flight.set()
+                await b_argv_built.wait()
+                return ags.ExecutionResult(success=True, output="a ok")
+
+            ex = PiExecutor(self.settings)
+            with patch.object(ags, "_spawn_cli", fake_spawn):
+                return await asyncio.wait_for(asyncio.gather(
+                    ex.run(role=IMPLEMENTER, prompt="run-a", worktree_path=str(self.wt),
+                           timeout_seconds=30),
+                    ex.run(role=IMPLEMENTER, prompt="run-b", worktree_path=str(self.wt),
+                           timeout_seconds=30),
+                ), timeout=10)
+
+        def thinking(argv: list[str]) -> str:
+            return argv[argv.index("--thinking") + 1]
+
+        with patch.dict(os.environ, _clean_env(), clear=True):
+            res_a, res_b = asyncio.run(scenario())
+        self.assertTrue(res_a.success, res_a.error)
+        self.assertTrue(res_b.success, res_b.error)
+        self.assertEqual([thinking(a) for a in argvs["A"]], ["medium", "minimal"])
+        self.assertEqual([thinking(a) for a in argvs["B"]], ["medium"])
+        self.assertFalse(hasattr(PiExecutor(self.settings), "thinking_override"))
+
+
 if __name__ == "__main__":
     unittest.main()
