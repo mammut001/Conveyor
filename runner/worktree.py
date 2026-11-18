@@ -15,11 +15,29 @@ from runner.types import Job
 DAILY_WORKTREE_FORMAT = "%Y-%m-%d"
 DAILY_WORKTREE_PREFIX = "day-"
 MEMORY_FILENAME = "MEMORY.md"
+# Container directories that group other worktrees (e.g. the Supervisor keeps
+# every managed worktree in <task_root>/worktrees/supervisor/). They are never
+# orphans themselves: removing them would delete every worktree inside.
+RESERVED_WORKTREE_CHILDREN = frozenset({"supervisor"})
 
 
 def _job_worktree_path(self, job: Job) -> Path:
     safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", job.id)
     return self.settings.codex_task_root / "worktrees" / safe_id
+
+
+def _is_git_worktree_dir(path: Path) -> bool:
+    """True when *path* is itself a git worktree (linked or main checkout).
+
+    A linked worktree carries a ``.git`` *file*; a main checkout carries a
+    ``.git`` *directory*. Container directories (like the Supervisor's
+    ``supervisor/``) and stray folders never have one, so this reconciler
+    refuses to remove them.
+    """
+    try:
+        return (path / ".git").exists()
+    except OSError:
+        return False
 
 
 def _get_dir_size(path: Path) -> int:
@@ -514,6 +532,17 @@ async def reconcile_orphans(
 
     for child in sorted(worktrees_root.iterdir()):
         if not child.is_dir():
+            continue
+
+        # The Supervisor keeps every managed worktree in
+        # <task_root>/worktrees/supervisor/<name>. Removing that container would
+        # delete all of them at once, so it is never an orphan itself.
+        if child.name in RESERVED_WORKTREE_CHILDREN:
+            continue
+        # Only real git worktrees are removable. A container directory or a
+        # stray folder that lost its .git entry is not something this
+        # reconciler created, so it must not be deleted.
+        if not _is_git_worktree_dir(child):
             continue
 
         if re.match(r"^day-\d{4}-\d{2}-\d{2}$", child.name):

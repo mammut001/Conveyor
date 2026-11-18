@@ -171,18 +171,45 @@ class WorktreeCleanupTests(unittest.IsolatedAsyncioTestCase):
 
         orphan_dir = worktrees_dir / "orphan-job-123"
         orphan_dir.mkdir(parents=True, exist_ok=True)
+        self._make_git_worktree(orphan_dir)
         os.utime(orphan_dir, (old_time, old_time))
 
         young_dir = worktrees_dir / "young-job-456"
         young_dir.mkdir(parents=True, exist_ok=True)
         os.utime(young_dir, (now, now))
+        self._make_git_worktree(young_dir)
 
         daily_dir = worktrees_dir / "day-2026-01-01"
         daily_dir.mkdir(parents=True, exist_ok=True)
+        self._make_git_worktree(daily_dir)
         os.utime(daily_dir, (old_time, old_time))
+
+        # The Supervisor keeps all managed worktrees inside this container
+        # directory, so it must never be treated as a single orphan.
+        supervisor_container = worktrees_dir / "supervisor"
+        supervisor_container.mkdir(parents=True, exist_ok=True)
+        supervisor_wt = supervisor_container / "wt-abc"
+        supervisor_wt.mkdir(parents=True, exist_ok=True)
+        self._make_git_worktree(supervisor_wt)
+        os.utime(supervisor_wt, (old_time, old_time))
+        os.utime(supervisor_container, (old_time, old_time))
+        self.assertFalse((supervisor_container / ".git").exists())
+
+        # A stray old folder that is not a git worktree is never removed.
+        stray_dir = worktrees_dir / "stray-not-a-worktree"
+        stray_dir.mkdir(parents=True, exist_ok=True)
+        os.utime(stray_dir, (old_time, old_time))
+        self.assertFalse((stray_dir / ".git").exists())
+
+        # A stray old folder holding a non-git payload is never removed either.
+        stray_with_file = worktrees_dir / "stray-with-file"
+        stray_with_file.mkdir(parents=True, exist_ok=True)
+        (stray_with_file / "data.txt").write_text("x", encoding="utf-8")
+        os.utime(stray_with_file, (old_time, old_time))
 
         refinement_dir = (worktrees_dir / "active-refinement-wt").resolve()
         refinement_dir.mkdir(parents=True, exist_ok=True)
+        self._make_git_worktree(refinement_dir)
         os.utime(refinement_dir, (old_time, old_time))
         store = RefinementStore(self.settings)
         store.bind_new(
@@ -199,7 +226,7 @@ class WorktreeCleanupTests(unittest.IsolatedAsyncioTestCase):
         # completed job awaiting /apply or /discard) is not an orphan.
         referenced_dir = (worktrees_dir / "job-completed-789").resolve()
         referenced_dir.mkdir(parents=True, exist_ok=True)
-        os.utime(referenced_dir, (old_time, old_time))
+        self._make_git_worktree(referenced_dir)
         referenced_job = self._make_job("job-completed-789")
         referenced_job.state = JobState.COMPLETED
         referenced_job.worktree_path = referenced_dir
@@ -214,7 +241,20 @@ class WorktreeCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(str(young_dir), dry_result["orphans"])
         self.assertNotIn(str(daily_dir), dry_result["orphans"])
         self.assertNotIn(str(refinement_dir), dry_result["orphans"])
+        # (a) the supervisor container is never an orphan, even when it holds
+        # an expired worktree inside it.
+        self.assertNotIn(str(supervisor_container), dry_result["orphans"])
+        self.assertNotIn(str(supervisor_wt), dry_result["orphans"])
+        # (b) a directory without a .git entry is not a worktree: not an orphan.
+        self.assertNotIn(str(stray_dir), dry_result["orphans"])
+        self.assertNotIn(str(stray_with_file), dry_result["orphans"])
+        # (c) the orphan job worktree is still found (and removed below).
+        self.assertIn(str(orphan_dir), dry_result["orphans"])
         self.assertTrue(orphan_dir.exists())
+        self.assertTrue(supervisor_container.exists())
+        self.assertTrue(supervisor_wt.exists())
+        self.assertTrue(stray_dir.exists())
+        self.assertTrue(stray_with_file.exists())
 
         non_dry_result = await self.runner.reconcile_orphans(dry_run=False, ttl_seconds=24 * 3600)
         self.assertFalse(non_dry_result["dry_run"])
@@ -224,6 +264,21 @@ class WorktreeCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(daily_dir.exists())
         self.assertTrue(refinement_dir.exists())
         self.assertTrue(referenced_dir.exists())
+        self.assertTrue(supervisor_container.exists())
+        self.assertTrue(supervisor_wt.exists())
+        self.assertTrue(stray_dir.exists())
+        self.assertTrue(stray_with_file.exists())
+        self.assertEqual(non_dry_result["removed"], [str(orphan_dir)])
+
+    def _make_git_worktree(self, path: Path) -> None:
+        """Give *path* a ``.git`` entry so it models a real git worktree.
+
+        Linked worktrees carry a ``.git`` *file*; the main checkout carries a
+        ``.git`` *directory*. Both count as "is a worktree".
+        """
+        (path / ".git").write_text(
+            "gitdir: /tmp/nonexistent/.git/worktrees/x\n", encoding="utf-8"
+        )
 
     def test_validate_codex_bin(self) -> None:
         settings_ok = SimpleNamespace(codex_bin=sys.executable)
