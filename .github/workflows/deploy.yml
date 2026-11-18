@@ -24,7 +24,7 @@ jobs:
   deploy:
     # Safety hold: must not run from CI-success events until first migration.
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, greencloud]
     timeout-minutes: 25
 
     steps:
@@ -40,29 +40,19 @@ jobs:
             echo "ref=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check out validated revision
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ steps.revision.outputs.sha }}
-
-      - name: Install SSH key
-        uses: shimataro/ssh-key-action@v2
-        with:
-          key: ${{ secrets.VPS_SSH_KEY }}
-          known_hosts: unnecessary
-          if_key_exists: replace
-
-      # Pin the host key via a trusted, out-of-band fingerprint. ssh-keyscan
-      # alone verifies nothing about the identity of the server.
-      - name: Install pinned VPS SSH host key
+      # Self-hosted runner: keep the deploy key and pinned host key in a
+      # per-run temp dir (never in the runner user's ~/.ssh) and delete it after.
+      - name: Install SSH key and pinned VPS host key
         env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
           VPS_SSH_KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
         run: |
           test -n "${VPS_SSH_KNOWN_HOSTS}" || { echo "::error::VPS_SSH_KNOWN_HOSTS must be configured"; exit 1; }
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          printf '%s\n' "${VPS_SSH_KNOWN_HOSTS}" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          d="${RUNNER_TEMP}/deploy-ssh"
+          rm -rf "$d"; mkdir -m 700 "$d"
+          printf '%s\n' "${VPS_SSH_KEY}" > "$d/key"; chmod 600 "$d/key"
+          printf '%s\n' "${VPS_SSH_KNOWN_HOSTS}" > "$d/known_hosts"; chmod 600 "$d/known_hosts"
+          echo "SSH_OPTS=-i $d/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$d/known_hosts -o StrictHostKeyChecking=yes" >> "$GITHUB_ENV"
 
       - name: Deploy via SSH (git-based)
         env:
@@ -75,14 +65,18 @@ jobs:
           # The *old installed* deploy script is what runs during an automatic
           # upgrade. Explicitly reject legacy unfenced releases before doing
           # anything, otherwise a first auto-upgrade bypasses the new guard.
-          ssh -o StrictHostKeyChecking=yes -p ${{ secrets.VPS_PORT || 22 }} \
+          ssh ${SSH_OPTS} -p ${{ secrets.VPS_PORT || 22 }} \
               ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
               "test -f ${DEPLOY_PATH}/scripts/deploy_db.py && grep -Fq 'deploy_db freeze' ${DEPLOY_PATH}/scripts/deploy_vps.sh && grep -Fq 'deploy_fence' ${DEPLOY_PATH}/handlers/job_queue.py && grep -Fq 'elif command in (\"freeze\", \"thaw\"):' ${DEPLOY_PATH}/scripts/deploy_db.py" \
               || { echo "::error::Live VPS release lacks atomic fencing; perform controlled first migration"; exit 1; }
 
-          ssh -o StrictHostKeyChecking=yes -p ${{ secrets.VPS_PORT || 22 }} \
+          ssh ${SSH_OPTS} -p ${{ secrets.VPS_PORT || 22 }} \
               ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} \
               "GITHUB_SHA=${DEPLOY_SHA} GITHUB_REF_NAME=${DEPLOY_REF} GITHUB_RUN_ID=${GITHUB_RUN_ID} DEPLOY_SOURCE=${DEPLOY_SOURCE} CONVEYOR_DEPLOY_PATH=${DEPLOY_PATH} bash ${DEPLOY_PATH}/scripts/deploy_vps.sh"
+
+      - name: Remove SSH material
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/deploy-ssh"
 
       - name: Report failure
         if: failure()
