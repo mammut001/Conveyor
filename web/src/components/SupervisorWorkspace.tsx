@@ -3863,14 +3863,24 @@ export function SupervisorWorkspace({
                   )}
 
                   {selectedTask.error && (
-                    <div className="sup-banner sup-banner--error" role="alert">
-                      <strong>受阻原因</strong>
-                      <span>{supFriendlyTaskError(selectedTask.error)}</span>
-                      <details className="sup-task-raw-error">
-                        <summary>技术详情</summary>
-                        <pre>{selectedTask.error}</pre>
-                      </details>
-                    </div>
+                    selectedTask.state === 'cancelled' ? (
+                      <div className="sup-banner sup-banner--info" role="status">
+                        <span>这一轮被停止了，已经做好的改动保留在工作目录里。</span>
+                        <details className="sup-task-raw-error">
+                          <summary>技术详情</summary>
+                          <pre>{selectedTask.error}</pre>
+                        </details>
+                      </div>
+                    ) : (
+                      <div className="sup-banner sup-banner--error" role="alert">
+                        <strong>受阻原因</strong>
+                        <span>{supFriendlyTaskError(selectedTask.error)}</span>
+                        <details className="sup-task-raw-error">
+                          <summary>技术详情</summary>
+                          <pre>{selectedTask.error}</pre>
+                        </details>
+                      </div>
+                    )
                   )}
 
                   {(selectedTask.state === 'failed' || selectedTask.state === 'error') && (
