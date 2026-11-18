@@ -30,6 +30,7 @@ MAX_DETAIL_CHARS = 600
 CHECK_TERMINATE_GRACE_SECONDS = 2.0
 
 KIND_OK = "ok"
+KIND_REAL_RUN = "real_run"
 KIND_AUTH = "auth"
 KIND_QUOTA = "quota"
 KIND_MODEL_MISSING = "model_missing"
@@ -136,6 +137,8 @@ def _message(
         if is_bridge:
             return f"可以用：{display_provider} 回复正常（{latency_ms} 毫秒）。"
         return f"可以用：{display_provider} / {model} 回复正常（{latency_ms} 毫秒）。"
+    if kind == KIND_REAL_RUN:
+        return "最近一次真实运行成功"
     if kind == KIND_AUTH:
         auth_target = pi_agent.chat_bridge_provider_name("") if is_bridge else display_provider
         return f"模型服务拒绝了密钥（{auth_target}）。{SETTINGS_HINT} 重新填写 API Key。"
@@ -462,6 +465,34 @@ async def _check_pi(settings: Any, timeout: float) -> dict[str, Any]:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
+
+
+def save_pi_real_run(settings: Any) -> None:
+    """如果 pi 最近没测过，记录一次真实运行成功。"""
+    state = workers.load_workers_state(settings)
+    last_check = state.get("last_check", {}).get("pi")
+    
+    # Check if missing or > 10 mins
+    if last_check and last_check.get("ok"):
+        checked_at = last_check.get("checked_at")
+        if checked_at:
+            try:
+                last_time = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+                if last_time.tzinfo is None:
+                    last_time = last_time.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                if (now - last_time).total_seconds() < 600:
+                    return
+            except Exception:
+                pass
+
+    # Save
+    result = _result(
+        ok=True,
+        kind=KIND_REAL_RUN,
+        checked_at=_utc_now(),
+    )
+    save_worker_check(settings, result)
 
 
 def save_worker_check(settings: Any, result: dict[str, Any]) -> dict[str, Any]:

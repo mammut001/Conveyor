@@ -4605,6 +4605,13 @@ class PiExecutor:
                 result.evidence = ev
                 result.error = "模型两次都因为回答太长被截断，这一轮没做成。"
 
+        if result.success:
+            try:
+                from conveyor.agents import worker_check
+                worker_check.save_pi_real_run(self.settings)
+            except Exception as e:
+                log.debug("Failed to record real run success: %s", e)
+
         return result
 
     async def cancel(self, execution_id: str) -> bool:
