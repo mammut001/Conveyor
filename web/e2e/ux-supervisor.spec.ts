@@ -1932,7 +1932,12 @@ test('mock fixture: supervisor stage label sanitization', async ({ page }) => {
   await page.goto('/#code')
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
   const bar = page.locator('.sup-run-history-bar')
-  if ((await bar.getAttribute('aria-expanded')) !== 'true') await bar.click()
+  // Wait for the three tasks to load; failed rows auto-expand the list, so only click while it is collapsed.
+  await expect(bar).toContainText('运行记录 · 3 条')
+  await expect(async () => {
+    if ((await bar.getAttribute('aria-expanded')) !== 'true') await bar.click()
+    await expect(bar).toHaveAttribute('aria-expanded', 'true', { timeout: 500 })
+  }).toPass({ timeout: 5000 })
 
   const meta = page.locator('.sup-run-row-meta')
   await expect(meta).toHaveCount(3)
