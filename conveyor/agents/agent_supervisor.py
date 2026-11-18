@@ -4481,6 +4481,29 @@ class AntigravityExecutor:
         return cancel_execution(self.settings, execution_id)
 
 
+# ---------------------------------------------------------------------------
+# Transient provider error classification
+# ---------------------------------------------------------------------------
+
+_TRANSIENT_PROVIDER_ERRORS = [
+    "request timed out", "timed out", "timeout", "econnreset",
+    "connection reset", "socket hang up", "502", "503", "504",
+    "bad gateway", "service unavailable", "overloaded",
+    "temporarily unavailable"
+]
+_NON_TRANSIENT_PROVIDER_ERRORS = [
+    "429", "quota", "rate limit", "insufficient", "401", "403",
+    "invalid api key", "unauthorized"
+]
+
+
+def _is_transient_provider_error(text: str | None) -> bool:
+    text_lower = str(text or "").lower()
+    if any(err in text_lower for err in _NON_TRANSIENT_PROVIDER_ERRORS):
+        return False
+    return any(err in text_lower for err in _TRANSIENT_PROVIDER_ERRORS)
+
+
 class PiExecutor:
     """Built-in Pi coding agent (``pi``) as a Supervisor executor.
 
@@ -4588,6 +4611,43 @@ class PiExecutor:
             stdout_line_filter=_pi_stdout_line_filter)
 
         meta = result.evidence.get("meta", {})
+        first_error = " ".join(str(x) for x in (result.error, meta.get("error")) if x).strip()
+        if (not result.success and meta.get("error_kind") != "executor_timeout"
+                and meta.get("stop_reason") != "length" and _is_transient_provider_error(first_error)):
+            try:
+                delay = max(0.0, float(os.getenv("CONVEYOR_PI_TRANSIENT_RETRY_DELAY", "10")))
+            except ValueError:
+                delay = 10.0
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+            new_prompt = prompt + "\n\nThe previous attempt was interrupted by a temporary model-service error. The worktree may already contain some of your changes: check `git status`/the files first, keep what is correct, and continue."
+            retry_result = await _spawn_cli(
+                self.settings, role=role, prompt=new_prompt,
+                worktree_path=worktree_path, timeout_seconds=timeout_seconds,
+                argv_builder=_argv_with(self.get_thinking_level(role)), executors="pi",
+                parser=_parse_pi_stream, task_id=task_id, context=context,
+                stdout_line_filter=_pi_stdout_line_filter)
+
+            if not retry_result.success:
+                short = (result.error or first_error or "未知错误").strip().rstrip("。.")[:80]
+                retry_result.error = f"模型服务两次都暂时出错（{short}），这一轮没做成。"
+                ev = dict(retry_result.evidence or {})
+                retry_meta = dict(ev.get("meta") or {}) if isinstance(ev.get("meta"), dict) else {}
+                retry_meta["error_kind"] = "provider_transient"
+                ev["meta"] = retry_meta
+                retry_result.evidence = ev
+
+            ev = dict(retry_result.evidence or {})
+            final_meta = dict(ev.get("meta") or {}) if isinstance(ev.get("meta"), dict) else {}
+            final_meta["transient_retry"] = True
+            final_meta["first_error"] = first_error[:200]
+            ev["meta"] = final_meta
+            retry_result.evidence = ev
+
+            result = retry_result
+            meta = result.evidence.get("meta", {})
+
         if not result.success and meta.get("stop_reason") == "length":
             new_prompt = prompt + "\n\nKeep the answer short: at most 400 words, no long code listings unless required."
             result = await _spawn_cli(
