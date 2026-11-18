@@ -118,6 +118,12 @@ export type ChatPanelProps = {
     goalOutcome?: string;
   }) => void;
   onOpenWorkers?: () => void;
+  /** 最近一次使用或创建过的项目名（来自已加载的目标/仓库列表，不额外轮询）。 */
+  recentProjectName?: string;
+  /** 是否有正在运行中的目标（来自已加载的目标列表）。 */
+  hasRunningGoal?: boolean;
+  /** 对话中触发了项目/目标动作卡片时通知外层刷新项目与目标状态。 */
+  onSupervisorActivity?: () => void;
 };
 
 const VOICE_PLACEHOLDER = '🎤 正在识别语音…';
@@ -236,7 +242,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, onOpenModelSettings, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '', onOpenSupervisorProject, onOpenWorkers }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, onOpenModelSettings, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '', onOpenSupervisorProject, onOpenWorkers, recentProjectName = '', hasRunningGoal = false, onSupervisorActivity }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Reading a restored conversation must not flash the welcome state first.
@@ -281,7 +287,48 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
   const failedSendRef = useRef<FailedSend | null>(null);
   const [showLatest, setShowLatest] = useState(false);
   const [unseen, setUnseen] = useState(false);
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const examplesWrapRef = useRef<HTMLDivElement>(null);
+  const examplesLinkRef = useRef<HTMLButtonElement>(null);
   const displayName = agentName || 'Conveyor';
+
+  const fillComposer = useCallback((text: string) => {
+    setInput(text);
+    window.setTimeout(() => {
+      const node = textareaRef.current;
+      if (!node) return;
+      node.focus();
+      const end = text.length;
+      node.setSelectionRange(end, end);
+    }, 0);
+  }, []);
+
+  useEffect(() => {
+    if (discussionOnly || messages.length >= 3) {
+      setExamplesOpen(false);
+    }
+  }, [discussionOnly, messages.length]);
+
+  useEffect(() => {
+    if (!examplesOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && examplesWrapRef.current?.contains(target)) return;
+      setExamplesOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setExamplesOpen(false);
+        examplesLinkRef.current?.focus();
+      }
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [examplesOpen]);
   // Replies wear a robot avatar, not a Latin letter: the owner reads Chinese only (QA N29).
   const avatar = (
     <div className="transcript-avatar chat-avatar" aria-hidden="true" style={agentColor ? { background: agentColor } : undefined}>
@@ -836,6 +883,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               ]);
               setSubagents([]);
               subagentsRef.current = [];
+              if (payload.action_card) {
+                onSupervisorActivity?.();
+              }
             } else if (eventName === 'error') {
               streamError = true;
               failure = new ChatRequestError(payload.error || '');
@@ -964,6 +1014,7 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
         }
         return mapped;
       });
+      onSupervisorActivity?.();
       if (data.client_action?.type === 'prefill_chat' && typeof data.client_action.text === 'string') {
         setInput(data.client_action.text);
         window.setTimeout(() => textareaRef.current?.focus(), 0);
@@ -998,6 +1049,97 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
 
   const placeholder = `给 ${displayName} 发消息…`;
   const showWelcome = messages.length === 0 && !historyLoading && !streamingDelta && !busy && error?.action !== 'history';
+  const showDiscover = !discussionOnly && !historyLoading && messages.length < 3 && error?.action !== 'history';
+  const trimmedProject = recentProjectName.trim();
+  const exampleProject = trimmedProject || 'todo-app';
+  const suggestionChips = [
+    {
+      label: '帮我建个新项目',
+      fill: '帮我建个项目叫 ',
+    },
+    {
+      label: '让它连续改几个小时',
+      fill: trimmedProject ? `迭代 3 个小时，把 ${trimmedProject} 做好` : '迭代 3 个小时，把 ',
+    },
+    {
+      label: '看看进度',
+      fill: trimmedProject ? `${trimmedProject} 进度怎么样了` : '进度怎么样了',
+    },
+    ...(hasRunningGoal ? [{
+      label: '先停下来',
+      fill: '先停一下',
+    }] : []),
+  ];
+  const exampleSentences = [
+    '帮我建个项目叫 todo-app',
+    `迭代 3 个小时，把 ${exampleProject} 做好`,
+    `在 ${exampleProject} 上持续改进 2 小时：把首页做好`,
+    `${exampleProject} 进度怎么样了`,
+    '先停一下',
+    `把 ${exampleProject} 接着做`,
+  ];
+  const discoverControls = (
+    <>
+      <div className="chat-suggestion-chips" role="group" aria-label="快捷说法">
+        {suggestionChips.map(chip => (
+          <button
+            key={chip.label}
+            type="button"
+            className="chat-suggestion-chip"
+            onClick={() => fillComposer(chip.fill)}
+          >
+            {chip.label}
+          </button>
+        ))}
+      </div>
+      <div className="chat-examples-wrap" ref={examplesWrapRef}>
+        <button
+          ref={examplesLinkRef}
+          type="button"
+          className="chat-examples-link"
+          aria-expanded={examplesOpen}
+          aria-haspopup="dialog"
+          onClick={() => setExamplesOpen(open => !open)}
+        >
+          你可以这样说
+        </button>
+        {examplesOpen && (
+          <div className="chat-examples-popover" role="dialog" aria-label="你可以这样说">
+            <div className="chat-examples-popover-head">
+              <span>直接这样发消息就行</span>
+              <button
+                type="button"
+                className="chat-examples-close"
+                aria-label="关闭"
+                onClick={() => {
+                  setExamplesOpen(false);
+                  examplesLinkRef.current?.focus();
+                }}
+              >
+                ×
+              </button>
+            </div>
+            <ul className="chat-examples-list">
+              {exampleSentences.map(sentence => (
+                <li key={sentence}>
+                  <button
+                    type="button"
+                    className="chat-example-item"
+                    onClick={() => {
+                      fillComposer(sentence);
+                      setExamplesOpen(false);
+                    }}
+                  >
+                    {sentence}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </>
+  );
 
   return (
     <div className="chat-panel-container" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -1062,6 +1204,11 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
               <>
                 <h2>{agentName ? `和 ${agentName} 聊点什么？` : '想聊点什么？'}</h2>
                 <p>可以帮你查资料、跑命令、改代码，删除等危险操作会先问你。</p>
+                {showDiscover && (
+                  <div className="chat-discover-area is-welcome">
+                    {discoverControls}
+                  </div>
+                )}
                 <details className="welcome-nightly-commands">
                   <summary>高级：夜间任务（不用也能正常使用）</summary>
                   <p>夜间任务只在预览环境运行，不碰生产；默认运行 1 小时，最多处理 12 个任务，达到时间限制或任务配额会自动停止，发现的 Issue 会保留，方便之后继续处理。</p>
@@ -1408,6 +1555,12 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
         </button>
       )}
       </div>
+
+      {showDiscover && !showWelcome && (
+        <div className="chat-discover-area is-composer">
+          {discoverControls}
+        </div>
+      )}
 
       <form className="composer chat-composer" onSubmit={handleSend}>
         <div className="chat-composer-box">

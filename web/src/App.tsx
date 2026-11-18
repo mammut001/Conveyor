@@ -285,6 +285,22 @@ export default function App() {
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   // 项目 badge and title prefix: goals (目标) waiting for the owner's reply.
   const [goalsWaiting, setGoalsWaiting] = useState(0)
+  const [supervisorGoals, setSupervisorGoals] = useState<Array<{
+    id?: string
+    repo_id?: string
+    repo_name?: string
+    state?: string
+    updated_at?: string
+    created_at?: string
+  }>>([])
+  const [supervisorRepos, setSupervisorRepos] = useState<Array<{
+    id?: string
+    name?: string
+    archived_at?: string | null
+    updated_at?: string
+    created_at?: string
+  }>>([])
+  const [supervisorRefreshNonce, setSupervisorRefreshNonce] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
   // 对话: which conversation the panel shows, and the one a sidebar row asked it to open.
   const [chatSessionId, setChatSessionId] = useState('')
@@ -612,7 +628,11 @@ export default function App() {
   const supervisorOn = Boolean(system?.features?.agent_supervisor)
   const codeOpen = view === 'code'
   useEffect(() => {
-    if (!authenticated || !supervisorOn || !token) { setGoalsWaiting(0); return }
+    if (!authenticated || !supervisorOn || !token) {
+      setGoalsWaiting(0)
+      setSupervisorGoals([])
+      return
+    }
     let stopped = false
     let generation = 0
     let timer: number | null = null
@@ -623,6 +643,7 @@ export default function App() {
         .then(response => response.ok ? response.json() : null)
         .then(data => {
           if (stopped || gen !== generation || !data || !Array.isArray(data.goals)) return
+          setSupervisorGoals(data.goals)
           setGoalsWaiting(data.goals.filter((goal: { state?: string }) => goal?.state === 'waiting_user').length)
         })
         .catch(() => {})
@@ -643,7 +664,71 @@ export default function App() {
     start()
     document.addEventListener('visibilitychange', onVisibility)
     return () => { stopped = true; stop(); document.removeEventListener('visibilitychange', onVisibility) }
-  }, [authenticated, supervisorOn, token, codeOpen])
+  }, [authenticated, supervisorOn, token, codeOpen, supervisorRefreshNonce])
+
+  // Load supervisor repositories once (no polling) so 对话 suggestion chips know the recent project name.
+  useEffect(() => {
+    if (!authenticated || !supervisorOn || !token) {
+      setSupervisorRepos([])
+      return
+    }
+    if (codeOpen || isLockedRef.current) return
+    let cancelled = false
+    void fetch('/api/supervisor/repositories', { headers: { Authorization: `Bearer ${token}` }, signal: pollAbortRef.current.signal })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        if (cancelled || !data || !Array.isArray(data.repositories)) return
+        setSupervisorRepos(data.repositories)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [authenticated, supervisorOn, token, codeOpen, supervisorRefreshNonce])
+
+  const activeSupervisorRepos = useMemo(
+    () => supervisorRepos.filter(r => r && !r.archived_at && typeof r.name === 'string' && r.name.trim()),
+    [supervisorRepos],
+  )
+  const hasRunningGoal = useMemo(
+    () => supervisorGoals.some(goal => goal?.state === 'running'),
+    [supervisorGoals],
+  )
+  const recentProjectName = useMemo(() => {
+    const resolveName = (repoId?: string, fallbackName?: string): string => {
+      if (repoId) {
+        const matched = activeSupervisorRepos.find(r => r.id === repoId)
+        if (matched?.name?.trim()) return matched.name.trim()
+      }
+      return (fallbackName || '').trim()
+    }
+    const running = supervisorGoals.find(goal => goal?.state === 'running')
+    if (running) {
+      const name = resolveName(running.repo_id, running.repo_name)
+      if (name) return name
+    }
+    try {
+      const raw = localStorage.getItem('conveyor-supervisor-context-v1')
+      if (raw) {
+        const parsed = JSON.parse(raw) as { repoId?: string }
+        const name = resolveName(parsed?.repoId)
+        if (name) return name
+      }
+    } catch {
+      // ignore storage unavailability
+    }
+    for (const goal of supervisorGoals) {
+      const name = resolveName(goal?.repo_id, goal?.repo_name)
+      if (name) return name
+    }
+    if (activeSupervisorRepos.length > 0) {
+      const sorted = [...activeSupervisorRepos].sort((a, b) => {
+        const at = a.updated_at || a.created_at || ''
+        const bt = b.updated_at || b.created_at || ''
+        return bt.localeCompare(at)
+      })
+      return (sorted[0]?.name || '').trim()
+    }
+    return ''
+  }, [activeSupervisorRepos, supervisorGoals])
 
   // Honest connection state: every successful status poll proves the server is reachable;
   // no poll for 12s means the console is reconnecting.
@@ -1508,6 +1593,9 @@ export default function App() {
       historyModeRef.current = 'push'
       setView('workers')
     },
+    recentProjectName,
+    hasRunningGoal,
+    onSupervisorActivity: () => setSupervisorRefreshNonce(n => n + 1),
   }
 
   // Shell values for this render: right panel, connection, navigation groups and header text.
@@ -1768,6 +1856,7 @@ export default function App() {
                 onOpenWorkers={workersEnabled ? () => { historyModeRef.current = 'push'; setView('workers') } : undefined}
                 workersData={workersData}
                 navigationRequest={supervisorNavRequest}
+                onRepositoriesChange={setSupervisorRepos}
               />
             </Suspense>
           )

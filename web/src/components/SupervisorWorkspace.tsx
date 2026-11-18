@@ -2185,6 +2185,7 @@ export function SupervisorWorkspace({
   onOpenWorkers,
   workersData,
   navigationRequest,
+  onRepositoriesChange,
 }: {
   token: string
   active: boolean
@@ -2193,6 +2194,7 @@ export function SupervisorWorkspace({
   /** Live workers payload from App.tsx (no new poll): the Pi/pool role badges read Pi's last 测试. */
   workersData?: SupervisorWorkersData
   navigationRequest?: SupervisorNavigationRequest | null
+  onRepositoriesChange?: (repos: SupervisorRepo[]) => void
 }) {
   const narrowViewport = useMediaQuery('(max-width: 900px)')
   const [capabilities, setCapabilities] = useState<SupervisorCapabilities | null>(null)
@@ -2363,6 +2365,7 @@ export function SupervisorWorkspace({
       const repos = Array.isArray(repoRes.value.repositories) ? repoRes.value.repositories : []
       const activeRepos = repos.filter(r => !r.archived_at)
       setRepositories(repos)
+      onRepositoriesChange?.(repos)
       setReposError('')
       // 保存的上下文还有效就别动它；失效（或从没保存过）时先读最近的活动，再决定落在哪。
       const savedRepo = activeRepos.find(r => r.id === savedContext.repoId)
@@ -2390,6 +2393,7 @@ export function SupervisorWorkspace({
       const repoRes = await apiCall<{ repositories: SupervisorRepo[] }>('/api/supervisor/repositories?include_archived=1')
       const repos = Array.isArray(repoRes.repositories) ? repoRes.repositories : []
       setRepositories(repos)
+      onRepositoriesChange?.(repos)
       setReposError('')
     } catch (err) {
       setReposError(err instanceof Error ? err.message : '无法读取仓库列表')

@@ -592,6 +592,140 @@
 .primary-interface .chat-panel-container .welcome-nightly-commands ul { padding-left: 18px; }
 .primary-interface .chat-panel-container .welcome-nightly-commands code { font-size: 12px; overflow-wrap: anywhere; }
 
+/* ---------- Discoverability chips & "你可以这样说" popover ---------- */
+
+.primary-interface .chat-discover-area.is-welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+.primary-interface .chat-discover-area.is-composer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  flex: none;
+  padding: 6px max(20px, calc((100% - 820px) / 2)) 2px;
+  background: #fff;
+}
+.primary-interface .chat-suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
+}
+.primary-interface .chat-discover-area.is-welcome .chat-suggestion-chips { justify-content: center; }
+.primary-interface .chat-discover-area.is-composer .chat-suggestion-chips { justify-content: flex-start; }
+.primary-interface .chat-suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  background: #fff;
+  color: #1f2328;
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.primary-interface .chat-suggestion-chip:hover:not(:disabled) { border-color: #b9bfc8; background: #f9fafb; }
+.primary-interface .chat-suggestion-chip:disabled { opacity: .5; cursor: not-allowed; }
+.primary-interface .chat-suggestion-chip:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.primary-interface .chat-examples-wrap { position: relative; max-width: 100%; }
+.primary-interface .chat-examples-link {
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.primary-interface .chat-examples-link:hover { color: #bd5c40; }
+.primary-interface .chat-examples-link:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.primary-interface .chat-examples-popover {
+  position: absolute;
+  z-index: 30;
+  width: min(360px, calc(100vw - 32px));
+  max-width: calc(100vw - 24px);
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 10px 28px rgba(16, 24, 40, .14);
+  text-align: left;
+  box-sizing: border-box;
+}
+.primary-interface .chat-discover-area.is-welcome .chat-examples-popover {
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+.primary-interface .chat-discover-area.is-composer .chat-examples-popover {
+  bottom: calc(100% + 6px);
+  left: 0;
+}
+.primary-interface .chat-examples-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: #374151;
+  font-size: 12px;
+  font-weight: 600;
+}
+.primary-interface .chat-examples-close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #6b7280;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.primary-interface .chat-examples-close:hover { background: #f2f4f7; color: #1f2328; }
+.primary-interface .chat-examples-list {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.primary-interface .chat-example-item {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: #f9fafb;
+  color: #1f2328;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.primary-interface .chat-example-item:hover,
+.primary-interface .chat-example-item:focus-visible { background: #fbf1ed; color: #a94c34; outline: none; }
+
 /* ---------- Composer: one box, text on top, actions on the right ---------- */
 
 /* The form keeps the shared `composer` class (the shell's "/" shortcut looks for
@@ -856,6 +990,9 @@
   .primary-interface .copy-button { min-height: 32px; }
 
   .primary-interface .chat-panel-container .composer.chat-composer { padding: 6px 12px 12px; }
+  .primary-interface .chat-discover-area.is-composer { padding: 6px 12px 2px; }
+  .primary-interface .chat-suggestion-chip { min-height: 36px; }
+  .primary-interface .chat-examples-link { min-height: 32px; }
   .primary-interface .chat-panel-container .composer.chat-composer textarea { font-size: 16px; line-height: 24px; max-height: calc(24px * 6 + 8px); }
   .primary-interface .chat-voice-button { width: 40px; height: 40px; }
   .primary-interface .chat-send-button,
@@ -892,6 +1029,7 @@
     margin-left: auto;
   }
   .primary-interface .mobile-ui .chat-panel-container .composer.chat-composer { padding: 6px 12px 10px; }
+  .primary-interface .mobile-ui .chat-discover-area.is-composer { padding: 6px 12px 2px; }
   .primary-interface .mobile-ui .chat-panel-container .event-stream { padding-bottom: 16px; }
   /* Phones switch sessions with the 当前会话 picker in the bar above, so the topic rail
      (a desktop-only repeat of that picker) never takes a third of the chat width. */
@@ -1259,7 +1397,7 @@
 }
 
 @media (forced-colors: active) {
-  .primary-interface :is(.chat-send-button, .chat-voice-button, .chat-composer .chat-new-button, .chat-copy-button, .chat-jump-latest, .chat-rail-toggle, .chat-rail-item) {
+  .primary-interface :is(.chat-send-button, .chat-voice-button, .chat-composer .chat-new-button, .chat-suggestion-chip, .chat-examples-popover, .chat-copy-button, .chat-jump-latest, .chat-rail-toggle, .chat-rail-item) {
     border: 1px solid ButtonText !important;
   }
 }

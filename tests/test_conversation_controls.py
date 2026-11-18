@@ -58,6 +58,17 @@ class ConversationControlsTests(unittest.IsolatedAsyncioTestCase):
                         answer = port.reply.await_args.args[1]
                         self.assertLess(len(answer), 600)
                         self.assertIn("/commands", answer)
+                        self.assertIn("直接说就行：", answer)
+                        for example in (
+                            "帮我建个项目叫 todo-app",
+                            "迭代 3 个小时，把 todo-app 做好",
+                            "在 todo-app 上持续改进 2 小时：把首页做好",
+                            "todo-app 进度怎么样了",
+                            "先停一下",
+                            "把 todo-app 接着做",
+                        ):
+                            self.assertIn(example, answer)
+                        self.assertNotIn("合并到主分支", answer)
 
     async def test_quoted_or_attached_control_phrase_keeps_its_context(self):
         for channel in ("telegram", "feishu"):
