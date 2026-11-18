@@ -3714,6 +3714,67 @@ def _git_head(worktree_path: str) -> str:
         return ""
 
 
+def build_reading_guide(worktree_path: str, *, role: str) -> str:
+    """Return a guide for reading files in the repository."""
+    if os.environ.get("CONVEYOR_READING_GUIDE", "1") == "0":
+        return ""
+
+    canon = _canonical_path(worktree_path)
+    if not canon or not os.path.exists(os.path.join(canon, ".git")):
+        return ""
+
+    try:
+        r = subprocess.run(
+            ["git", "-C", canon, "ls-files", "-z"],
+            capture_output=True, timeout=10,
+        )
+        if r.returncode != 0:
+            return ""
+
+        files = [p.decode("utf-8", "replace") for p in r.stdout.split(b"\x00") if p]
+        
+        file_list = []
+        for f in files:
+            full_path = os.path.join(canon, f)
+            try:
+                file_list.append((f, os.path.getsize(full_path)))
+            except OSError:
+                continue
+
+        # Sort by path
+        file_list.sort(key=lambda x: x[0])
+
+        guide = "Repository files (tracked, size):\n"
+        
+        capped = False
+        if len(file_list) > 120:
+            capped = True
+            to_display = file_list[:120]
+        else:
+            to_display = file_list
+
+        for f, size in to_display:
+            size_str = "<1 KB" if size < 1024 else f"{round(size / 1024)} KB"
+            marker = " LARGE" if size > 20 * 1024 else ""
+            guide += f"  {f}  {size_str}{marker}\n"
+
+        if capped:
+            guide += f"  ... and {len(file_list) - 120} more files\n"
+
+        guide += "\nReading rules:\n"
+        guide += "- Files over 20 KB (marked LARGE): do not read them whole. grep for the names you need first, then read only those line ranges with read offset/limit.\n"
+        guide += "- Never read the same range of a file twice; keep notes instead.\n"
+        guide += "- Issue independent reads/greps in the same turn.\n"
+
+        if role == "reviewer":
+            guide += "- The full candidate diff is included below; do not re-read changed files in full — read only the surrounding lines you need to verify a specific concern.\n"
+
+        return guide
+
+    except Exception:
+        return ""
+
+
 def _git_diff_stat(worktree_path: str, base_sha: str = "") -> str:
     canon = _canonical_path(worktree_path)
     if not canon:
@@ -6680,6 +6741,9 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
             "impact scope, and explicit acceptance criteria based on the current content.\n"
             "Do not modify any files: you have read-only access and will be audited against this."
         )
+        reading_guide = build_reading_guide(wp, role="analyst")
+        if reading_guide:
+            analysis_prompt += f"\n{reading_guide}\n"
         if coordinator_summary:
             analysis_prompt += f"\nCoordinator refinement:\n{coordinator_summary}\n"
         if accepted_criteria:
@@ -6745,6 +6809,11 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
             impl_executor = get_executor(settings, impl_cfg.executor)
             impl_prompt = (
                 "You are the implementer.\n"
+            )
+            reading_guide = build_reading_guide(wp, role="implementer")
+            if reading_guide:
+                impl_prompt += f"{reading_guide}\n"
+            impl_prompt += (
                 f"Goal: {goal}\n"
                 f"Worktree: {wp}\n"
                 f"Analysis plan:\n{plan}\n"
@@ -7843,6 +7912,10 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
     notes_block = format_project_notes(project_notes)
     if notes_block:
         parts.append(notes_block)
+
+    reading_guide = build_reading_guide(worktree_path, role="reviewer")
+    if reading_guide:
+        parts.append(reading_guide)
 
     parts.append(f"Goal: {goal}")
     if acceptance_criteria:
