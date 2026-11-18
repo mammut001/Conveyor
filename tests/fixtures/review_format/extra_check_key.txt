@@ -1,0 +1,62 @@
+All verification complete. Here is my assessment:
+
+```json
+{
+  "passed": true,
+  "target_sha": "ef696349f7b475033fd903787f1bfe7dee2f1b9d",
+  "target_fingerprint": "c8feb78d2aa759149a973c64baed237e74618a9b849ac548dbb7f3b6b281ff54",
+  "issues": [],
+  "checks": [
+    {
+      "name": "check.sh is a real gate, not a no-op",
+      "command": "read scripts/check.sh",
+      "passed": true,
+      "output": "set -e; cd repo root; verifies todo.py and tests/ exist; verifies at least one tests/test_*.py; runs `python3 -m compileall -q todo.py tests` (syntax gate, non-zero exit on broken code); captures `python3 -m unittest discover -s tests -p 'test_*.py'` output, re-exits non-zero on failure, and explicitly rejects 'Ran 0 tests'. Not exit 0/true/echo ok.",
+      "output_note": ""
+    },
+    {
+      "name": "stats --json/--pretty implemented in todo.py",
+      "command": "read todo.py (docstring L25-33, show_stats L437-468, build_parser L588-610, run L714-720)",
+      "passed": true,
+      "output": "show_stats(as_json=False, pretty=False): `if as_json: print(json.dumps(stats, indent=2 if pretty else None)); return stats` before the unchanged three human prints; build_parser adds p_stats.add_argument('--json', action='store_true') and '--pretty' with help '(implies --json)'; run(): `as_json = args.json or args.pretty; show_stats(as_json, args.pretty)`. Mirrors list/search derivation exactly.",
+      "output_note": ""
+    },
+    {
+      "name": "Compact/pretty JSON shape matches documented bytes",
+      "command": "read todo.py L282-292 (_print_json) and compare json.dumps defaults with README L203-231",
+      "passed": true,
+      "output": "_print_json uses the same `json.dumps(x, indent=2 if pretty else None)` idiom; dict insertion order in compute_stats (L426-430) is total, completed, pending, so compact output is exactly `{\"total\": 3, \"completed\": 1, \"pending\": 2}` and pretty is the 2-space indented 5-line block. Both README examples match byte for byte. Docstring correctly explains why the shared array renderer is not reused.",
+      "output_note": ""
+    },
+    {
+      "name": "Backward compatibility of bare stats preserved",
+      "command": "grep todo.py for 'Total: ' / 'Completed: ' / 'Pending: ' and read run() L714-720",
+      "passed": true,
+      "output": "Human path (`print(\"Total: {}\".format(stats[\"total\"]))` etc.) is untouched and only reached when as_json is False; pre-existing tests test_stats_shows_total_completed_and_pending / test_stats_on_empty_store_reports_zeros / test_readme_stats_example_matches_real_output still assert the three-line output and the first ```sh block of the 'Task statistics' section, which was not modified.",
+      "output_note": ""
+    },
+    {
+      "name": "New tests are real and non-vacuous",
+      "command": "read tests/test_todo.py L3838-3963 (7 new tests) and helper definitions L18-68, L3625-3635",
+      "passed": true,
+      "output": "7 new tests use existing helpers only (run_cli, write_storage, read_readme, _section_body, self._tmp): exact byte compare of compact object, empty-store zeros with assertFalse(os.path.exists(todo_file)), `--pretty` == `--json --pretty` == json.dumps(..., indent=2)+'\\n', byte-for-byte storage unchanged plus `sorted(os.listdir(...)) == [\"todo.json\"]`, broken storage -> exit 1 / empty stdout / 'Error:' in stderr, `stats --help` contains both flags, and README --json example parity. 252 + 7 = 259 tests, matching the supervisor's reported count.",
+      "output_note": ""
+    },
+    {
+      "name": "README/docstring content is accurate and exposes no internals",
+      "command": "read README.md L40-61 (usage) and L183-231 (Task statistics)",
+      "passed": true,
+      "output": "Two new usage lines and a documented JSON section. Claims verified against code: read-only view, empty store prints zeros object and exits 0, broken store is 'Error: ...' on stderr with exit 1 and nothing on stdout, storage never rewritten, `--pretty` implies `--json`. No internal infrastructure, no fabricated features, no dates introduced (today is 2026-11-18).",
+      "output_note": ""
+    },
+    {
+      "name": "Test file structure still intact after insertion",
+      "command": "read tests/test_todo.py L3960-3995 (tail)",
+      "passed": true,
+      "output": "Insertion ended before the '---- the test entry point itself ----' block; test_direct_module_run_executes_the_suite and the module-level `if __name__ == \"__main__\": unittest.main()` guard are unchanged, so direct execution still runs the suite and the 'Ran 0 tests' protection holds.",
+      "output_note": ""
+    }
+  ],
+  "summary": "The change is a genuine, well-scoped increment toward the stats goal: `stats` gains `--json`/`--pretty`, exactly mirroring the `list`/`search` flags (derivation `args.json or args.pretty` in `run()`, `json.dumps(stats, indent=2 if pretty else None)` in `show_stats`), while the bare `stats` human output is byte-for-byte unchanged and the pure `compute_stats` contract is preserved. I verified the implementation lines, the parser additions, the run() dispatch, the module docstring, the README usage/statistics sections (whose examples match the real output byte for byte, including the 2-space pretty layout), and the 7 new tests, which use only existing helpers and assert exact stdout bytes, read-only storage bytes, error paths, help listings and README parity; the existing 8 stats tests and the first ```sh block of the 'Task statistics' section were left untouched so no regression is possible. `scripts/check.sh` is a compliant, non-vacuous gate (`set -e`, existence checks, `compileall` syntax gate, `unittest discover` with failure propagation and a 'Ran 0 tests' guard), and the supervisor's own run reports 259 passing tests (252 + 7) with `OK`. No false user-facing statements, no internal infrastructure disclosure, and no contradictory dates were found."
+}
+```

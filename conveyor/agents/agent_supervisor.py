@@ -6413,8 +6413,18 @@ def _build_review_format_retry_prompt(
         "each check has exactly name, command, passed, output; "
         "no other keys, no text or code fences outside the object."
     )
+    if any(term in error_message.lower() for term in ("fenced", "ambiguous", "fence")):
+        correction += (
+            "\nThis usually means one of two things: three backticks (```) appear inside a string value, "
+            "or the JSON object was written more than once. Remove every ``` from inside strings "
+            "(write 'code block' instead) and reply with the bare JSON object exactly once (no fence)."
+        )
+    elif "unexpected keys" in error_message:
+        correction += "\nRemove the extra keys named in the error; each check may only have name, command, passed, output (put remarks inside output)."
+
     if clipped_reply:
-        correction += f"\n\nPrevious reply (truncated to 4000 chars):\n{clipped_reply}"
+        safe_reply = clipped_reply.replace("```", "[3 backticks]")
+        correction += f"\n\nPrevious reply (truncated to 4000 chars):\n{safe_reply}"
     return f"{base_prompt}\n\n{correction}"
 
 
@@ -8053,6 +8063,8 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
             '- "summary", check "name", and check "command" must be non-empty strings; check "output" is required and must be a string (may be "").\n'
             '- When "passed" is true: "issues" MUST be [] (no unresolved issues), "checks" MUST be non-empty, and every check MUST have "passed": true.\n'
             '- When "passed" is false: list concrete non-empty failure strings in "issues".\n'
+            '- Never write three backticks (```) anywhere inside a string value — not in summary, issues, check names, commands or outputs. Write \'code block\' instead.\n'
+            '- Each check object has exactly the four keys name, command, passed, output. Put any extra remark inside output.\n'
         )
 
     instruction = (
