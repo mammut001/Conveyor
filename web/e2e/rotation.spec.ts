@@ -381,7 +381,14 @@ test.describe('Usage-based rotation (执行者)', () => {
 
     const handle = cardByLabel(page, 'Codex').locator('.worker-drag-handle')
     const target = cardByLabel(page, 'Antigravity')
-    await handle.dragTo(target, { targetPosition: { x: 200, y: 6 } })
+    const hb = (await handle.boundingBox())!
+    const tb = (await target.boundingBox())!
+    await page.mouse.move(hb.x + hb.width / 2, hb.y + hb.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(tb.x + 200, tb.y + 20, { steps: 8 })
+    await page.mouse.move(tb.x + 200, tb.y + 6, { steps: 4 })
+    await expect(page.locator('li.worker-card.drop-before')).toHaveAttribute('aria-label', 'Antigravity')
+    await page.mouse.up()
 
     expect(await orderOf(page)).toEqual(['Codex', 'Antigravity', 'Super Grok', 'Claude Code'])
     await expect(page.getByText('未保存', { exact: true })).toBeVisible()
