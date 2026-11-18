@@ -338,9 +338,9 @@ test('N20: 项目 says 工作目录, 可以开始, 在这里改, 讨论, 分析/
   await expect(page.locator('.sup-worktree-item', { hasText: 'main' }).first()).toContainText('主分支（只看）')
   await expect(page.locator('.sup-worktree-item', { hasText: 'fix/console' }).first()).toContainText('可以开始')
 
-  // The read-only banner offers 新建工作目录, not a Worktree.
+  // The read-only worktree offers 新建工作目录并开始, not a Worktree.
   await page.locator('.sup-worktree-item').filter({ hasText: 'main' }).first().click()
-  await expect(page.locator('.sup-banner--readonly').getByRole('button', { name: '新建工作目录' })).toBeVisible()
+  await expect(page.getByRole('region', { name: '只读工作目录' }).getByRole('button', { name: '新建工作目录并开始' })).toBeVisible()
 
   // Dispatch scope and the role names.
   await page.locator('.sup-worktree-item').filter({ hasText: 'fix/console' }).first().click()

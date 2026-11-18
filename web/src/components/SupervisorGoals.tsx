@@ -10,7 +10,7 @@ import type {
   SupervisorWorkersData,
 } from './SupervisorWorkspace'
 import SupervisorChecks, { type SupervisorChecksSummary } from './SupervisorChecks'
-import { SupervisorRoleBar, supExecutorLabel, supStageLabel, supStateLabel } from './SupervisorWorkspace'
+import { SupervisorReadOnlyWorktreeCard, SupervisorRoleBar, supExecutorLabel, supStageLabel, supStateLabel } from './SupervisorWorkspace'
 import SupervisorMerge from './SupervisorMerge'
 import { SupervisorDiffView, useSupervisorDiff } from './SupervisorDiff'
 import { readGoalDraft, writeGoalDraft } from './supDrafts'
@@ -597,6 +597,8 @@ export default function SupervisorGoals({
   onDraftOutcomeUsed,
   onOpenWorkers,
   workersData,
+  onCreateWorktree,
+  onSelectWorktree,
 }: {
   apiCall: <T>(path: string, init?: RequestInit) => Promise<T>
   repo: SupervisorRepo
@@ -617,6 +619,10 @@ export default function SupervisorGoals({
   onOpenWorkers?: () => void
   /** Live workers payload from App.tsx: the Pi/pool role badges read Pi's last 测试. */
   workersData?: SupervisorWorkersData
+  /** 只读工作目录上那张卡的「新建工作目录并开始」：直接复用项目页已有的新建流程。 */
+  onCreateWorktree: (repoId: string) => void | Promise<unknown>
+  /** 只读工作目录那张卡上的「去 <branch>」：跳到这个仓库已有的受托管工作目录。 */
+  onSelectWorktree?: (repoId: string, worktreeId: string) => void
 }) {
   // 自动检查状态（来自 SupervisorChecks 的汇报）：用来在「开始」上方提醒还没有检查命令。
   const [checksSummary, setChecksSummary] = useState<SupervisorChecksSummary | null>(null)
@@ -688,7 +694,7 @@ export default function SupervisorGoals({
   const finishedGoals = useMemo(() => goals.filter(g => !isActiveGoalState(g.state) && g.id !== shownGoal?.id), [goals, shownGoal])
   // 目标跑完之后（达成 / 用完轮数 / 失败 / 停止）结果卡继续挂在最上面，表单藏起来。
   const goalFinished = shownGoal ? !isActiveGoalState(shownGoal.state) : false
-  const showForm = !hasActiveGoal && !shownGoal
+  const showForm = !hasActiveGoal && !shownGoal && !readOnly
   const showTimeline = !goalFinished || timelineOpen
 
   const loadDetail = useCallback(
@@ -1075,16 +1081,14 @@ export default function SupervisorGoals({
           </div>
         )}
 
-        {readOnly && (
-          <div className="sup-banner sup-banner--readonly" role="status">
-            <div className="sup-banner-text">
-              <strong>当前为只读工作目录（{worktree.is_main ? '主分支' : '未托管目录'}）</strong>
-              <span>主工作目录与未托管目录仅支持只读查看。请新建工作目录，在独立副本里执行目标。</span>
-            </div>
-          </div>
-        )}
-
-        {!readOnly && locked && !hasActiveGoal && (
+        {readOnly ? (
+          <SupervisorReadOnlyWorktreeCard
+            repo={repo}
+            worktree={worktree}
+            onCreateWorktree={onCreateWorktree}
+            onSelectWorktree={onSelectWorktree}
+          />
+        ) : !locked && !hasActiveGoal && (
           <div className="sup-banner sup-banner--locked" role="status">
             <div className="sup-banner-text">
               <strong>当前工作目录已锁定（有任务正在执行）</strong>
@@ -1210,9 +1214,11 @@ export default function SupervisorGoals({
                       再试几轮
                     </button>
                   )}
-                  <button type="button" className="shell-button primary sup-goal-new-button" onClick={handleStartNew}>
-                    开始新目标
-                  </button>
+                  {!readOnly && (
+                    <button type="button" className="shell-button primary sup-goal-new-button" onClick={handleStartNew}>
+                      开始新目标
+                    </button>
+                  )}
                 </div>
                 {extendOpen && canOfferExtend && (
                   <form

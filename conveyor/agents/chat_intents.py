@@ -474,6 +474,49 @@ def detect_intent(text: str) -> Intent | None:
     return None
 
 
+_STATUS_PROGRESS_ZH_RE = re.compile(r"进度|做到哪|做得怎么样|怎么样了|跑得怎么样|还剩多久|做完了吗|跑完了吗|结果怎么样|现在什么情况")
+_STATUS_PROGRESS_EN_RE = re.compile(r"\bstatus\b|\bprogress\b|how is .+ going", re.IGNORECASE)
+_STATUS_STOP_ZH_RE = re.compile(r"先停一下|停一下|停掉|停止|暂停|别跑了|不用跑了")
+_STATUS_STOP_EN_RE = re.compile(r"^\s*(?:stop|pause)\b", re.IGNORECASE)
+_STATUS_HOWTO_ZH_RE = re.compile(r"^(?:怎么|如何|为什么|什么是)|什么区别|是什么意思")
+# Progress-only negation: "我不想问进度" is declining the question, not asking it.
+_STATUS_PROGRESS_NEGATION_RE = re.compile(r"不想|不用问|不要|别问|没问")
+
+
+def detect_status_intent(text: str) -> str | None:
+    """Deterministically detect a status query ("progress") or a stop request ("stop").
+
+    Returns ``None`` for anything that is not clearly a short, present-tense
+    status/stop utterance — long sentences, how-to/definition questions, past
+    time references, negations, and slash commands all fall through.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if len(raw) > 40:
+        return None
+    if raw.startswith("/"):
+        return None
+    if _STATUS_HOWTO_ZH_RE.search(raw):
+        return None
+    if _PAST_TIME_RE.search(raw):
+        return None
+    # Stop phrases are checked first: 「别跑了」/「不用跑了」 look like negations but
+    # are imperative stop requests, so they must survive the negation guards below.
+    if _STATUS_STOP_ZH_RE.search(raw) or _STATUS_STOP_EN_RE.search(raw):
+        return "stop"
+
+    if _NEGATION_RE.search(raw):
+        return None
+
+    if _STATUS_PROGRESS_NEGATION_RE.search(raw):
+        return None
+
+    if _STATUS_PROGRESS_ZH_RE.search(raw) or _STATUS_PROGRESS_EN_RE.search(raw):
+        return "progress"
+    return None
+
+
 def _parse_model_json(text: str) -> dict[str, Any]:
     raw = (text or "").strip()
     if raw.startswith("```"):
@@ -2341,6 +2384,11 @@ async def resolve_intent_turn(
             reply_text, card = _handle_start_timed_goal_intent(settings, session_id, direct, raw)
             return (True, reply_text, card, "")
         return (False, "", None, "")
+
+    status = detect_status_intent(raw)
+    if status is not None:
+        reply_text, card = _dispatch_decider_choice(settings, session_id, status, raw)
+        return (True, reply_text, card, "")
 
     # 3. Decision model (Gemini Decisions / Jev / custom) if configured.
     if not raw.startswith("/"):
