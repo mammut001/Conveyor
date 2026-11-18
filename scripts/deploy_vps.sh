@@ -99,6 +99,25 @@ OLD_COMMIT_FULL="$(git rev-parse HEAD)"
 OLD_COMMIT="$(git rev-parse --short HEAD)"
 log "Current commit: ${OLD_COMMIT}"
 
+# ---- code-search tools (Pi grep/find need rg and fd; Pi runs offline) -------
+# Without them every supervisor role pages through whole files (several times
+# the tokens). Install when missing; never fail the deploy over it.
+SEARCH_MISSING=""
+command -v rg >/dev/null 2>&1 || SEARCH_MISSING="rg"
+if ! command -v fd >/dev/null 2>&1 && ! command -v fdfind >/dev/null 2>&1; then
+  SEARCH_MISSING="${SEARCH_MISSING:+${SEARCH_MISSING} }fd"
+fi
+if [[ -n "${SEARCH_MISSING}" ]]; then
+  log "WARNING: code-search tools missing (${SEARCH_MISSING}); installing ripgrep fd-find"
+  if sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y -q ripgrep fd-find >/dev/null 2>&1; then
+    log "Installed ripgrep/fd-find."
+  else
+    log "WARNING: could not install ripgrep/fd-find; supervisor roles will read whole files (more tokens)"
+  fi
+else
+  log "Code-search tools present: rg fd"
+fi
+
 log "Fetching origin/main..."
 git fetch origin main --quiet
 ORIGIN_MAIN="$(git rev-parse origin/main)"
