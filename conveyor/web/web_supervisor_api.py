@@ -46,7 +46,9 @@ def handle_get(
             return True
 
         if path == "/api/supervisor/repositories":
-            repos = svc.list_repositories(settings)
+            raw_inc = (query.get("include_archived") or [""])[0].strip().lower()
+            include_archived = raw_inc in {"1", "true", "yes"}
+            repos = svc.list_repositories(settings, include_archived=include_archived)
             handler._json(HTTPStatus.OK, {"repositories": repos})
             return True
 
@@ -271,6 +273,21 @@ def handle_post(
         if len(parts) == 5 and parts[:3] == ["api", "supervisor", "repositories"] and parts[4] == "validation":
             detail = validation_mod.set_repo_validation(settings, parts[3], body.get("selected"))
             handler._json(HTTPStatus.OK, detail)
+            return True
+
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "repositories"] and parts[4] in ("archive", "unarchive"):
+            blocked = project_create_block_reason(getattr(handler, "headers", None))
+            if blocked is not None:
+                handler._json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "请求未通过站点校验", "code": "origin_or_request_denied"},
+                )
+                return True
+            if parts[4] == "archive":
+                repo = svc.archive_repository(settings, parts[3])
+            else:
+                repo = svc.unarchive_repository(settings, parts[3])
+            handler._json(HTTPStatus.OK, repo)
             return True
 
         if len(parts) == 5 and parts[:3] == ["api", "supervisor", "worktrees"] and parts[4] == "merge":
