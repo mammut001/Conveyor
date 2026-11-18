@@ -1898,3 +1898,49 @@ test('R12: no notice when the server has the search tools', async ({ page }) => 
   await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
   await expect(page.locator('.sup-search-tools-notice')).toHaveCount(0)
 })
+
+test('mock fixture: supervisor stage label sanitization', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, {
+    initialTasksByWt: {
+      'wt-fix-console': [
+        {
+          id: 'sup-task-stage-a',
+          goal: '恢复后的任务',
+          state: 'running',
+          stage: 'recovered',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+        {
+          id: 'sup-task-stage-b',
+          goal: '修复用完的任务',
+          state: 'failed',
+          stage: 'repair_limit_exceeded',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+        {
+          id: 'sup-task-stage-c',
+          goal: '未知阶段的任务',
+          state: 'failed',
+          stage: 'some_new_stage',
+          metadata: { repo_id: 'repo-conveyor', worktree_id: 'wt-fix-console' },
+        },
+      ],
+    },
+  })
+
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+  const bar = page.locator('.sup-run-history-bar')
+  if ((await bar.getAttribute('aria-expanded')) !== 'true') await bar.click()
+
+  const meta = page.locator('.sup-run-row-meta')
+  await expect(meta).toHaveCount(3)
+  await expect(meta.filter({ hasText: '阶段：重启后已恢复' })).toHaveCount(1)
+  await expect(meta.filter({ hasText: '阶段：修复次数用完' })).toHaveCount(1)
+  await expect(meta.filter({ hasText: '阶段：执行失败' })).toHaveCount(1)
+
+  // No raw backend keys in the stage line
+  const metaText = (await meta.allInnerTexts()).join('\n')
+  expect(metaText).not.toMatch(/recovered|repair_limit_exceeded|some_new_stage/)
+})
