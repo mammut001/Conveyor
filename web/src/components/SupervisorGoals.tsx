@@ -1110,7 +1110,7 @@ export default function SupervisorGoals({
             onCreateWorktree={onCreateWorktree}
             onSelectWorktree={onSelectWorktree}
           />
-        ) : !locked && !hasActiveGoal && (
+        ) : locked && !hasActiveGoal && (
           <div className="sup-banner sup-banner--locked" role="status">
             <div className="sup-banner-text">
               <strong>当前工作目录已锁定（有任务正在执行）</strong>

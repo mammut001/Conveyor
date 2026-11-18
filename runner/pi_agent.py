@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ from urllib.parse import urlparse
 from conveyor.agents.agent_events import emit_event
 from conveyor.core.redaction import redact_text, truncate
 from runner.core import CodexRunner
+from runner.delete_guard import make_guard_dir, prepend_guard_to_path
 from runner.operators import run as _run_ops
 from runner.types import DESTRUCTIVE_CONFIRM_TAG, Job, JobMode, ProgressCallback  # tag re-exported
 
@@ -1033,6 +1035,8 @@ class PiBackend(CodexRunner):
             "You are Pi, Conveyor's autonomous execution agent on the operator's Linux server. "
             "Reply concisely in the same language as the user (default Simplified Chinese). "
             + self._pi_workspace_line(job)
+            + "If the user is only asking a question (status, progress, explanation), only read: "
+            "do not create, modify, move or delete anything. "
             + "Execute the user's request directly using your bash, read, write, edit, grep, find, "
             "and ls tools without asking for confirmation on non-destructive tasks. "
             "When downloading files without an explicit target directory, save them under "
@@ -1092,6 +1096,40 @@ class PiBackend(CodexRunner):
 
         command = self._pi_command(job, selection.provider, selection.model)
 
+        # Guard rail against accidental deletions. A job the operator did not
+        # explicitly approve for deletion runs with a directory of shims first on
+        # PATH: rm/rmdir/unlink/shred and the destructive git subcommands are
+        # refused there, so an agent that only had to read something cannot
+        # delete it. The approved branch is meant to delete and stays unguarded.
+        guard_dir: Path | None = None
+        if not bool(getattr(job, "destructive_confirmed", False)):
+            try:
+                guard_dir = make_guard_dir(Path(tempfile.mkdtemp(prefix="conveyor-delete-guard-")))
+            except OSError as exc:
+                job.error = f"无法创建删除防护目录（{exc}），已停止，避免在无防护的情况下执行。"
+                job.return_code = 1
+                return
+            # A missing PATH would otherwise leave the guard dir as the only
+            # entry, so plain commands (`env python3`) stopped resolving.
+            # prepend_guard_to_path falls back to the system default, the same
+            # resolution a missing PATH had before the guard was prepended.
+            prepend_guard_to_path(env, guard_dir)
+
+        try:
+            await self._run_pi_attempt(job, command, env, selection, on_progress)
+        finally:
+            if guard_dir is not None:
+                shutil.rmtree(guard_dir, ignore_errors=True)
+
+    async def _run_pi_attempt(
+        self,
+        job: Job,
+        command: list[str],
+        env: dict[str, str],
+        selection: PiProviderSelection,
+        on_progress: ProgressCallback,
+    ) -> None:
+        """Spawn the prepared pi command in ``env`` and read its event stream."""
         try:
             Path("/srv/conveyor/downloads").mkdir(parents=True, exist_ok=True)
         except OSError:
