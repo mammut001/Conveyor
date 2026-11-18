@@ -1414,5 +1414,297 @@ class Round2CanonicalLocksSqliteAndRecoveryTests(unittest.TestCase):
             conn_ro.close()
 
 
+class Round2ReviewFormatRetryTests(unittest.TestCase):
+    """Task R4: malformed reviewer verdicts retry the reviewer without burning repair rounds."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="sup-r2-revfmt-"))
+        self.addCleanup(lambda: shutil.rmtree(self.tmp, ignore_errors=True))
+        self.repo, self.wt, self.head = make_repo_and_worktree(self.tmp)
+
+    def _clean_pi_env(self, fake_pi: Path) -> dict[str, str]:
+        return {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": "/tmp",
+            "CONVEYOR_PI_BIN": str(fake_pi),
+            "CONVEYOR_AGENT_SUPERVISOR_ENABLED": "true",
+            "DEEPSEEK_API_KEY": "sk-test-deepseek",
+        }
+
+    def _write_fake_pi_flow(self, *, state_file: Path, reviewer_replies: list[dict[str, object]]) -> Path:
+        """Create a fake ``pi`` binary driving analyst/implementer/reviewer with scripted replies."""
+        replies_path = self.tmp / "reviewer_replies.json"
+        replies_path.write_text(json.dumps(reviewer_replies), encoding="utf-8")
+        return write_executable(
+            self.tmp / "fake-pi-review-format",
+            f"""
+            import json, os, subprocess, sys
+            from pathlib import Path
+
+            prompt = sys.stdin.read()
+            if not prompt:
+                argv = sys.argv[1:]
+                if "-p" in argv:
+                    prompt = argv[argv.index("-p") + 1]
+            cwd = os.getcwd()
+            state_path = Path({str(state_file)!r})
+            st = json.loads(state_path.read_text()) if state_path.exists() else {{"calls": [], "review_idx": 0}}
+            replies = json.loads(Path({str(replies_path)!r}).read_text())
+
+            def emit(text: str, inp: int = 100, out: int = 25) -> None:
+                print(json.dumps({{
+                    "type": "message_end",
+                    "message": {{
+                        "role": "assistant",
+                        "usage": {{"input": inp, "output": out, "cacheRead": 0}},
+                        "content": [{{"type": "text", "text": text}}],
+                    }},
+                }}), flush=True)
+                print(json.dumps({{
+                    "type": "agent_end",
+                    "messages": [{{"role": "assistant", "content": [{{"type": "text", "text": text}}]}}],
+                }}), flush=True)
+
+            if prompt.startswith("You are the analyst."):
+                st["calls"].append({{"role": "analyst", "prompt": prompt}})
+                state_path.write_text(json.dumps(st))
+                emit("1. Set VALUE = 42 in app.py and commit.", inp=50, out=10)
+                sys.exit(0)
+
+            if prompt.startswith("You are the implementer."):
+                impl_n = sum(1 for c in st["calls"] if c["role"] == "implementer") + 1
+                st["calls"].append({{"role": "implementer", "round": impl_n, "prompt": prompt}})
+                state_path.write_text(json.dumps(st))
+                Path(cwd, "app.py").write_text(f"VALUE = {{41 + impl_n}}\\n", encoding="utf-8")
+                subprocess.run(["git", "add", "app.py"], cwd=cwd, check=True, capture_output=True)
+                subprocess.run(["git", "commit", "-qm", f"impl {{impl_n}}"], cwd=cwd, check=True, capture_output=True)
+                emit(f"Implemented VALUE = {{41 + impl_n}}", inp=80, out=15)
+                sys.exit(0)
+
+            if prompt.startswith("You are an INDEPENDENT code reviewer."):
+                cur_sha, target_fp = "", ""
+                for ln in prompt.splitlines():
+                    if ln.startswith("Current SHA: "):
+                        cur_sha = ln.split("Current SHA: ", 1)[1].strip()
+                    elif ln.startswith("Target fingerprint: "):
+                        target_fp = ln.split("Target fingerprint: ", 1)[1].strip()
+                idx = st["review_idx"]
+                st["review_idx"] = idx + 1
+                st["calls"].append({{"role": "reviewer", "idx": idx, "prompt": prompt}})
+                state_path.write_text(json.dumps(st))
+
+                spec = replies[idx]
+                kind = spec["kind"]
+                if kind == "raw":
+                    text = str(spec["text"])
+                elif kind == "extra_key":
+                    text = json.dumps({{
+                        "passed": True,
+                        "target_sha": cur_sha,
+                        "target_fingerprint": target_fp,
+                        "issues": [],
+                        "checks": [{{"name": "unit", "command": "check", "passed": True, "output": "ok"}}],
+                        "summary": "Looks good.",
+                        "round": 1,
+                    }})
+                elif kind == "valid_pass":
+                    text = json.dumps({{
+                        "passed": True,
+                        "target_sha": cur_sha,
+                        "target_fingerprint": target_fp,
+                        "issues": [],
+                        "checks": [{{"name": "unit", "command": "check", "passed": True, "output": "ok"}}],
+                        "summary": "Verified passing.",
+                    }})
+                elif kind == "valid_fail":
+                    text = json.dumps({{
+                        "passed": False,
+                        "target_sha": cur_sha,
+                        "target_fingerprint": target_fp,
+                        "issues": list(spec.get("issues") or ["VALUE must be 43"]),
+                        "checks": [{{"name": "unit", "command": "check", "passed": False, "output": "wrong value"}}],
+                        "summary": "Implementation needs one more fix.",
+                    }})
+                else:
+                    raise ValueError(f"unknown spec kind: {{kind}}")
+
+                emit(text, inp=int(spec.get("inp", 100)), out=int(spec.get("out", 20)))
+                sys.exit(0)
+
+            sys.exit(2)
+            """,
+        )
+
+    def _pi_settings(self) -> Settings:
+        s = make_settings(
+            self.tmp,
+            validation_commands=(
+                ("check-app", (sys.executable, "-c", "import app; assert app.VALUE >= 42; print('OK')")),
+            ),
+        )
+        return dataclasses.replace(s, agent_supervisor_implementation_executor="pi")
+
+    def test_invalid_json_then_valid_verdict_passes_without_repair_and_persists_usage(self) -> None:
+        state_file = self.tmp / "state_invalid_then_valid.json"
+        long_bad_reply = "NOT_JSON_PROSE " + ("X" * 4500) + "TAIL_PAST_4000"
+        fake_pi = self._write_fake_pi_flow(
+            state_file=state_file,
+            reviewer_replies=[
+                {"kind": "raw", "text": long_bad_reply, "inp": 110, "out": 30},
+                {"kind": "valid_pass", "inp": 120, "out": 25},
+            ],
+        )
+        settings = self._pi_settings()
+        t = create_task(settings, goal="Set VALUE >= 42", repo_path=str(self.repo), base_sha=self.head)
+        with patch.dict(os.environ, self._clean_pi_env(fake_pi), clear=True):
+            queue_task(settings, t["id"], worktree_path=str(self.wt))
+            claim_task(settings)
+            final = asyncio.run(run_supervisor_flow(settings, t["id"]))
+
+        self.assertEqual(final["state"], "completed", final.get("error"))
+        self.assertEqual(final["repair_round"], 0)
+        st = json.loads(state_file.read_text(encoding="utf-8"))
+        roles_called = [c["role"] for c in st["calls"]]
+        self.assertEqual(roles_called, ["analyst", "implementer", "reviewer", "reviewer"])
+
+        retry_prompt = st["calls"][3]["prompt"]
+        self.assertIn("Your previous reply could not be accepted:", retry_prompt)
+        self.assertIn("verdict is not a JSON object", retry_prompt)
+        self.assertIn(
+            "exactly the keys passed, target_sha, target_fingerprint, issues, checks, summary",
+            retry_prompt,
+        )
+        self.assertIn("each check has exactly name, command, passed, output", retry_prompt)
+        self.assertIn("NOT_JSON_PROSE", retry_prompt)
+        self.assertNotIn("TAIL_PAST_4000", retry_prompt)
+
+        # Usage recorded for EVERY reviewer run plus analyst and implementer.
+        usage_rows = ags.list_execution_usage(settings, task_id=t["id"])
+        reviewer_usage = [u for u in usage_rows if u["role"] == "reviewer"]
+        self.assertEqual(len(reviewer_usage), 2)
+        self.assertEqual(sum(u["input_tokens"] for u in reviewer_usage), 230)
+        self.assertEqual(sum(u["output_tokens"] for u in reviewer_usage), 55)
+
+    def test_extra_key_then_valid_verdict_passes_without_repair(self) -> None:
+        state_file = self.tmp / "state_extra_key.json"
+        fake_pi = self._write_fake_pi_flow(
+            state_file=state_file,
+            reviewer_replies=[
+                {"kind": "extra_key", "inp": 90, "out": 15},
+                {"kind": "valid_pass", "inp": 95, "out": 18},
+            ],
+        )
+        settings = self._pi_settings()
+        t = create_task(settings, goal="Set VALUE >= 42", repo_path=str(self.repo), base_sha=self.head)
+        with patch.dict(os.environ, self._clean_pi_env(fake_pi), clear=True):
+            queue_task(settings, t["id"], worktree_path=str(self.wt))
+            claim_task(settings)
+            final = asyncio.run(run_supervisor_flow(settings, t["id"]))
+
+        self.assertEqual(final["state"], "completed", final.get("error"))
+        self.assertEqual(final["repair_round"], 0)
+        st = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertEqual([c["role"] for c in st["calls"]], ["analyst", "implementer", "reviewer", "reviewer"])
+        self.assertIn("unexpected keys in review verdict: round", st["calls"][3]["prompt"])
+
+    def test_three_invalid_verdicts_fail_with_review_format_and_no_repair(self) -> None:
+        state_file = self.tmp / "state_three_invalid.json"
+        fake_pi = self._write_fake_pi_flow(
+            state_file=state_file,
+            reviewer_replies=[
+                {"kind": "raw", "text": "not json", "inp": 100, "out": 10},
+                {"kind": "extra_key", "inp": 105, "out": 12},
+                {"kind": "raw", "text": "still not json", "inp": 110, "out": 14},
+            ],
+        )
+        settings = self._pi_settings()
+        t = create_task(settings, goal="Set VALUE >= 42", repo_path=str(self.repo), base_sha=self.head)
+        with patch.dict(os.environ, self._clean_pi_env(fake_pi), clear=True):
+            queue_task(settings, t["id"], worktree_path=str(self.wt))
+            claim_task(settings)
+            final = asyncio.run(run_supervisor_flow(settings, t["id"], max_repairs=3))
+
+        self.assertEqual(final["state"], "failed")
+        self.assertEqual(final["stage"], "review")
+        self.assertEqual(final["error"], "审阅结果的格式三次都不对，这一轮没能完成审阅。")
+        self.assertEqual((final.get("metadata") or {}).get("error_kind"), "review_format")
+        self.assertEqual(final["repair_round"], 0)
+
+        st = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [c["role"] for c in st["calls"]],
+            ["analyst", "implementer", "reviewer", "reviewer", "reviewer"],
+        )
+
+        usage_rows = ags.list_execution_usage(settings, task_id=t["id"])
+        reviewer_usage = [u for u in usage_rows if u["role"] == "reviewer"]
+        self.assertEqual(len(reviewer_usage), 3)
+        self.assertEqual(sum(u["input_tokens"] for u in reviewer_usage), 315)
+        self.assertEqual(sum(u["output_tokens"] for u in reviewer_usage), 36)
+
+    def test_worktree_identity_change_between_format_attempts_fails_without_retry(self) -> None:
+        state_file = self.tmp / "state_wt_mutated.json"
+        fake_pi = self._write_fake_pi_flow(
+            state_file=state_file,
+            reviewer_replies=[
+                {"kind": "raw", "text": "invalid json"},
+                {"kind": "valid_pass"},
+            ],
+        )
+        settings = self._pi_settings()
+        t = create_task(settings, goal="Set VALUE >= 42", repo_path=str(self.repo), base_sha=self.head)
+        with patch.dict(os.environ, self._clean_pi_env(fake_pi), clear=True):
+            queue_task(settings, t["id"], worktree_path=str(self.wt))
+            claim_task(settings)
+
+            real_parse = ags.parse_review_verdict
+            wt_path = self.wt
+
+        def mutate_between_attempts(*args, **kwargs):
+            try:
+                return real_parse(*args, **kwargs)
+            finally:
+                # Simulate worktree modification occurring right before the format retry starts.
+                (wt_path / "sneaky_between.txt").write_text("mutated between retries\n", encoding="utf-8")
+
+        with (
+            patch.dict(os.environ, self._clean_pi_env(fake_pi), clear=True),
+            patch.object(ags, "parse_review_verdict", side_effect=mutate_between_attempts),
+        ):
+            final = asyncio.run(run_supervisor_flow(settings, t["id"]))
+
+        self.assertEqual(final["state"], "failed")
+        self.assertEqual(final["stage"], "supervisor_error")
+        self.assertEqual((final.get("metadata") or {}).get("error_kind"), "worktree_mutated")
+        self.assertIn("code changed during review", final["error"])
+        st = json.loads(state_file.read_text(encoding="utf-8"))
+        # Only 1 reviewer attempt ran; the retry was blocked by pre-retry identity check.
+        self.assertEqual([c["role"] for c in st["calls"]], ["analyst", "implementer", "reviewer"])
+
+    def test_valid_verdict_passed_false_still_triggers_repair_loop(self) -> None:
+        state_file = self.tmp / "state_valid_fail.json"
+        fake_pi = self._write_fake_pi_flow(
+            state_file=state_file,
+            reviewer_replies=[
+                {"kind": "valid_fail", "issues": ["VALUE must be 43"]},
+                {"kind": "valid_pass"},
+            ],
+        )
+        settings = self._pi_settings()
+        t = create_task(settings, goal="Set VALUE >= 43", repo_path=str(self.repo), base_sha=self.head)
+        with patch.dict(os.environ, self._clean_pi_env(fake_pi), clear=True):
+            queue_task(settings, t["id"], worktree_path=str(self.wt))
+            claim_task(settings)
+            final = asyncio.run(run_supervisor_flow(settings, t["id"], max_repairs=2))
+
+        self.assertEqual(final["state"], "completed", final.get("error"))
+        self.assertEqual(final["repair_round"], 1)
+        st = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertEqual(
+            [c["role"] for c in st["calls"]],
+            ["analyst", "implementer", "reviewer", "implementer", "reviewer"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -565,6 +565,20 @@ class TimeboxedGoalTests(_TimeboxedGoalBase):
                 executions=[{"executor": "pi", "status": "finished", "error": "", "metadata_json": "{}"}],
             )
         )
+        # 7) Three invalid review format attempts (review_format) count as runtime/infra failure
+        self.assertTrue(
+            goals._is_infrastructure_failure(
+                self.settings,
+                {
+                    "id": "t9",
+                    "state": "failed",
+                    "stage": "review",
+                    "error": "审阅结果的格式三次都不对，这一轮没能完成审阅。",
+                    "metadata": {"error_kind": "review_format"},
+                },
+                executions=[],
+            )
+        )
 
     def test_infrastructure_failures_not_counted_toward_continuous_streak(self) -> None:
         goal = self._create(duration_minutes=240, mode="continuous")
