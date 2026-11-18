@@ -180,39 +180,26 @@ def main() -> None:
         daemon=True,
     )
     thread.start()
-    from conveyor.automation import routines
-    routines.start_routines_worker(loop, settings, runner)
-    if getattr(settings, "memory_v2_enabled", False):
-        from personal_tools.memory_v2 import start_purge_worker
-        start_purge_worker(loop, settings)
-    from conveyor.channels import approval_relay
-    relay_consumer = approval_relay.start_relay_worker(loop, settings, channel="web")
-    from agent_coordination.agent_delegation_worker import start as start_delegation
-    delegation_worker = start_delegation(loop, settings)
-    from conveyor.agents import agent_security
-    agent_retention_worker = agent_security.start(loop, settings)
+    from conveyor.entrypoints.background_workers import start_background_workers
+    workers = start_background_workers(loop, server, settings, runner)
+    usage_refresh = workers.usage_refresh
+    agent_retention_worker = workers.agent_retention_worker
+    delegation_worker = workers.delegation_worker
+    relay_consumer = workers.relay_consumer
     logger.info(
         "Conveyor Web Workbench listening on http://%s:%d",
         settings.conveyor_web_host,
         settings.conveyor_web_port,
     )
     start_extra_listeners(server, settings)
-    def _resume_goals() -> None:
-        try:
-            from conveyor.web.web_chat import resume_goal_loops
-            count = resume_goal_loops(settings, runner)
-            if count:
-                logger.info("resumed %d /goal run(s)", count)
-        except Exception:
-            logger.exception("could not resume /goal runs")
-
-    loop.call_soon(_resume_goals)
     try:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
     finally:
         worker_tasks = []
+        if usage_refresh is not None:
+            usage_refresh.cancel()
         if agent_retention_worker is not None:
             agent_retention_worker.cancel()
             worker_tasks.append(agent_retention_worker)
