@@ -922,6 +922,12 @@
   color: #b42318;
 }
 
+.sup-banner--info {
+  border: 1px solid #d0d5dd;
+  background: #fdfdfd;
+  color: #1f2328;
+}
+
 .primary-interface .composer.sup-goal-composer,
 .primary-interface .mobile-ui .composer.sup-goal-composer,
 .primary-interface .sup-goal-composer {

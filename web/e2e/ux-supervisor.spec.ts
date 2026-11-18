@@ -1384,6 +1384,13 @@ const FAILED_QUOTA_TASK: SupervisorTaskDetail = {
   executions: [],
 }
 
+const CANCELLED_TASK: SupervisorTaskDetail = {
+  ...FAILED_QUOTA_TASK,
+  id: 'sup-task-cancelled',
+  state: 'cancelled',
+  error: 'execution did not complete',
+}
+
 test('mock fixture: failed task shows the Chinese reason, and the raw English error stays behind 技术详情 until clicked', async ({ page }) => {
   await page.setViewportSize(DESKTOP)
   await installSupervisorMockFixture(page, { initialTasksByWt: { 'wt-fix-console': [FAILED_QUOTA_TASK] } })
@@ -1398,6 +1405,21 @@ test('mock fixture: failed task shows the Chinese reason, and the raw English er
   await banner.getByText('技术详情', { exact: true }).click()
   await expect(banner.locator('pre')).toHaveText('Claude usage limit reached, resets in 2h')
   await page.screenshot({ path: test.info().outputPath('sup-polish-failed-1440.png') })
+})
+
+test('mock fixture: cancelled task shows a calm note, not an error banner', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  await installSupervisorMockFixture(page, { initialTasksByWt: { 'wt-fix-console': [CANCELLED_TASK] } })
+  await page.goto('/#code')
+  await expect(page.getByRole('heading', { name: 'Conveyor / fix/console' })).toBeVisible()
+
+  const infoBanner = page.locator('.sup-banner--info')
+  await expect(infoBanner).toBeVisible()
+  await expect(infoBanner).toHaveText(/这一轮被停止了/)
+  await expect(page.locator('.sup-banner--error')).toBeHidden()
+
+  await infoBanner.getByText('技术详情', { exact: true }).click()
+  await expect(infoBanner.locator('pre')).toHaveText('execution did not complete')
 })
 
 test('mock fixture: failed task banner reads well at 390px and the 技术详情 disclosure opens with a real tap', async ({ page }) => {
