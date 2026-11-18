@@ -302,6 +302,16 @@ const SUP_STAGE_LABELS: Record<string, string> = {
   cancelled: '已取消',
   failed: '执行失败',
   interrupted: '已中断',
+  recovered: '重启后已恢复',
+  repair_limit_exceeded: '修复次数用完',
+  supervisor_error: '调度出错',
+  unexpected_error: '意外出错',
+  coordinator: '讨论',
+  failure_check: '失败检查',
+  goal_evaluation: '目标评估',
+  impl: '代码实现',
+  implement: '代码实现',
+  validation: '验收检查',
   local_ci: '构建与测试',
   tailscale_transfer: '传输产物',
   vps_verify: '校验版本',
@@ -431,8 +441,22 @@ const SUP_ROLE_SHORT_LABELS: Record<SupervisorRoleKey, string> = {
 export function supStageLabel(stage?: string | null, fallbackState?: string | null): string {
   if (stage && stage.trim()) {
     const key = stage.trim().toLowerCase()
-    return SUP_STAGE_LABELS[key] || stage
+    if (SUP_STAGE_LABELS[key]) {
+      return SUP_STAGE_LABELS[key]
+    }
+    // Key not in map
+    if (/^[a-z0-9_]+$/.test(key)) {
+      // Raw key format
+      if (fallbackState && fallbackState.trim()) {
+        const stateKey = fallbackState.trim().toLowerCase()
+        if (SUP_STAGE_LABELS[stateKey]) return SUP_STAGE_LABELS[stateKey]
+      }
+      return '其他阶段'
+    }
+    // Human text
+    return stage
   }
+  // No stage, check fallback
   if (fallbackState && fallbackState.trim()) {
     const stateKey = fallbackState.trim().toLowerCase()
     if (SUP_STAGE_LABELS[stateKey]) return SUP_STAGE_LABELS[stateKey]
