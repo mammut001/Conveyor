@@ -750,6 +750,117 @@ else:
         self.assertEqual([thinking(a) for a in argvs["B"]], ["medium"])
         self.assertFalse(hasattr(PiExecutor(self.settings), "thinking_override"))
 
+    def test_transient_provider_retry_succeeds(self) -> None:
+        async def fake_spawn(settings, *, role, prompt, **kw):
+            if "interrupted" in prompt:
+                return ags.ExecutionResult(success=True, output="success")
+            return ags.ExecutionResult(
+                success=False, error="Request timed out.", evidence={"meta": {}}
+            )
+
+        with patch("conveyor.agents.agent_supervisor._spawn_cli", side_effect=fake_spawn):
+            with patch.dict(os.environ, {"CONVEYOR_PI_TRANSIENT_RETRY_DELAY": "0"}):
+                result = asyncio.run(PiExecutor(self.settings).run(
+                    role=IMPLEMENTER, prompt="do something", worktree_path=str(self.wt),
+                    timeout_seconds=30))
+        self.assertTrue(result.success)
+        self.assertEqual(result.output, "success")
+        self.assertTrue(result.evidence["meta"]["transient_retry"])
+
+    def test_transient_provider_retry_fails(self) -> None:
+        async def fake_spawn(settings, *, role, prompt, **kw):
+            return ags.ExecutionResult(
+                success=False, error="Request timed out.", evidence={"meta": {}}
+            )
+
+        with patch("conveyor.agents.agent_supervisor._spawn_cli", side_effect=fake_spawn):
+            with patch.dict(os.environ, {"CONVEYOR_PI_TRANSIENT_RETRY_DELAY": "0"}):
+                result = asyncio.run(PiExecutor(self.settings).run(
+                    role=IMPLEMENTER, prompt="do something", worktree_path=str(self.wt),
+                    timeout_seconds=30))
+        self.assertFalse(result.success)
+        self.assertIn("模型服务两次都暂时出错", result.error)
+        self.assertEqual(result.evidence["meta"]["error_kind"], "provider_transient")
+
+    def test_transient_error_only_in_meta_and_none_error_retries(self) -> None:
+        calls = []
+
+        async def fake_spawn(settings, *, role, prompt, **kw):
+            calls.append(prompt)
+            if len(calls) == 1:
+                return ags.ExecutionResult(success=False, error=None,
+                                           evidence={"meta": {"error": "503 Service Unavailable"}})
+            return ags.ExecutionResult(success=True, output="ok")
+
+        with patch("conveyor.agents.agent_supervisor._spawn_cli", side_effect=fake_spawn):
+            with patch.dict(os.environ, {"CONVEYOR_PI_TRANSIENT_RETRY_DELAY": "not-a-number"}), \
+                    patch("conveyor.agents.agent_supervisor.asyncio.sleep") as fake_sleep:
+                async def no_wait(_s):
+                    return None
+                fake_sleep.side_effect = no_wait
+                result = asyncio.run(PiExecutor(self.settings).run(
+                    role=IMPLEMENTER, prompt="do something", worktree_path=str(self.wt),
+                    timeout_seconds=30))
+        self.assertTrue(result.success)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("503", result.evidence["meta"]["first_error"])
+
+    def test_failed_retry_error_has_no_literal_brackets(self) -> None:
+        async def fake_spawn(settings, *, role, prompt, **kw):
+            return ags.ExecutionResult(success=False, error="Request timed out.", evidence={"meta": {}})
+
+        with patch("conveyor.agents.agent_supervisor._spawn_cli", side_effect=fake_spawn):
+            with patch.dict(os.environ, {"CONVEYOR_PI_TRANSIENT_RETRY_DELAY": "0"}):
+                result = asyncio.run(PiExecutor(self.settings).run(
+                    role=IMPLEMENTER, prompt="do something", worktree_path=str(self.wt),
+                    timeout_seconds=30))
+        self.assertEqual(result.error, "模型服务两次都暂时出错（Request timed out），这一轮没做成。")
+
+    def test_no_retry_for_quota_error(self) -> None:
+        async def fake_spawn(settings, *, role, prompt, **kw):
+            return ags.ExecutionResult(
+                success=False, error="429 rate limit", evidence={"meta": {}}
+            )
+
+        # We need a counter to verify it only runs once.
+        calls = 0
+        async def side_effect(*args, **kw):
+            nonlocal calls
+            calls += 1
+            return await fake_spawn(*args, **kw)
+
+        with patch("conveyor.agents.agent_supervisor._spawn_cli", side_effect=side_effect):
+            result = asyncio.run(PiExecutor(self.settings).run(
+                role=IMPLEMENTER, prompt="do something", worktree_path=str(self.wt),
+                timeout_seconds=30))
+        self.assertFalse(result.success)
+        self.assertEqual(calls, 1)
+
+    def test_no_retry_for_local_timeout(self) -> None:
+        async def fake_spawn(settings, *, role, prompt, **kw):
+            return ags.ExecutionResult(
+                success=False, error="timeout", evidence={"meta": {"error_kind": "executor_timeout"}}
+            )
+
+        calls = 0
+        async def side_effect(*args, **kw):
+            nonlocal calls
+            calls += 1
+            return await fake_spawn(*args, **kw)
+
+        with patch("conveyor.agents.agent_supervisor._spawn_cli", side_effect=side_effect):
+            result = asyncio.run(PiExecutor(self.settings).run(
+                role=IMPLEMENTER, prompt="do something", worktree_path=str(self.wt),
+                timeout_seconds=30))
+        self.assertFalse(result.success)
+        self.assertEqual(calls, 1)
+
+    def test_is_transient_provider_error(self) -> None:
+        self.assertTrue(ags._is_transient_provider_error("Request timed out"))
+        self.assertTrue(ags._is_transient_provider_error("503 Service Unavailable"))
+        self.assertFalse(ags._is_transient_provider_error("quota exceeded"))
+        self.assertFalse(ags._is_transient_provider_error("429 timeout"))
+
 
 if __name__ == "__main__":
     unittest.main()
