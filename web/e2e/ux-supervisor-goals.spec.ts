@@ -793,11 +793,60 @@ test('mock fixture: waiting_user shows the question and 继续 posts {message, a
 
   await expect(card).toContainText('进行中')
   await expect(card).toContainText('第 3 / 5 轮')
+  await expect(card).toContainText('第 3 / 5 轮')
   await expect(fixture.goalReplyCalls).toHaveLength(1)
   expect(fixture.goalReplyCalls[0]).toEqual({
     id: 'goal-mock-waiting-1',
     body: { message: '再把移动端的按钮调大一点', achieved: false },
   })
+})
+
+test('mock fixture: round prompt summary is applied in collapsed state and expands', async ({ page }) => {
+  await page.setViewportSize(DESKTOP)
+  const prompt = '这是目标「T」的第 2 轮。目标：O\n\n本轮要做：补上 --sort 的测试'
+  const goal: GoalDetail = {
+    id: 'goal-summary-test',
+    repo_id: 'repo-conveyor',
+    worktree_id: 'wt-fix-console',
+    title: '测试总结',
+    outcome: 'O',
+    max_iterations: 2,
+    role_overrides: {},
+    state: 'running',
+    created_at: '2026-11-10T09:00:00+00:00',
+    updated_at: '2026-11-10T09:00:00+00:00',
+    question: '',
+    summary: '',
+    stop_reason: '',
+    last_next_prompt: '',
+    iterations_used: 1,
+    iterations: [
+      {
+        n: 1,
+        task_id: 'task-1',
+        prompt,
+        decision: '',
+        decision_reason: '',
+        started_at: '2026-11-10T09:00:00+00:00',
+        finished_at: '',
+        task_final_state: 'running',
+        task_state: 'running',
+      },
+    ],
+  }
+  await installGoalsMockFixture(page, { initialGoalsByWt: { 'wt-fix-console': [goal] } })
+  await page.goto('/#code')
+
+  const card = page.getByRole('region', { name: '目标进度' })
+  const iteration = card.locator('.sup-goal-iteration')
+  
+  // Collapsed: show summary
+  await expect(iteration).toContainText('补上 --sort 的测试')
+  await expect(iteration).not.toContainText('这是目标「')
+
+  // Expand
+  await iteration.getByRole('button', { name: '展开全部' }).click()
+  await expect(iteration).toContainText(prompt)
 })
 
 test('mock fixture: 已经达成了 posts achieved:true and the chip becomes 已达成', async ({ page }) => {
