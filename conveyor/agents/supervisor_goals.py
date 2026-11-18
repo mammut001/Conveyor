@@ -3420,6 +3420,7 @@ _INFRA_ERROR_KINDS = frozenset({
     "worktree_unavailable",
     "executor_error",
     "runtime",
+    "review_format",
 })
 _NON_INFRA_ERROR_KINDS = frozenset({
     "code_error",

@@ -6154,6 +6154,29 @@ def reason_or(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 REVIEW_INVALID_ISSUES_DEFAULT = "review produced invalid structured evidence"
+REVIEW_FORMAT_MAX_RETRIES = 2
+REVIEW_FORMAT_FAILED_REASON = "审阅结果的格式三次都不对，这一轮没能完成审阅。"
+_REVIEW_FORMAT_REPLY_MAX_CHARS = 4000
+
+
+def _build_review_format_retry_prompt(
+    base_prompt: str,
+    *,
+    error_message: str,
+    previous_reply: str,
+) -> str:
+    """Append schema-correction instructions and truncated raw reply for a reviewer retry."""
+    clipped_reply = str(previous_reply or "")[:_REVIEW_FORMAT_REPLY_MAX_CHARS]
+    correction = (
+        f"Your previous reply could not be accepted: {error_message}. "
+        "Reply again with ONLY the JSON object in the exact schema given above: "
+        "exactly the keys passed, target_sha, target_fingerprint, issues, checks, summary; "
+        "each check has exactly name, command, passed, output; "
+        "no other keys, no text or code fences outside the object."
+    )
+    if clipped_reply:
+        correction += f"\n\nPrevious reply (truncated to 4000 chars):\n{clipped_reply}"
+    return f"{base_prompt}\n\n{correction}"
 
 
 class ReviewEnvelopeError(SupervisorStateError):
@@ -6879,29 +6902,53 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                     stage=f"review:{round_no}",
                     metadata=exec_meta,
                 )
-                r_result = await _invoke_role_executor(
-                    rev_executor,
-                    role=rev_cfg,
-                    prompt=reviewer_prompt,
-                    worktree_path=wp,
-                    timeout_seconds=timeout,
-                    task_id=task_id,
-                    context=rev_ctx,
-                )
-                if r_result.cancelled or task_cancelled(settings, task_id):
-                    raise SupervisorCancelledError("cancelled during review")
-
-                review_identity = target_identity(wp)
-                if review_identity["sha"] != candidate_sha or review_identity["fingerprint"] != candidate_fp:
-                    flow_error_kind = "worktree_mutated"
-                    raise SupervisorStateError("code changed during review; reviewer violation")
-
-                parsed = None
+                parsed: dict[str, Any] | None = None
                 issue_reason = ""
-                if not r_result.success:
-                    issue_reason = f"review executor failed: {r_result.error}"
-                    last_review_error_kind = _execution_error_kind(r_result) or "executor_error"
-                else:
+                review_format_exhausted = False
+                last_format_error = ""
+                last_raw_reply = ""
+                r_result: ExecutionResult | None = None
+                for format_attempt in range(REVIEW_FORMAT_MAX_RETRIES + 1):
+                    if format_attempt > 0:
+                        if task_cancelled(settings, task_id):
+                            raise SupervisorCancelledError("cancelled during review")
+                        pre_retry_identity = target_identity(wp)
+                        if (
+                            pre_retry_identity["sha"] != candidate_sha
+                            or pre_retry_identity["fingerprint"] != candidate_fp
+                        ):
+                            flow_error_kind = "worktree_mutated"
+                            raise SupervisorStateError("code changed during review; reviewer violation")
+                        attempt_prompt = _build_review_format_retry_prompt(
+                            reviewer_prompt,
+                            error_message=last_format_error,
+                            previous_reply=last_raw_reply,
+                        )
+                    else:
+                        attempt_prompt = reviewer_prompt
+
+                    r_result = await _invoke_role_executor(
+                        rev_executor,
+                        role=rev_cfg,
+                        prompt=attempt_prompt,
+                        worktree_path=wp,
+                        timeout_seconds=timeout,
+                        task_id=task_id,
+                        context=rev_ctx,
+                    )
+                    if r_result.cancelled or task_cancelled(settings, task_id):
+                        raise SupervisorCancelledError("cancelled during review")
+
+                    review_identity = target_identity(wp)
+                    if review_identity["sha"] != candidate_sha or review_identity["fingerprint"] != candidate_fp:
+                        flow_error_kind = "worktree_mutated"
+                        raise SupervisorStateError("code changed during review; reviewer violation")
+
+                    if not r_result.success:
+                        issue_reason = f"review executor failed: {r_result.error}"
+                        last_review_error_kind = _execution_error_kind(r_result) or "executor_error"
+                        break
+
                     try:
                         parsed = parse_review_verdict(
                             r_result.output,
@@ -6909,8 +6956,55 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                             expected_fingerprint=review_identity["fingerprint"],
                             worktree_path=wp,
                         )
+                        break
                     except ReviewEnvelopeError as exc:
+                        last_format_error = str(exc)
+                        last_raw_reply = r_result.output
                         issue_reason = f"invalid review evidence: {exc}"
+                        if format_attempt >= REVIEW_FORMAT_MAX_RETRIES:
+                            review_format_exhausted = True
+                            break
+
+                if review_format_exhausted and r_result is not None:
+                    issues = [REVIEW_FORMAT_FAILED_REASON, *validation_issue_msgs]
+                    record_acceptance(
+                        settings,
+                        task_id,
+                        sha=review_identity["sha"],
+                        passed=False,
+                        issues=issues,
+                        evidence=r_result.output,
+                        evidence_path=r_result.evidence.get("evidence_path", ""),
+                        fingerprint=review_identity["fingerprint"],
+                        self_reported_checks=[],
+                        executed_checks=executed_checks,
+                        evidence_source=(
+                            "operator_validation+invalid_review"
+                            if val_specs
+                            else "reviewer_self_report"
+                        ),
+                        provenance_verified=False,
+                    )
+                    record_handoff(
+                        settings,
+                        task_id,
+                        from_role="reviewer",
+                        to_role="user",
+                        summary=REVIEW_FORMAT_FAILED_REASON,
+                        sha=review_identity["sha"],
+                        evidence_path=r_result.evidence.get("evidence_path", ""),
+                    )
+                    transition(
+                        settings,
+                        task_id,
+                        "failed",
+                        stage="review",
+                        error=REVIEW_FORMAT_FAILED_REASON,
+                        current_sha=review_identity["sha"],
+                        fingerprint=review_identity["fingerprint"],
+                        metadata={"error_kind": "review_format"},
+                    )
+                    return get_task(settings, task_id) or {}
 
                 if parsed is None:
                     issues = [issue_reason or REVIEW_INVALID_ISSUES_DEFAULT, *validation_issue_msgs]
@@ -6920,8 +7014,8 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
                         sha=review_identity["sha"],
                         passed=False,
                         issues=issues,
-                        evidence=r_result.output if r_result.success else r_result.error,
-                        evidence_path=r_result.evidence.get("evidence_path", "") if r_result.success else "",
+                        evidence=r_result.output if (r_result and r_result.success) else (r_result.error if r_result else ""),
+                        evidence_path=r_result.evidence.get("evidence_path", "") if (r_result and r_result.success) else "",
                         fingerprint=review_identity["fingerprint"],
                         self_reported_checks=[],
                         executed_checks=executed_checks,
