@@ -48,6 +48,7 @@ export type SupervisorRoleKey = 'analyst' | 'implementer' | 'reviewer'
 
 export type SupervisorCapabilities = {
   enabled: boolean
+  missing_search_tools?: string[]
   coordinator: { executor: string; model: string | null }
   roles: Record<SupervisorRoleKey, SupervisorRoleConfig>
   executors: SupervisorExecutorInfo[]
@@ -1416,6 +1417,11 @@ export function SupervisorRoleBar({
           {executors.find(exec => exec.name === 'pi' && !exec.available)?.reason && (
             <> {executors.find(exec => exec.name === 'pi')!.reason}</>
           )}
+        </p>
+      )}
+      {!noRoleExecutorReady && (capabilities?.missing_search_tools?.length ?? 0) > 0 && (
+        <p className="sup-role-guidance sup-search-tools-notice" role="status">
+          这台服务器缺少代码搜索工具（ripgrep / fd），执行者只能整页读文件，用量会高很多。管理员可以运行：sudo apt-get install ripgrep fd-find
         </p>
       )}
       <div className="sup-roles-grid">

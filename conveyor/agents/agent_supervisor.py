@@ -565,6 +565,42 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
+# Search tool availability
+# ---------------------------------------------------------------------------
+
+_MISSING_TOOLS_CACHE: tuple[float, list[str]] = (0.0, [])
+_MISSING_TOOLS_LOCK = threading.Lock()
+_MISSING_TOOLS_TTL_SECONDS = 600
+
+
+def missing_search_tools(settings: Any) -> list[str]:
+    """Code-search binaries Pi cannot find ("rg", "fd").
+
+    Pi runs with --offline, so without these its grep/find tools fail and every
+    role reads whole files instead (measured: ~1.3M input tokens per review on a
+    180 KB repo). Each run gets a fresh isolated PI_CODING_AGENT_DIR with no
+    bin/, so the child PATH is what matters.
+    """
+    global _MISSING_TOOLS_CACHE
+    now = time.time()
+    with _MISSING_TOOLS_LOCK:
+        stamp, cached = _MISSING_TOOLS_CACHE
+        if stamp and now - stamp < _MISSING_TOOLS_TTL_SECONDS:
+            return list(cached)
+        try:
+            path = _child_env(settings, executors="pi").get("PATH") or os.environ.get("PATH") or os.defpath
+        except Exception:
+            path = os.environ.get("PATH") or os.defpath
+        missing: list[str] = []
+        if not shutil.which("rg", path=path):
+            missing.append("rg")
+        if not (shutil.which("fd", path=path) or shutil.which("fdfind", path=path)):
+            missing.append("fd")
+        _MISSING_TOOLS_CACHE = (now, missing)
+        return list(missing)
+
+
+# ---------------------------------------------------------------------------
 # Durable cross-platform process identity (macOS XNU libproc + Linux /proc)
 # ---------------------------------------------------------------------------
 
@@ -4405,6 +4441,7 @@ class PiExecutor:
     argv.
     """
     name = "pi"
+    _warned = False
 
     def __init__(self, settings: Any) -> None:
         self.settings = settings
@@ -4473,6 +4510,12 @@ class PiExecutor:
     async def run(self, *, role: RoleConfig, prompt: str, worktree_path: str,
                   timeout_seconds: int, task_id: str = "",
                   context: ExecutionContext | None = None) -> ExecutionResult:
+        if not PiExecutor._warned:
+            missing = missing_search_tools(self.settings)
+            if missing:
+                log.warning("Pi code-search tools missing (%s): grep/find will fail and roles will read whole files", ", ".join(missing))
+                PiExecutor._warned = True
+
         def _argv_with(level: str) -> Any:
             # Per-call builder: the thinking level lives in this closure, not
             # on the shared instance, so concurrent runs never see each other's.
