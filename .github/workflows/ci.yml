@@ -173,6 +173,17 @@ jobs:
       - name: Run Web Workbench browser E2E
         run: npm run test:e2e
 
+      # Flaky failures (e.g. r8-onboarding N27) only reproduce on CI runners: keep the
+      # screenshot and page snapshot Playwright writes so the next failure is diagnosable.
+      - name: Upload E2E failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-e2e-test-results
+          path: web/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Verify chat interactions
         run: npm run test:chat
 
