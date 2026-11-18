@@ -278,6 +278,18 @@ def handle_post(
             handler._json(HTTPStatus.OK, result)
             return True
 
+        if len(parts) == 5 and parts[:3] == ["api", "supervisor", "worktrees"] and parts[4] == "restore":
+            blocked = project_create_block_reason(getattr(handler, "headers", None))
+            if blocked is not None:
+                handler._json(
+                    HTTPStatus.FORBIDDEN,
+                    {"error": "请求未通过站点校验", "code": "origin_or_request_denied"},
+                )
+                return True
+            wt = svc.restore_missing_worktree(settings, parts[3])
+            handler._json(HTTPStatus.OK, wt)
+            return True
+
         if path == "/api/supervisor/tasks":
             task, created = svc.create_scoped_task(settings, body)
             handler._json(HTTPStatus.CREATED if created else HTTPStatus.OK, task)

@@ -72,6 +72,7 @@ CODE_INVALID_MESSAGE = "invalid_message"
 CODE_WORKTREE_NOT_FOUND = "worktree_not_found"
 CODE_WORKTREE_MISSING = "worktree_missing"
 CODE_UNMANAGED_WORKTREE = "unmanaged_worktree"
+CODE_WORKTREE_FOLDER_MISSING = "worktree_folder_missing"
 CODE_WORKTREE_BUSY = "worktree_busy"
 CODE_TARGET_BRANCH_UNKNOWN = "target_branch_unknown"
 CODE_DETACHED_SOURCE = "detached_source"
@@ -85,6 +86,8 @@ CODE_MERGE_CONFLICT = "merge_conflict"
 CODE_COMMIT_FAILED = "commit_failed"
 CODE_MERGE_ABORT_FAILED = "merge_abort_failed"
 CODE_MISSING_GIT_IDENTITY = "missing_git_identity"
+
+WORKTREE_FOLDER_MISSING_MESSAGE = svc.WORKTREE_FOLDER_MISSING_MESSAGE
 
 _MISSING_GIT_IDENTITY_MARKERS = (
     "committer identity unknown",
@@ -516,6 +519,41 @@ def _expected_source_branches(scope: dict[str, Any]) -> set[str]:
     return candidates
 
 
+def _worktree_folder_missing(scope: dict[str, Any]) -> bool:
+    """True when the worktree's folder was deleted on disk (its branch still lives)."""
+    wt = scope.get("worktree") or {}
+    return bool(wt.get("missing")) or str(wt.get("state") or "") == "missing"
+
+
+def _branch_commits_ahead(
+    settings: Any,
+    scope: dict[str, Any],
+    target_branch: str,
+    source_branch: str,
+) -> int:
+    """Commits on `source_branch` that `target_branch` does not have, read from the main checkout.
+
+    Used when the worktree's folder is gone: `git -C <worktree>` cannot run, but the
+    branch itself still answers for every commit it holds.
+    """
+    if not source_branch or not target_branch or source_branch == target_branch:
+        return 0
+    main_path = str(scope["main_path"])
+    if not _branch_exists(settings, main_path, source_branch):
+        return 0
+    rc, out, _ = _git(
+        settings,
+        main_path,
+        ["rev-list", "--count", f"refs/heads/{target_branch}..refs/heads/{source_branch}"],
+    )
+    if rc != 0:
+        return 0
+    try:
+        return max(0, int(out.strip() or "0"))
+    except ValueError:
+        return 0
+
+
 def _collect_blockers(
     settings: Any,
     scope: dict[str, Any],
@@ -540,6 +578,13 @@ def _collect_blockers(
             CODE_UNMANAGED_WORKTREE,
             "只能合并受 Supervisor 托管的 worktree，主工作目录不能作为合并来源",
         ))
+        return blockers
+
+    # 1b. The folder itself is gone (deleted on disk): the branch still holds every
+    # commit, but nothing can be committed or merged out of a directory that is
+    # not there. Restoring it is one click in 项目; never guess a path here.
+    if bool(wt.get("missing")) or str(wt.get("state") or "") == "missing":
+        blockers.append(_blocker(CODE_WORKTREE_FOLDER_MISSING, WORKTREE_FOLDER_MISSING_MESSAGE))
         return blockers
 
     # 2. Nothing may be running on the worktree.
@@ -698,6 +743,28 @@ def build_merge_preview(settings: Any, worktree_id: Any) -> dict[str, Any]:
     opening the preview can never fire a filter an agent planted.
     """
     scope = _resolve_scope(settings, worktree_id)
+    if _worktree_folder_missing(scope):
+        # Nothing on disk to scan or diff. Report the branch that still holds the
+        # work and the one action that can bring it back — never a git error.
+        target_branch = _target_branch(settings, scope)
+        source_branch = str(
+            scope["worktree"].get("branch") or scope.get("recorded_branch") or ""
+        ).strip()
+        return {
+            "worktree_id": str(scope["worktree_id"]),
+            "repo_id": str(scope["repo_id"]),
+            "source_branch": source_branch,
+            "target_branch": target_branch,
+            "can_merge": False,
+            "blockers": [
+                _blocker(CODE_WORKTREE_FOLDER_MISSING, WORKTREE_FOLDER_MISSING_MESSAGE)
+            ],
+            "files": [],
+            "commits_ahead": _branch_commits_ahead(
+                settings, scope, target_branch, source_branch
+            ),
+            "has_uncommitted": False,
+        }
     target_branch = _target_branch(settings, scope)
     source_branch = _current_branch(settings, str(scope["worktree_path"]))
     risk_blockers = _repo_risk_blockers(settings, scope)

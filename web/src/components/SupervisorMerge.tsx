@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { SupervisorWorktree } from './SupervisorWorkspace'
+import { isMissingWorktree, type SupervisorWorktree } from './SupervisorWorkspace'
 import { ChangedFileList, type FileStat } from './TaskParts'
 
 // ---------------------------------------------------------------------------
@@ -42,6 +42,8 @@ export type SupervisorMergeResult = {
 const MERGE_LOADING_NOTE = '正在检查这个工作目录能不能合并…'
 const MERGE_ERROR_NOTE = '暂时读不到这个工作目录的合并信息，稍后再试。'
 const MERGE_NOTHING_NOTE = '这个工作目录还没有可以合并的改动。'
+// 文件夹丢了：合并前必须先「恢复工作目录」，这句话盖过任何别的说法（后端码永远不出现在页面上）。
+const MERGE_MISSING_NOTE = '工作目录的文件夹丢了，请先在 项目 里点「恢复工作目录」'
 const MERGE_RECHECK_LABEL = '重新检查'
 const MERGE_MERGING_LABEL = '正在合并…'
 const MERGE_CONFIRM_LABEL = '确定合并'
@@ -163,8 +165,17 @@ export default function SupervisorMerge({
   const blockers = Array.isArray(preview?.blockers) ? preview!.blockers : []
   const source = (preview?.source_branch || worktree.branch || '').trim()
   const target = (preview?.target_branch || '').trim()
-  // 一个文件改动都没有、也没有没提交的改动：没什么可合并的。
-  const nothingToMerge = loadState === 'ready' && files.length === 0 && !preview?.has_uncommitted
+  // 文件夹丢了：先说要恢复，别让「没有可合并的改动」这句挡在前面。后端也会给同一句话，
+  // 老服务器没给的时候前端照样说，合并按钮更不会出现。
+  const missingNote = isMissingWorktree(worktree)
+    ? (blockers.find(b => b.code === 'worktree_folder_missing')?.message || MERGE_MISSING_NOTE)
+    : ''
+  // 一个文件改动都没有、也没有没提交的改动、也没有挡住的原因：没什么可合并的。
+  const nothingToMerge = loadState === 'ready'
+    && !missingNote
+    && blockers.length === 0
+    && files.length === 0
+    && !preview?.has_uncommitted
   const stats: Record<string, FileStat> = {}
   const chipFiles: { path: string; status: string }[] = []
   for (const file of files) {
@@ -184,20 +195,27 @@ export default function SupervisorMerge({
         <p className="sup-merge-success" role="status">{mergeSuccessText(target, mergedSha)}</p>
       )}
 
-      {loadState === 'loading' && <p className="sup-muted-note">{MERGE_LOADING_NOTE}</p>}
+      {loadState === 'loading' && !missingNote && <p className="sup-muted-note">{MERGE_LOADING_NOTE}</p>}
 
-      {loadState === 'error' && (
+      {loadState === 'error' && !missingNote && (
         <div className="sup-merge-block">
           <p className="sup-muted-note">{MERGE_ERROR_NOTE}</p>
           <button type="button" className="shell-button" onClick={reload}>{MERGE_RECHECK_LABEL}</button>
         </div>
       )}
 
-      {loadState === 'ready' && nothingToMerge && (
+      {missingNote && (
+        <div className="sup-merge-block">
+          <p className="sup-muted-note">{missingNote}</p>
+          <button type="button" className="shell-button" onClick={reload}>{MERGE_RECHECK_LABEL}</button>
+        </div>
+      )}
+
+      {loadState === 'ready' && !missingNote && nothingToMerge && (
         <p className="sup-muted-note">{MERGE_NOTHING_NOTE}</p>
       )}
 
-      {loadState === 'ready' && !nothingToMerge && blockers.length > 0 && (
+      {loadState === 'ready' && !missingNote && !nothingToMerge && blockers.length > 0 && (
         <div className="sup-merge-block">
           <ul className="sup-merge-blockers" aria-label="暂时不能合并的原因">
             {blockers.map((blocker, index) => (
@@ -208,7 +226,7 @@ export default function SupervisorMerge({
         </div>
       )}
 
-      {loadState === 'ready' && !nothingToMerge && blockers.length === 0 && (
+      {loadState === 'ready' && !missingNote && !nothingToMerge && blockers.length === 0 && (
         <div className="sup-merge-block">
           <p className="sup-merge-summary">{mergeSummaryText(source, files.length, target)}</p>
           <div className="sup-changes">
