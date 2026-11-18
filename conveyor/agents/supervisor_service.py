@@ -1739,6 +1739,50 @@ def _init_empty_git_repository(settings: Any, dest: Path) -> None:
         shutil.rmtree(template, ignore_errors=True)
 
 
+
+def clear_stale_project_create_markers(settings: Any) -> int:
+    """Remove `.conveyor-project-create` left by earlier versions in registered projects.
+
+    The marker only guards rollback of a failed creation; once a project is
+    registered it is just an untracked file in the owner's repo. Only a regular
+    file whose content names that directory's own identity is removed. Never
+    raises and never creates the projects root.
+    """
+    removed = 0
+    try:
+        task_root_raw = getattr(settings, "codex_task_root", "") or ""
+        if not task_root_raw:
+            return 0
+        projects_root = os.path.realpath(os.path.join(_canonical_internal_path(str(task_root_raw)), "projects"))
+        if not os.path.isdir(projects_root):
+            return 0
+        repos = list_repositories(settings)
+    except Exception:
+        log.debug("stale project marker cleanup skipped", exc_info=True)
+        return 0
+    for repo in repos:
+        try:
+            repo_path = Path(str(repo.get("path") or ""))
+            if not str(repo_path) or os.path.dirname(os.path.realpath(repo_path)) != projects_root:
+                continue
+            st = os.lstat(repo_path)
+            if not stat.S_ISDIR(st.st_mode):
+                continue
+            marker = repo_path / _PROJECT_CREATE_MARKER
+            mst = os.lstat(marker)
+            if not stat.S_ISREG(mst.st_mode):
+                continue
+            if marker.read_text(encoding="utf-8") == _project_create_marker_text((st.st_dev, st.st_ino)):
+                marker.unlink()
+                removed += 1
+        except OSError:
+            continue
+        except Exception:
+            log.debug("stale project marker cleanup failed for one repo", exc_info=True)
+            continue
+    return removed
+
+
 def create_managed_project(settings: Any, *, name: Any) -> dict[str, Any]:
     """Create a new empty Git repository under the server-managed projects root.
 
@@ -1791,6 +1835,12 @@ def create_managed_project(settings: Any, *, name: Any) -> dict[str, Any]:
                 "这个位置已经登记过，没有改动原来的仓库",
                 code="project_exists",
             )
+        try:
+            marker = dest / _PROJECT_CREATE_MARKER
+            if marker.is_file() and marker.read_text(encoding="utf-8") == _project_create_marker_text(created_identity):
+                marker.unlink()
+        except OSError:
+            pass
         worktree = create_managed_worktree(settings, str(repo["id"]))
     except Exception:
         if created_identity is not None and not _project_path_registered(settings, dest):
