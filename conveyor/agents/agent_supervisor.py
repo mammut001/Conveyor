@@ -3021,7 +3021,14 @@ def usage_summary_phrase(usage: Any) -> str:
         if before_recording > 0:
             return "这个目标是在开始记录用量之前跑的"
         return ""
-    phrase = f"用了{format_tokens(usage_total_tokens(usage))}"
+    total = usage_total_tokens(usage)
+    phrase = f"用了{format_tokens(total)}"
+    cached = int(usage.get("cached_input_tokens") or 0)
+    if cached > 0 and total > 0:
+        pct = round(100 * cached / total)
+        if pct > 0:
+            phrase += f"（其中约 {pct}% 命中缓存）"
+
     if without_usage > 0:
         phrase += "（部分执行者没有报告用量）"
     elif before_recording > 0:
@@ -6667,9 +6674,6 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
         analyst_executor = get_executor(settings, analyst_cfg.executor)
         analysis_prompt = (
             "You are the analyst. Inspect the real repository under the current worktree.\n"
-            f"Goal: {goal}\n"
-            f"Repository: {repo_path}\n"
-            f"Worktree: {wp}\n"
             "Read the relevant code and constraints. Produce a concrete implementation plan, "
             "impact scope, and explicit acceptance criteria based on the current content.\n"
             "Do not modify any files: you have read-only access and will be audited against this."
@@ -6682,6 +6686,11 @@ async def run_supervisor_flow(settings: Any, task_id: str, *,
             analysis_prompt += f"\n{discussion_context}\n"
         if project_notes_context:
             analysis_prompt += f"\n{project_notes_context}\n"
+        analysis_prompt += (
+            f"\nGoal: {goal}\n"
+            f"Repository: {repo_path}\n"
+            f"Worktree: {wp}\n"
+        )
 
         analyst_ctx = ExecutionContext(
             task_id=task_id, repo_path=repo_path, worktree_path=wp, stage="analysis",
@@ -7784,6 +7793,28 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
             check_sh_exists = False
 
     server_date = (today or datetime.now().strftime("%Y-%m-%d")).strip()
+
+    def _reviewer_envelope(sha: str | None = None, fp: str | None = None) -> str:
+        target_sha = sha if sha is not None else "<Current SHA>"
+        target_fingerprint = fp if fp is not None else "<Target fingerprint>"
+        return (
+            "When done, reply with ONLY this exact JSON object (no prose outside it):\n"
+            "{\n"
+            '  "passed": true,\n'
+            f'  "target_sha": "{target_sha}",\n'
+            f'  "target_fingerprint": "{target_fingerprint}",\n'
+            '  "issues": [],\n'
+            '  "checks": [{"name": "<non-empty check name>", "command": "<audited validation or inspection check>", "passed": true, "output": "<stdout/stderr or inspection excerpt, or empty string>"}],\n'
+            '  "summary": "<non-empty one-paragraph summary>"\n'
+            "}\n"
+            "Schema rules:\n"
+            '- "passed" and each check\'s "passed" must be JSON booleans (true or false).\n'
+            '- "target_sha" and "target_fingerprint" must match Current SHA and Target fingerprint exactly.\n'
+            '- "summary", check "name", and check "command" must be non-empty strings; check "output" is required and must be a string (may be "").\n'
+            '- When "passed" is true: "issues" MUST be [] (no unresolved issues), "checks" MUST be non-empty, and every check MUST have "passed": true.\n'
+            '- When "passed" is false: list concrete non-empty failure strings in "issues".\n'
+        )
+
     instruction = (
         "You are an INDEPENDENT code reviewer. Verify the implementation ACTUALLY works.\n"
         "Inspect the repository files and candidate diff yourself using read-only file access "
@@ -7805,30 +7836,13 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
             "(such as only `exit 0`, `true`, or `echo ok`) or does not actually exercise "
             "the project, and state the reason in Chinese in `issues`.\n"
         )
-    envelope = (
-        "When done, reply with ONLY this exact JSON object (no prose outside it):\n"
-        "{\n"
-        '  "passed": true,\n'
-        f'  "target_sha": "{current_sha}",\n'
-        f'  "target_fingerprint": "{fingerprint}",\n'
-        '  "issues": [],\n'
-        '  "checks": [{"name": "<non-empty check name>", "command": "<audited validation or inspection check>", "passed": true, "output": "<stdout/stderr or inspection excerpt, or empty string>"}],\n'
-        '  "summary": "<non-empty one-paragraph summary>"\n'
-        "}\n"
-        "Schema rules:\n"
-        '- "passed" and each check\'s "passed" must be JSON booleans (true or false).\n'
-        '- "target_sha" and "target_fingerprint" must match Current SHA and Target fingerprint exactly.\n'
-        '- "summary", check "name", and check "command" must be non-empty strings; check "output" is required and must be a string (may be "").\n'
-        '- When "passed" is true: "issues" MUST be [] (no unresolved issues), "checks" MUST be non-empty, and every check MUST have "passed": true.\n'
-        '- When "passed" is false: list concrete non-empty failure strings in "issues".\n'
-    )
-    parts = [
-        instruction,
-        f"Goal: {goal}",
-        f"Base SHA: {base_sha}",
-        f"Current SHA: {current_sha}",
-        f"Target fingerprint: {fingerprint}",
-    ]
+    parts = [instruction, _reviewer_envelope()]
+
+    notes_block = format_project_notes(project_notes)
+    if notes_block:
+        parts.append(notes_block)
+
+    parts.append(f"Goal: {goal}")
     if acceptance_criteria:
         parts.append(f"Acceptance criteria:\n{acceptance_criteria}")
     if discussion_context:
@@ -7837,6 +7851,11 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
         parts.append(f"Analysis plan:\n{analysis_plan}")
     if implementer_summary:
         parts.append(f"Implementer summary (to verify, not to trust):\n{implementer_summary}")
+    parts.extend([
+        f"Base SHA: {base_sha}",
+        f"Current SHA: {current_sha}",
+        f"Target fingerprint: {fingerprint}",
+    ])
     if validation_results is not None:
         if validation_results:
             val_lines: list[str] = []
@@ -7856,10 +7875,8 @@ def build_reviewer_prompt(*, goal: str, worktree_path: str, base_sha: str, curre
     diff_text = _git_diff(worktree_path, base_sha=base_sha)
     if diff_text:
         parts.append(f"Actual diff (committed + uncommitted candidate) vs base:\n{diff_text}")
-    parts.append(envelope)
-    notes_block = format_project_notes(project_notes)
-    if notes_block:
-        parts.append(notes_block)
+    
+    parts.append(_reviewer_envelope(current_sha, fingerprint))
     return "\n\n".join(parts)
 
 

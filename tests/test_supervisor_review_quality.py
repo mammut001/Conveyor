@@ -330,6 +330,40 @@ class ReviewerPromptAndFlowTests(unittest.TestCase):
         self.assertIn("Usefulness rule:", prompt)
         self.assertIn("does not move the stated goal forward", prompt)
 
+    def test_reviewer_prompt_order_and_content(self) -> None:
+        ident = ags.target_identity(str(self.wt))
+        goal = "给 README 加一段项目介绍"
+        notes = "Project notes"
+        prompt = ags.build_reviewer_prompt(
+            goal=goal,
+            worktree_path=str(self.wt),
+            base_sha=self.head,
+            current_sha=ident["sha"],
+            fingerprint=ident["fingerprint"],
+            analysis_plan="Update README",
+            implementer_summary="Updated README",
+            acceptance_criteria="README accurate",
+            project_notes=notes,
+        )
+
+        # 1. Goal present
+        self.assertIn(f"Goal: {goal}", prompt)
+
+        # 2. First occurrence of current SHA comes after Goal
+        goal_idx = prompt.find(f"Goal: {goal}")
+        sha_idx = prompt.find(ident["sha"])
+        self.assertTrue(sha_idx > goal_idx, f"Real SHA should appear after Goal. Goal: {goal_idx}, SHA: {sha_idx}")
+
+        # 3. Notes appear before Goal
+        notes_idx = prompt.find(notes)
+        self.assertTrue(notes_idx < goal_idx, f"Notes should appear before Goal. Notes: {notes_idx}, Goal: {goal_idx}")
+
+        # 4. Final schema contains the real sha
+        final_part = prompt.split("\n\n")[-1]
+        self.assertIn(f'"target_sha": "{ident["sha"]}"', final_part)
+        self.assertIn(f'"target_fingerprint": "{ident["fingerprint"]}"', final_part)
+
+
     def test_leak_fails_round_without_calling_model_reviewer_then_repairs(self) -> None:
         val_cmd = ("check-readme", (sys.executable, "-c", "import pathlib; assert pathlib.Path('README.md').is_file()"))
         settings = _make_settings(self.tmp, validation_commands=(val_cmd,))
