@@ -257,6 +257,65 @@
   white-space: nowrap;
 }
 
+/* 文件夹丢了的工作目录：整行是一个容器（选中 + 恢复两个按钮），不是一个大按钮。 */
+.sup-worktree-item--missing {
+  cursor: default;
+  border-color: #f3d0a8;
+  background: #fffaf2;
+}
+
+.sup-worktree-item--missing:hover {
+  background: #fff6e9;
+}
+
+.sup-worktree-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sup-worktree-item-note {
+  margin: 2px 0 0;
+  color: #b54708;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.sup-worktree-restore {
+  align-self: flex-start;
+  min-height: 30px;
+  margin-top: 2px;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.sup-context-missing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid #f3d0a8;
+  border-radius: 8px;
+  background: #fffaf2;
+  color: #b54708;
+  font-size: 12px;
+}
+
+.sup-missing-card {
+  border-color: #f3d0a8;
+  background: #fffaf2;
+}
+
 .sup-wt-badge {
   flex: none;
   display: inline-flex;
@@ -279,6 +338,12 @@
 }
 
 .sup-wt-badge--locked {
+  background: #fffaeb;
+  color: #b54708;
+}
+
+/* 文件夹丢了：分支还在，恢复之后就能继续。 */
+.sup-wt-badge--missing {
   background: #fffaeb;
   color: #b54708;
 }

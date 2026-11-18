@@ -74,6 +74,12 @@ export type SupervisorWorktree = {
   chat_session_id?: string
   /** 创建工作目录的时间；老服务器不带这个字段，读的时候按「没有」处理。 */
   created_at?: string
+  /** "ready" = 文件夹在位；"missing" = 文件夹丢了，改动还在分支上（可以「恢复工作目录」）。 */
+  state?: string
+  /** 文件夹丢了的快捷判断（老服务器不带这个字段，按在位处理）。 */
+  missing?: boolean
+  /** 文件夹丢了时：分支比主分支多出来的提交数。 */
+  ahead_of_base?: number
 }
 
 export type SupervisorRepo = {
@@ -718,10 +724,63 @@ export function SupervisorReadOnlyWorktreeCard({
   )
 }
 
+/**
+ * 文件夹丢了的工作目录上代替派发 / 目标表单的这一张卡：
+ * 一句话说清改动还在分支上，一个主按钮「恢复工作目录」（同一个路径恢复，
+ * 之前的目标和任务都还指着它）。恢复失败也在这里说，不猜原因。
+ */
+export function SupervisorMissingWorktreeCard({
+  worktree,
+  busy,
+  error,
+  onRestore,
+}: {
+  worktree: SupervisorWorktree
+  busy?: boolean
+  error?: string
+  onRestore: (worktreeId: string) => void | Promise<unknown>
+}) {
+  const branch = worktree.branch || 'detached'
+  return (
+    <section className="sup-card sup-missing-card" aria-label="工作目录文件夹丢了">
+      <div className="sup-readonly-card-text">
+        <strong>{MISSING_WORKTREE_NOTE} <code>{branch}</code> 上</strong>
+        <span>
+          服务器上这个工作目录的文件夹不在了，Git 分支和上面的提交都还在。恢复后会回到原来的位置，之前的目标和任务都还能找到它。
+        </span>
+      </div>
+      <div className="sup-readonly-card-actions">
+        <button
+          type="button"
+          className="shell-button primary"
+          disabled={busy}
+          onClick={() => { void onRestore(worktree.id) }}
+        >
+          {busy ? '正在恢复…' : '恢复工作目录'}
+        </button>
+      </div>
+      {error && (
+        <div className="sup-banner sup-banner--error" role="alert">
+          <strong>没有恢复成功</strong>
+          <span>{error}</span>
+        </div>
+      )}
+    </section>
+  )
+}
+
 function shortSha(sha?: string | null): string {
   if (!sha) return ''
   return sha.trim().slice(0, 7)
 }
+
+/** 文件夹丢了：分支和上面的提交都还在，恢复之后就能继续（老服务器不带这些字段时按在位处理）。 */
+export function isMissingWorktree(wt: SupervisorWorktree): boolean {
+  return Boolean(wt.missing || (wt.state || '') === 'missing')
+}
+
+/** 文件夹丢了的统一说法：分支还在，改动就还在。 */
+export const MISSING_WORKTREE_NOTE = '文件夹丢了，改动还在分支'
 
 function formatShortTime(value?: string | null): string {
   if (!value) return '—'
@@ -763,8 +822,9 @@ export function MachineIcon({ kind }: { kind: 'laptop' | 'network' | 'server' })
   )
 }
 
-function worktreeBadgeInfo(wt: SupervisorWorktree): { label: string; tone: 'readonly' | 'locked' | 'ready' } {
+function worktreeBadgeInfo(wt: SupervisorWorktree): { label: string; tone: 'readonly' | 'locked' | 'ready' | 'missing' } {
   if (wt.is_main) return { label: '主分支（只看）', tone: 'readonly' }
+  if (isMissingWorktree(wt)) return { label: '文件夹丢了', tone: 'missing' }
   if (!wt.managed) return { label: '未托管（只看）', tone: 'readonly' }
   const activeState = (wt.active_task_state || '').trim().toLowerCase()
   if (activeState === 'waiting_user' || activeState === 'waiting_for_user' || activeState === 'waiting_for_human') {
@@ -786,6 +846,9 @@ function SupervisorRepoSidebar({
   onRegisterRepo,
   onCreateProject,
   onCreateWorktree,
+  onRestoreWorktree,
+  restoreBusyWorktreeId,
+  restoreWorktreeError,
   registerBusy,
   registerError,
   createProjectBusy,
@@ -807,6 +870,10 @@ function SupervisorRepoSidebar({
   onRegisterRepo: (path: string, name?: string) => Promise<boolean>
   onCreateProject: (name: string) => Promise<boolean>
   onCreateWorktree: (repoId: string, branch?: string, baseRef?: string) => Promise<boolean>
+  /** 文件夹丢了的工作目录：「恢复工作目录」。 */
+  onRestoreWorktree: (worktreeId: string) => void | Promise<unknown>
+  restoreBusyWorktreeId: string
+  restoreWorktreeError: { worktreeId: string; message: string } | null
   registerBusy: boolean
   registerError: string
   createProjectBusy: boolean
@@ -1009,6 +1076,48 @@ function SupervisorRepoSidebar({
                   {(repo.worktrees || []).map(wt => {
                     const active = repo.id === selectedRepoId && wt.id === selectedWorktreeId
                     const badge = worktreeBadgeInfo(wt)
+                    const missing = isMissingWorktree(wt)
+                    if (missing) {
+                      // 文件夹丢了：选中和「恢复工作目录」必须是两个按钮，不能套在一起。
+                      return (
+                        <div
+                          key={wt.id}
+                          className={`sup-worktree-item sup-worktree-item--missing ${active ? 'active' : ''}`}
+                          aria-current={active ? 'true' : undefined}
+                        >
+                          <button
+                            type="button"
+                            className="sup-worktree-item-main"
+                            onClick={() => onSelectWorktree(repo.id, wt.id)}
+                          >
+                            <div className="sup-worktree-item-top">
+                              <span className="sup-worktree-branch" title={wt.branch || wt.path}>
+                                <span className="sup-branch-glyph" aria-hidden="true">⑂</span>
+                                <strong>{wt.branch || 'detached'}</strong>
+                              </span>
+                              <span className={`sup-wt-badge sup-wt-badge--${badge.tone}`}>{badge.label}</span>
+                            </div>
+                            <div className="sup-worktree-item-meta">
+                              {wt.head && <code>{shortSha(wt.head)}</code>}
+                            </div>
+                            <p className="sup-worktree-item-note">
+                              {MISSING_WORKTREE_NOTE} <strong>{wt.branch || 'detached'}</strong> 上
+                            </p>
+                          </button>
+                          {restoreWorktreeError && restoreWorktreeError.worktreeId === wt.id && (
+                            <p className="sup-inline-error" role="alert">{restoreWorktreeError.message}</p>
+                          )}
+                          <button
+                            type="button"
+                            className="shell-button sup-worktree-restore"
+                            disabled={restoreBusyWorktreeId === wt.id}
+                            onClick={() => onRestoreWorktree(wt.id)}
+                          >
+                            {restoreBusyWorktreeId === wt.id ? '正在恢复…' : '恢复工作目录'}
+                          </button>
+                        </div>
+                      )
+                    }
                     return (
                       <button
                         key={wt.id}
@@ -2005,6 +2114,9 @@ export function SupervisorWorkspace({
   const [createWorktreeError, setCreateWorktreeError] = useState('')
   const [createProjectBusy, setCreateProjectBusy] = useState(false)
   const [createProjectError, setCreateProjectError] = useState('')
+  // 文件夹丢了的工作目录：「恢复工作目录」的进行中 / 失败（按工作目录 id 记，哪个卡片说哪句）。
+  const [restoreBusyWorktreeId, setRestoreBusyWorktreeId] = useState('')
+  const [restoreWorktreeError, setRestoreWorktreeError] = useState<{ worktreeId: string; message: string } | null>(null)
   const [retryPrepNote, setRetryPrepNote] = useState('')
 
   // Per-context isolated drafts and data snapshots
@@ -2466,6 +2578,40 @@ export function SupervisorWorkspace({
     }
   }, [apiCall, selectWorktreeContext])
 
+  // 文件夹丢了：POST .../restore 让服务器在原来的路径上把它建回来（分支和提交都没动），
+  // 成功后选中它——老板点这一下就是要回到这个工作目录继续干活。
+  const handleRestoreWorktree = useCallback(async (worktreeId: string) => {
+    if (!worktreeId || restoreBusyWorktreeId) return
+    setRestoreBusyWorktreeId(worktreeId)
+    setRestoreWorktreeError(null)
+    try {
+      const restored = await apiCall<SupervisorWorktree>(
+        `/api/supervisor/worktrees/${encodeURIComponent(worktreeId)}/restore`,
+        {
+          method: 'POST',
+          headers: { 'X-Requested-With': 'XMLHttpRequest' },
+          body: JSON.stringify({}),
+        },
+      )
+      setRepositories(prev =>
+        prev.map(repo => {
+          const wts = repo.worktrees || []
+          if (!wts.some(w => w.id === restored.id)) return repo
+          return { ...repo, worktrees: wts.map(w => (w.id === restored.id ? restored : w)) }
+        }),
+      )
+      const ownerRepo = repositories.find(r => (r.worktrees || []).some(w => w.id === restored.id))
+      if (ownerRepo) selectWorktreeContext(ownerRepo.id, restored.id)
+    } catch (err) {
+      setRestoreWorktreeError({
+        worktreeId,
+        message: err instanceof Error ? err.message : '恢复工作目录失败，请稍后再试',
+      })
+    } finally {
+      setRestoreBusyWorktreeId('')
+    }
+  }, [apiCall, repositories, restoreBusyWorktreeId, selectWorktreeContext])
+
   const currentDraft: WorktreeDraft = useMemo(() => {
     if (!contextKey) return { goal: '', acceptanceCriteria: '' }
     return draftsByContext[contextKey] || { goal: '', acceptanceCriteria: '' }
@@ -2639,6 +2785,12 @@ export function SupervisorWorkspace({
   }, [capabilities, effectiveRoles])
 
   const isReadOnlyWorktree = Boolean(selectedWorktree && (selectedWorktree.is_main || !selectedWorktree.managed))
+  // 文件夹丢了的工作目录：分支还在，但服务器上没有目录可写，先恢复再派发。
+  const isMissingWorktreeSelected = Boolean(selectedWorktree && isMissingWorktree(selectedWorktree))
+  const restoreErrorForSelected = restoreWorktreeError?.worktreeId
+    && restoreWorktreeError.worktreeId === selectedWorktree?.id
+    ? restoreWorktreeError.message
+    : ''
   const hasInflightTaskInWorktree = useMemo(
     () =>
       currentSnapshot.tasks.some(t => {
@@ -2665,7 +2817,7 @@ export function SupervisorWorkspace({
     event.preventDefault()
     if (!selectedRepo || !selectedWorktree || !contextKey || dispatchBusy) return
     const goal = currentDraft.goal.trim()
-    if (!goal || isReadOnlyWorktree || isLockedWorktree || unavailableRoleReasons.length > 0) return
+    if (!goal || isReadOnlyWorktree || isMissingWorktreeSelected || isLockedWorktree || unavailableRoleReasons.length > 0) return
 
     const criteria = currentDraft.acceptanceCriteria.trim()
     const sessionId = currentDraft.preparedSessionId || selectedWorktree.chat_session_id || undefined
@@ -2776,6 +2928,7 @@ export function SupervisorWorkspace({
     dispatchBusy,
     effectiveRoles,
     isLockedWorktree,
+    isMissingWorktreeSelected,
     isReadOnlyWorktree,
     loadContextData,
     pendingByContext,
@@ -3058,6 +3211,9 @@ export function SupervisorWorkspace({
           onRegisterRepo={handleRegisterRepo}
           onCreateProject={handleCreateProject}
           onCreateWorktree={handleCreateWorktree}
+          onRestoreWorktree={(worktreeId) => void handleRestoreWorktree(worktreeId)}
+          restoreBusyWorktreeId={restoreBusyWorktreeId}
+          restoreWorktreeError={restoreWorktreeError}
           registerBusy={registerBusy}
           registerError={registerError}
           createProjectBusy={createProjectBusy}
@@ -3139,6 +3295,21 @@ export function SupervisorWorkspace({
                   <span>主机：{selectedRepo?.source_machine || capabilities?.source_machine}</span>
                 )}
               </div>
+              {isMissingWorktreeSelected && selectedWorktree && (
+                <div className="sup-context-missing" role="status">
+                  <span>
+                    {MISSING_WORKTREE_NOTE} <strong>{selectedWorktree.branch || 'detached'}</strong> 上
+                  </span>
+                  <button
+                    type="button"
+                    className="shell-button primary"
+                    disabled={restoreBusyWorktreeId === selectedWorktree.id}
+                    onClick={() => void handleRestoreWorktree(selectedWorktree.id)}
+                  >
+                    {restoreBusyWorktreeId === selectedWorktree.id ? '正在恢复…' : '恢复工作目录'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -3233,6 +3404,10 @@ export function SupervisorWorkspace({
             visible={active && subTab === 'goals'}
             readOnly={isReadOnlyWorktree}
             locked={isLockedWorktree}
+            missing={isMissingWorktreeSelected}
+            onRestoreWorktree={handleRestoreWorktree}
+            restoreBusyWorktreeId={restoreBusyWorktreeId}
+            restoreWorktreeError={restoreWorktreeError}
             capabilities={capabilities}
             effectiveRoles={effectiveRoles}
             onChangeRole={handleRoleChange}
@@ -3271,6 +3446,13 @@ export function SupervisorWorkspace({
                   error={createWorktreeError}
                   onCreateWorktree={handleCreateWorktree}
                   onSelectWorktree={(repoId, worktreeId) => selectWorktreeContext(repoId, worktreeId)}
+                />
+              ) : isMissingWorktreeSelected ? (
+                <SupervisorMissingWorktreeCard
+                  worktree={selectedWorktree}
+                  busy={restoreBusyWorktreeId === selectedWorktree.id}
+                  error={restoreErrorForSelected}
+                  onRestore={(worktreeId) => void handleRestoreWorktree(worktreeId)}
                 />
               ) : (
                 <section className="sup-card sup-dispatch-card" aria-label="任务目标与派发">
