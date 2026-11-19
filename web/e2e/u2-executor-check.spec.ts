@@ -281,6 +281,41 @@ test('执行者: bridged Pi hides internal conveyor-chat id and shows plain Chin
   await expect(pi).not.toContainText('conveyor-chat')
 })
 
+test('执行者: real_run check shows provider/model from worker.provider', async ({ page }) => {
+  await install(page, {
+    workers: [
+      piWorker({
+        provider: { configured: true, provider_name: 'StepFun', model: 'step-5-preview' },
+        last_check: {
+          ok: true, worker_id: 'pi', provider: null, provider_name: null, model: null, latency_ms: null, kind: 'real_run', message: '', checked_at: NOW_ISO,
+        },
+      }),
+    ],
+    active: 'pi',
+  })
+  await page.goto('/#workers')
+  const pi = page.locator('li.worker-card', { hasText: 'Pi（内置）' })
+  await expect(pi.getByText('可以用 · StepFun/step-5-preview')).toBeVisible()
+  await expect(pi.getByText('未知服务商')).toBeHidden()
+})
+
+test('执行者: real_run check shows 最近一次真实任务跑通了 when no provider', async ({ page }) => {
+  await install(page, {
+    workers: [
+      piWorker({
+        provider: null,
+        last_check: {
+          ok: true, worker_id: 'pi', provider: null, provider_name: null, model: null, latency_ms: null, kind: 'real_run', message: '', checked_at: NOW_ISO,
+        },
+      }),
+    ],
+    active: 'pi',
+  })
+  await page.goto('/#workers')
+  const pi = page.locator('li.worker-card', { hasText: 'Pi（内置）' })
+  await expect(pi.getByText('可以用 · 最近一次真实任务跑通了')).toBeVisible()
+})
+
 test('执行者: a failing 测试 shows the red message and a collapsed 技术细节', async ({ page }) => {
   await install(page, {
     workers: [codexWorker()],

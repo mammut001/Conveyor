@@ -97,6 +97,10 @@ function formatWorkerCheckTarget(check: WorkerCheck, provider?: Worker['provider
   if (check.provider_name && check.provider_name.startsWith('和对话')) {
     return check.provider_name
   }
+  if (!check.provider && !check.provider_name && !check.model) {
+    if (provider?.provider_name) return `${provider.provider_name}/${provider.model || '默认模型'}`
+    if (check.kind === 'real_run') return '最近一次真实任务跑通了'
+  }
   const label = check.provider_name || check.provider || '未知服务商'
   return `${label}/${check.model || '默认模型'}`
 }
