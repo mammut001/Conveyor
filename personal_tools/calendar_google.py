@@ -332,8 +332,6 @@ def _parse_event_time(time_str: str) -> tuple[datetime, datetime, str | None]:
         "14:00-15:00" (today)
         "明天 14:00" (1 hour default)
     """
-    from personal_tools.reminder_parse import _parse_zh_datetime  # reuse existing parser
-
     time_str = time_str.strip()
     if not time_str:
         return datetime.now(), datetime.now(), "时间不能为空"
