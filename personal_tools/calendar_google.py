@@ -8,8 +8,10 @@ Dependencies: google-auth, google-api-python-client.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+import re
+from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
@@ -20,18 +22,41 @@ logger = logging.getLogger(__name__)
 
 # RFC3339 format for Google Calendar API
 RFC3339_FMT = "%Y-%m-%dT%H:%M:%S%z"
+_TIME_HHMM_RE = re.compile(r"\d{1,2}:\d{2}")
+
+
+def _user_tz(settings: Any) -> tzinfo:
+    """Return owner's ZoneInfo from settings, falling back to UTC on empty or invalid input."""
+    raw = getattr(settings, "user_timezone", None)
+    if isinstance(raw, str):
+        name = raw.strip()
+        if name:
+            try:
+                return ZoneInfo(name)
+            except Exception:
+                pass
+    return timezone.utc
+
+
+def _resolve_now(tz: tzinfo = timezone.utc, now: datetime | None = None) -> datetime:
+    """Return current time (or an explicit clock override) in tz."""
+    if now is None:
+        return datetime.now(tz)
+    if now.tzinfo is None:
+        return now.replace(tzinfo=tz)
+    return now.astimezone(tz)
 
 
 def _now_rfc3339() -> str:
-    return datetime.now(timezone.utc).strftime(RFC3339_FMT)
+    return datetime.now(timezone.utc).isoformat()
 
 
-def _today_start(tz: timezone = timezone.utc) -> datetime:
+def _today_start(tz: tzinfo = timezone.utc) -> datetime:
     now = datetime.now(tz)
     return now.replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _format_event(event: dict) -> str:
+def _format_event(event: dict, tz: tzinfo | None = None) -> str:
     """Format a Google Calendar event for display."""
     summary = event.get("summary", "(无标题)")
     start = event.get("start", {})
@@ -43,13 +68,19 @@ def _format_event(event: dict) -> str:
     # Shorten datetime display
     if "T" in start_str:
         try:
-            dt = datetime.fromisoformat(start_str)
+            iso = f"{start_str[:-1]}+00:00" if start_str.endswith("Z") else start_str
+            dt = datetime.fromisoformat(iso)
+            if tz is not None and dt.tzinfo is not None:
+                dt = dt.astimezone(tz)
             start_str = dt.strftime("%m-%d %H:%M")
         except Exception:
             pass
     if "T" in end_str:
         try:
-            dt = datetime.fromisoformat(end_str)
+            iso = f"{end_str[:-1]}+00:00" if end_str.endswith("Z") else end_str
+            dt = datetime.fromisoformat(iso)
+            if tz is not None and dt.tzinfo is not None:
+                dt = dt.astimezone(tz)
             end_str = dt.strftime("%H:%M")
         except Exception:
             pass
@@ -111,9 +142,10 @@ def calendar_search(settings: Settings, query: str) -> ToolResult:
         return ToolResult(ok=False, text=f"⚠️ {err}")
 
     try:
-        now = datetime.now(timezone.utc)
-        time_min = (now - timedelta(days=30)).strftime(RFC3339_FMT)
-        time_max = (now + timedelta(days=90)).strftime(RFC3339_FMT)
+        tz = _user_tz(settings)
+        now = datetime.now(tz)
+        time_min = (now - timedelta(days=30)).isoformat()
+        time_max = (now + timedelta(days=90)).isoformat()
 
         result = service.events().list(
             q=query.strip(),
@@ -130,7 +162,7 @@ def calendar_search(settings: Settings, query: str) -> ToolResult:
 
         lines = [f"🔍 搜索 '{query}' 找到 {len(events)} 条日程:", ""]
         for ev in events:
-            lines.append(_format_event(ev))
+            lines.append(_format_event(ev, tz=tz))
 
         return ToolResult(ok=True, text=truncate("\n".join(lines)))
     except Exception as exc:
@@ -146,7 +178,8 @@ def calendar_freebusy(settings: Settings, query: str) -> ToolResult:
     if err:
         return ToolResult(ok=False, text=f"⚠️ {err}")
 
-    time_min, time_max, parse_err = _parse_time_range(query)
+    tz = _user_tz(settings)
+    time_min, time_max, parse_err = _parse_time_range(query, tz=tz)
     if parse_err:
         return ToolResult(ok=False, text=f"⚠️ {parse_err}")
 
@@ -196,15 +229,17 @@ def calendar_create(settings: Settings, arg: str) -> ToolResult:
     if not title:
         return ToolResult(ok=False, text="⚠️ 标题不能为空")
 
-    start_dt, end_dt, parse_err = _parse_event_time(time_str)
+    tz = _user_tz(settings)
+    start_dt, end_dt, parse_err = _parse_event_time(time_str, tz=tz)
     if parse_err:
         return ToolResult(ok=False, text=f"⚠️ {parse_err}")
 
     # Build event body
+    tz_key = getattr(tz, "key", None) or "UTC"
     event_body: dict[str, Any] = {
         "summary": title,
-        "start": {"dateTime": start_dt.isoformat(), "timeZone": "UTC"},
-        "end": {"dateTime": end_dt.isoformat(), "timeZone": "UTC"},
+        "start": {"dateTime": start_dt.isoformat(), "timeZone": tz_key},
+        "end": {"dateTime": end_dt.isoformat(), "timeZone": tz_key},
     }
     if desc_loc:
         # Heuristic: if it looks like a location (short, no sentence), put in location
@@ -235,7 +270,8 @@ def calendar_create_preview(settings: Settings, arg: str) -> ToolResult:
     time_str = parts[1]
     desc_loc = parts[2] if len(parts) > 2 else ""
 
-    start_dt, end_dt, parse_err = _parse_event_time(time_str)
+    tz = _user_tz(settings)
+    start_dt, end_dt, parse_err = _parse_event_time(time_str, tz=tz)
     if parse_err:
         return ToolResult(ok=False, text=f"⚠️ {parse_err}")
 
@@ -296,15 +332,15 @@ def _list_events(settings: Settings, days: int, offset_days: int = 0, label: str
         return ToolResult(ok=False, text=f"⚠️ {err}")
 
     try:
-        now = datetime.now(timezone.utc)
-        start = now + timedelta(days=offset_days)
+        tz = _user_tz(settings)
+        start = _today_start(tz) + timedelta(days=offset_days)
         start = start.replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + timedelta(days=days)
 
         result = service.events().list(
             calendarId="primary",
-            timeMin=start.strftime(RFC3339_FMT),
-            timeMax=end.strftime(RFC3339_FMT),
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
             maxResults=20,
             singleEvents=True,
             orderBy="startTime",
@@ -316,14 +352,18 @@ def _list_events(settings: Settings, days: int, offset_days: int = 0, label: str
 
         lines = [f"📅 {label}日程 ({len(events)} 条):", ""]
         for ev in events:
-            lines.append(_format_event(ev))
+            lines.append(_format_event(ev, tz=tz))
 
         return ToolResult(ok=True, text=truncate("\n".join(lines)))
     except Exception as exc:
         return ToolResult(ok=False, text=f"⚠️ 获取日程失败: {redact_text(str(exc))}")
 
 
-def _parse_event_time(time_str: str) -> tuple[datetime, datetime, str | None]:
+def _parse_event_time(
+    time_str: str,
+    tz: tzinfo = timezone.utc,
+    now: datetime | None = None,
+) -> tuple[datetime, datetime, str | None]:
     """Parse event time string. Returns (start, end, error).
 
     Supported formats:
@@ -332,70 +372,88 @@ def _parse_event_time(time_str: str) -> tuple[datetime, datetime, str | None]:
         "14:00-15:00" (today)
         "明天 14:00" (1 hour default)
     """
+    ref_now = _resolve_now(tz, now)
     time_str = time_str.strip()
     if not time_str:
-        return datetime.now(), datetime.now(), "时间不能为空"
+        return ref_now, ref_now, "时间不能为空"
 
-    # Try to split range: "14:00-15:00" or "14:00 — 15:00"
-    range_sep = None
-    for sep in ["-", "—", "到"]:
-        if sep in time_str:
-            parts = time_str.split(sep, 1)
-            if len(parts) == 2 and ":" in parts[1]:
-                range_sep = sep
-                break
+    # Only split on a range separator after the first HH:MM so date dashes (2026-06-16) are ignored.
+    time_match = _TIME_HHMM_RE.search(time_str)
+    split_idx: int | None = None
+    split_sep = ""
+    if time_match:
+        search_from = time_match.end()
+        for sep in ("-", "—", "到"):
+            idx = time_str.find(sep, search_from)
+            if idx != -1 and ":" in time_str[idx + len(sep):]:
+                if split_idx is None or idx < split_idx:
+                    split_idx = idx
+                    split_sep = sep
 
-    if range_sep:
-        # Parse start and end
-        left = time_str[:time_str.index(range_sep)].strip()
-        right = time_str[time_str.index(range_sep) + len(range_sep):].strip()
+    if split_idx is not None:
+        left = time_str[:split_idx].strip()
+        right = time_str[split_idx + len(split_sep):].strip()
 
-        start_dt, err1 = _parse_single_time(left)
+        start_dt, err1 = _parse_single_time(left, tz=tz, now=ref_now)
         if err1:
-            return datetime.now(), datetime.now(), err1
+            return ref_now, ref_now, err1
 
         # End time might be just "15:00" (reuse date from start)
-        end_dt, err2 = _parse_single_time(right, reference=start_dt)
+        end_dt, err2 = _parse_single_time(right, reference=start_dt, tz=tz, now=ref_now)
         if err2:
-            return datetime.now(), datetime.now(), err2
+            return ref_now, ref_now, err2
 
         if end_dt <= start_dt:
             end_dt = start_dt + timedelta(hours=1)
 
         return start_dt, end_dt, None
-    else:
-        # Single time: default 1 hour
-        start_dt, err = _parse_single_time(time_str)
-        if err:
-            return datetime.now(), datetime.now(), err
-        return start_dt, start_dt + timedelta(hours=1), None
+
+    # Single time: default 1 hour
+    start_dt, err = _parse_single_time(time_str, tz=tz, now=ref_now)
+    if err:
+        return ref_now, ref_now, err
+    return start_dt, start_dt + timedelta(hours=1), None
 
 
-def _parse_single_time(s: str, reference: datetime | None = None) -> tuple[datetime, str | None]:
-    """Parse a single datetime string."""
+def _parse_single_time(
+    s: str,
+    reference: datetime | None = None,
+    tz: tzinfo = timezone.utc,
+    now: datetime | None = None,
+) -> tuple[datetime, str | None]:
+    """Parse a single datetime string in the given timezone."""
     s = s.strip()
+    ref_now = _resolve_now(tz, now)
 
     # "明天 14:00", "今天 14:00"
-    now = datetime.now(timezone.utc)
     if s.startswith("明天"):
-        base = now + timedelta(days=1)
+        base = ref_now + timedelta(days=1)
         s = s[2:].strip()
     elif s.startswith("后天"):
-        base = now + timedelta(days=2)
+        base = ref_now + timedelta(days=2)
         s = s[2:].strip()
     elif s.startswith("今天"):
-        base = now
+        base = ref_now
         s = s[2:].strip()
-    elif reference:
-        base = reference
+    elif reference is not None:
+        base = reference.astimezone(tz) if reference.tzinfo is not None else reference.replace(tzinfo=tz)
     else:
-        base = now
+        base = ref_now
 
     # Try "HH:MM"
     if ":" in s and len(s) <= 5:
         try:
             h, m = s.split(":")
-            dt = base.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
+            dt = datetime(
+                base.year,
+                base.month,
+                base.day,
+                int(h),
+                int(m),
+                0,
+                0,
+                tzinfo=tz,
+            )
             return dt, None
         except (ValueError, IndexError):
             pass
@@ -405,18 +463,18 @@ def _parse_single_time(s: str, reference: datetime | None = None) -> tuple[datet
         try:
             dt = datetime.strptime(s, fmt)
             if dt.year == 1900:
-                dt = dt.replace(year=now.year)
-            dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.replace(year=ref_now.year)
+            dt = dt.replace(tzinfo=tz)
             return dt, None
         except ValueError:
             continue
 
-    return now, f"无法解析时间: {s}"
+    return ref_now, f"无法解析时间: {s}"
 
 
-def _parse_time_range(query: str) -> tuple[str, str, str | None]:
+def _parse_time_range(query: str, tz: tzinfo = timezone.utc) -> tuple[str, str, str | None]:
     """Parse time range for freebusy. Returns (timeMin_rfc3339, timeMax_rfc3339, error)."""
-    start_dt, end_dt, err = _parse_event_time(query)
+    start_dt, end_dt, err = _parse_event_time(query, tz=tz)
     if err:
         return "", "", err
-    return start_dt.strftime(RFC3339_FMT), end_dt.strftime(RFC3339_FMT), None
+    return start_dt.isoformat(), end_dt.isoformat(), None
