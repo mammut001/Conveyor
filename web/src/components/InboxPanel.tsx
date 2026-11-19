@@ -156,7 +156,7 @@ const HOURS = Array.from({ length: 24 }, (_, hour) => hour);
 const MINUTES = Array.from({ length: 12 }, (_, step) => step * 5);
 const pad2 = (value: number) => String(value).padStart(2, '0');
 
-export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, routinesEnabled = true, agentId, agentName }: InboxPanelProps) {
+export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksEnabled, routinesEnabled, agentId, agentName }: InboxPanelProps) {
   const [disabled, setDisabled] = useState(false);
   const disabledRef = useRef(false);
   const [items, setItems] = useState<InboxItem[]>([]);
@@ -281,6 +281,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
 
   useEffect(() => {
     void fetchReminders();
+    // Not known yet (system status still loading): wait and show 加载中… rather than guessing.
+    if (routinesEnabled === undefined) return;
     // The feature is off: the page says so without asking the server (no 409 in the console).
     if (!routinesEnabled) {
       disabledRef.current = true;
