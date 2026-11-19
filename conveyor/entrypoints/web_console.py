@@ -853,7 +853,10 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._feature_off("routines_disabled")
                     return
                 from conveyor.automation import routines
-                self._json(HTTPStatus.OK, {"routines": routines.list_routines(settings)})
+                self._json(HTTPStatus.OK, {
+                    "routines": routines.list_routines(settings),
+                    "timezone": getattr(settings, "user_timezone", "America/Toronto") or "America/Toronto",
+                })
             elif path == "/api/inbox" or path.startswith("/api/inbox"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:

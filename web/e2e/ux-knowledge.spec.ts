@@ -99,7 +99,7 @@ const PNG = [
   'iVBORw0KGgoAAAANSUhEUgAAAKAAAABkCAIAAACO1KzYAAAA/klEQVR42u3XoQ2AMBRF0Y6DQDIQY1Sg0MyEQDEJQTAAhoBjA5q2nORO0CPeb2jaThUXPAFgARZgAdYHwLGfVHGAAQuwAAuwAAuwAAMWYAFW6cDbfihBgAEDBgwYMGDAAizAygP4vk4lCDBgwIABAwYMWIAFWCUAx2EsLsCAAQMGDNiRJcCAAQMGDBgwYP0ReF5WvQEGDBiwDbbBgAEDBgwYsPyD3cmAAQMGbINtMGDAgAELsAALMGDAgAEDBgxYgAVYgAEDBgwYMGDAgAELsAALMGDAgAEDBgxYgAVYgAEDBgwYMGDAgGsHVv4BBizAAizAAizAAgxYgAVYGfQA4tdnZpnj02oAAAAASUVORK5CYII=',
 ]
 
-type Options = { memory?: MemoryRow[]; agentId?: string; hash?: string; memoryOff?: boolean; routinesOff?: boolean; agentScreens?: boolean; webhooks?: boolean }
+type Options = { memory?: MemoryRow[]; agentId?: string; hash?: string; memoryOff?: boolean; routinesOff?: boolean; agentScreens?: boolean; webhooks?: boolean; timezone?: string }
 
 type Api = {
   memoryQueries: string[]
@@ -213,7 +213,7 @@ async function openConsole(page: Page, options: Options = {}): Promise<Api> {
     // ---- 定时任务 + 收件箱
     if (path === '/api/routines' || path.startsWith('/api/routines/')) {
       if (options.routinesOff) return disabledRoutines()
-      if (path === '/api/routines' && method === 'GET') return json({ routines: api.routines })
+      if (path === '/api/routines' && method === 'GET') return json({ routines: api.routines, timezone: options.timezone ?? '' })
       if (path === '/api/routines' && method === 'POST') {
         const body = request.postDataJSON() as Record<string, unknown>
         api.routinePosts.push(body)
@@ -653,4 +653,26 @@ test('收件箱 webhooks (when enabled) are Chinese and confirm before rotating'
   await expect(routine.getByRole('button', { name: '确定更换' })).toBeVisible()
   await routine.getByRole('button', { name: '取消' }).click()
   expect(await englishLeftovers(panel)).toEqual([])
+})
+
+test.describe('收件箱: timezone handling', () => {
+  test.use({ timezoneId: 'America/Toronto' })
+
+  test('explains schedule with user-local timezone', async ({ page }) => {
+    await openConsole(page, { timezone: 'America/Toronto' })
+    await openInbox(page)
+    const panel = page.locator('.kn-inbox')
+    await panel.getByRole('button', { name: '＋ 新建定时任务' }).click()
+    const form = panel.getByRole('form', { name: '新建定时任务' })
+    await expect(form.getByText('每天 09:00 运行（按你这里的时间）')).toBeVisible()
+  })
+
+  test('explains schedule with different timezone', async ({ page }) => {
+    await openConsole(page, { timezone: 'Asia/Shanghai' })
+    await openInbox(page)
+    const panel = page.locator('.kn-inbox')
+    await panel.getByRole('button', { name: '＋ 新建定时任务' }).click()
+    const form = panel.getByRole('form', { name: '新建定时任务' })
+    await expect(form.getByText('每天 09:00 运行（按 Asia/Shanghai 时间）')).toBeVisible()
+  })
 })

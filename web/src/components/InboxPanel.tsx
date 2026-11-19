@@ -155,6 +155,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   const [items, setItems] = useState<InboxItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [routinesList, setRoutinesList] = useState<Routine[]>([]);
+  const [serverTimezone, setServerTimezone] = useState<string>('');
   const [loaded, setLoaded] = useState({ inbox: false, routines: false });
   const [error, setError] = useState<FriendlyError | null>(null);
   const [notice, setNotice] = useState<{ text: string; showInbox?: boolean } | null>(null);
@@ -234,8 +235,10 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
         return;
       }
       if (!res.ok) throw await responseError(res);
-      const list = pickArray<Routine>(await readJson(res), 'routines');
+      const data = await readJson(res);
+      const list = pickArray<Routine>(data, 'routines');
       setRoutinesList(list);
+      setServerTimezone(data && typeof data === 'object' ? String((data as { timezone?: unknown }).timezone || '') : '');
       setLoaded((prev) => (prev.routines ? prev : { ...prev, routines: true }));
     } catch (err) {
       if (!disabledRef.current) {
@@ -569,7 +572,14 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       : cronError
         ? { text: cronError, bad: true }
         : described
-          ? { text: `${described}${/\d$/.test(described) ? ' ' : ''}运行（服务器时间）`, bad: false }
+          ? (() => {
+              const suffix = serverTimezone
+                ? serverTimezone === Intl.DateTimeFormat().resolvedOptions().timeZone
+                  ? '运行（按你这里的时间）'
+                  : `运行（按 ${serverTimezone} 时间）`
+                : '运行（服务器时间）';
+              return { text: `${described}${/\d$/.test(described) ? ' ' : ''}${suffix}`, bad: false };
+            })()
           : { text: '自定义时间，创建时会检查格式。', bad: false };
 
   const applyPreset = (id: string) => {
