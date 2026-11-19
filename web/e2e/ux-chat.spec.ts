@@ -17,11 +17,11 @@ const planTopic = `web:web-console:topic-${'b'.repeat(32)}`
 const markdownReply = [
   '## 本周服务器开销', '',
   '整体比上周下降 **12%**，主要来自对象存储的清理。', '',
-  '| 项目 | 本周 | 上周 | 变化 | 说明 |', '| :--- | ---: | ---: | ---: | --- |',
-  '| 计算实例 | ¥1,284.00 | ¥1,350.20 | -4.9% | 夜间自动缩容生效 |',
-  '| 对象存储 | ¥312.40 | ¥498.75 | -37.4% | 清理了 2023 年的旧备份 |',
-  '| 带宽 | ¥205.10 | ¥188.30 | +8.9% | 周三有一次大文件分发 |',
-  '| 数据库 | ¥640.00 | ¥640.00 | 0% | 包年包月 |', '',
+  '| 项目 | 本周 | 上周 | 变化 | 说明 | 责任人 | 状态 |', '| :--- | ---: | ---: | ---: | --- | --- | --- |',
+  '| 计算实例 | ¥1,284.00 | ¥1,350.20 | -4.9% | 夜间自动缩容生效 | @ops | 稳定 |',
+  '| 对象存储 | ¥312.40 | ¥498.75 | -37.4% | 清理了 2023 年的旧备份 | @data | 已完成 |',
+  '| 带宽 | ¥205.10 | ¥188.30 | +8.9% | 周三有一次大文件分发 | @network | 观察中 |',
+  '| 数据库 | ¥640.00 | ¥640.00 | 0% | 包年包月 | @db | 稳定 |', '',
   '查询脚本（按天汇总）：', '',
   '```python',
   'import sqlite3',
@@ -189,6 +189,37 @@ for (const width of [1440, 390]) {
       await noHorizontalScroll(page)
       await shot(page, 'chat-markdown', width)
     })
+
+    if (width === 390) {
+      test('short tables fit a phone without sideways scroll (R34)', async ({ page }) => {
+        const shortTable = [
+          '目录大小：', '',
+          '| 排名 | 目录 | 大小 | 占比 |',
+          '|---|---|---|---|',
+          '| 1 | .venv | 294M | ~43% |',
+          '| 2 | vendor | 158M | ~23% |',
+        ].join('\n')
+        await page.setViewportSize({ width, height: 844 })
+        await fixture(page, {
+          history: route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
+            session_id: conveyor.session_id,
+            messages: [
+              { role: 'user', text: '找出最大的子目录', origin_channel: 'web', created_at: iso(2) },
+              { role: 'assistant', text: shortTable, origin_channel: 'web', created_at: iso(1) },
+            ],
+          }) }),
+        })
+        await page.goto('/')
+        const header = page.getByRole('columnheader', { name: '占比' })
+        await expect(header).toBeVisible()
+        const tableScroll = page.locator('.formatted-table-scroll')
+        expect(await tableScroll.evaluate(node => node.scrollWidth <= node.clientWidth + 1)).toBe(true)
+        const boxRect = (await tableScroll.boundingBox())!
+        const headerRect = (await header.boundingBox())!
+        expect(headerRect.x + headerRect.width).toBeLessThanOrEqual(boxRect.x + boxRect.width + 1)
+        await noHorizontalScroll(page)
+      })
+    }
 
     test('conversation dropdown open', async ({ page }) => {
       await openChat(page, width)
