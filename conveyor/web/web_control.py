@@ -179,7 +179,7 @@ class WebControl:
                 session["latest_job"] = job
         return list(grouped.values())
 
-    def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
+    def list_sessions(self, limit: int = 50, *, with_refinements: bool = True) -> list[dict[str, Any]]:
         transcript_sessions = get_transcript_store(self.settings).list_sessions(limit)
         jobs = self.queue.list_jobs(500)
         if transcript_sessions:
@@ -192,10 +192,15 @@ class WebControl:
                 )
                 if all(key) and key not in latest_by_session:
                     latest_by_session[key] = job
-            ref_keys = {id(session): self._refinement_key(session) for session in transcript_sessions}
+            # Resolving each session's refinement chain costs several queries per
+            # session; callers that never read active_refinement (list_agents) skip it.
+            ref_keys = (
+                {id(session): self._refinement_key(session) for session in transcript_sessions}
+                if with_refinements else {}
+            )
             chain_by_session = RefinementStore(self.settings).active_summaries([
                 key for key in ref_keys.values() if key
-            ])
+            ]) if with_refinements else {}
             for session in transcript_sessions:
                 session["last_activity"] = session.get("updated_at") or session.get("created_at")
                 key = (
@@ -204,7 +209,8 @@ class WebControl:
                     str(session.get("source_chat_id") or ""),
                 )
                 session["latest_job"] = latest_by_session.get(key)
-                session["active_refinement"] = chain_by_session.get(ref_keys.get(id(session)) or "")
+                if with_refinements:
+                    session["active_refinement"] = chain_by_session.get(ref_keys.get(id(session)) or "")
 
         # Job-only sessions (task runs whose transcript was never written, or
         # installs without a transcript yet) are listed too. A session that has
@@ -216,7 +222,7 @@ class WebControl:
             if session["id"] not in known_ids
             and self._identity_of(session) not in known_identities
         ]
-        if job_only:
+        if job_only and with_refinements:
             summaries = RefinementStore(self.settings).active_summaries([
                 key for session in job_only if (key := self._refinement_key(session))
             ])
@@ -850,7 +856,8 @@ class WebControl:
 
         if not agents.enabled(self.settings):
             return {"enabled": False, "agents": []}
-        sessions = {str(item.get("id")): item for item in self.list_sessions(200)}
+        # Agent rows read latest_job, message_count and last_activity only.
+        sessions = {str(item.get("id")): item for item in self.list_sessions(200, with_refinements=False)}
         waiting = {str(item.get("session_id") or "") for item in self.list_approvals()}
         return {
             "enabled": True,

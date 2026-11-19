@@ -193,6 +193,23 @@ class HttpTests(Case):
         self.assertEqual(self.call("GET", "/api/agents", authorized=False)[0], 401)
         self.assertEqual(self.call("POST", "/api/agents", {"name": "x"}, authorized=False)[0], 401)
 
+    def test_agent_list_skips_refinement_lookups_but_sessions_keep_them(self) -> None:
+        # /api/agents is polled every few seconds; resolving each session's
+        # refinement chain there cost several queries per session and the agent
+        # rows never read it. /api/sessions still carries active_refinement.
+        store = get_transcript_store(self.settings)
+        store.append(session_id=agents.session_id_for("default"),
+                     role="user", content="hi", channel="web", operator_id="web-console",
+                     source_chat_id=agents.chat_id_for("default"))
+        with mock.patch.object(type(self.control), "_refinement_key", side_effect=AssertionError("refinement lookup")):
+            status, listed = self.call("GET", "/api/agents")
+        self.assertEqual(status, 200)
+        self.assertIn("default", {a["id"] for a in listed["agents"]})
+        status, sessions = self.call("GET", "/api/sessions")
+        self.assertEqual(status, 200)
+        self.assertTrue(sessions["sessions"])
+        self.assertTrue(all("active_refinement" in item for item in sessions["sessions"]))
+
     def test_crud_and_list_shows_preview_and_status(self) -> None:
         status, created = self.call("POST", "/api/agents", {"name": "Astra", "instructions": "Study coach."})
         self.assertEqual(status, 201)
