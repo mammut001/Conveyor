@@ -13,6 +13,7 @@ from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                                ContextTypes, ConversationHandler,
                                MessageHandler, filters)
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import telegram.error
 
 from channel import InboundMessage
 from channel.auth import is_allowed
@@ -1014,6 +1015,35 @@ async def post_shutdown(application: Application) -> None:
         consumer.stop()
 
 
+# Defense-in-depth: any unhandled exception in a handler is
+# logged by PTB with "No error handlers are registered,
+# logging exception." The user sees nothing. The recent
+# onboarding-C NameError was a 20-minute hunt for the same
+# reason. error_handler catches the exception, logs the
+# full traceback, and surfaces a short, non-leaky user
+# message so the operator knows something is broken
+# before ssh-ing into the VPS. The reply itself is
+# wrapped in try/except so a failure in the error path
+# does not loop back into the error handler.
+#
+# Polling network blips (update=None) are PTB's to retry: log one WARNING line,
+# not an ERROR traceback, so the watchdog's error-spike alert stays meaningful.
+async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, telegram.error.NetworkError) and not isinstance(context.error, (telegram.error.InvalidToken, telegram.error.Forbidden)):
+        logger.warning("Telegram network error (PTB retries automatically): %s", context.error)
+        return
+    # Not inside an except block here, so pass the error explicitly;
+    # logger.exception alone logs "NoneType: None" and loses the traceback.
+    logger.error("Unhandled exception in handler", exc_info=context.error)
+    try:
+        if isinstance(update, Update) and update.effective_message:
+            await update.effective_message.reply_text(
+                "Bot 内部错误，看下 logs。\n（最近一次自动运行的 progress_smoke 在 /opt/conveyor/scripts/。）",
+            )
+    except Exception:
+        logger.exception("Failed to send error reply")
+
+
 def main() -> None:
     application = (
         Application.builder()
@@ -1102,28 +1132,7 @@ def main() -> None:
     # Photos / image files (caption = the question; "/fix …" captions work
     # too because dispatch parses the caption like text).
     application.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, text_cmd))
-    # Defense-in-depth: any unhandled exception in a handler is
-    # logged by PTB with "No error handlers are registered,
-    # logging exception." The user sees nothing. The recent
-    # onboarding-C NameError was a 20-minute hunt for the same
-    # reason. error_handler catches the exception, logs the
-    # full traceback, and surfaces a short, non-leaky user
-    # message so the operator knows something is broken
-    # before ssh-ing into the VPS. The reply itself is
-    # wrapped in try/except so a failure in the error path
-    # does not loop back into the error handler.
-    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        # Not inside an except block here, so pass the error explicitly;
-        # logger.exception alone logs "NoneType: None" and loses the traceback.
-        logger.error("Unhandled exception in handler", exc_info=context.error)
-        try:
-            if isinstance(update, Update) and update.effective_message:
-                await update.effective_message.reply_text(
-                    "Bot 内部错误，看下 logs。\n（最近一次自动运行的 progress_smoke 在 /opt/conveyor/scripts/。）",
-                )
-        except Exception:
-            logger.exception("Failed to send error reply")
-    application.add_error_handler(error_handler)
+    application.add_error_handler(telegram_error_handler)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
