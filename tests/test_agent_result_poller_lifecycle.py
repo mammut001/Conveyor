@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from telegram.ext import Application
+import telegram.error
 
 from agent_coordination.agent_result_poller_lifecycle import (
     AgentResultPollingApplication, cancel_poller, configure_telegram_poller,
@@ -90,6 +91,89 @@ class AgentResultPollerLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(task, return_exceptions=True)
             await asyncio.sleep(0)
         self.assertTrue(any("feishu-poller-crash" in entry for entry in logs.output))
+
+
+class AgentResultPollingApplicationRetryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.application = (
+            Application.builder()
+            .token("123456:TESTTOKEN")
+            .application_class(AgentResultPollingApplication)
+            .build()
+        )
+        self.delays = []
+
+        async def fake_sleep(delay):
+            self.delays.append(delay)
+
+        self.application._sleep = fake_sleep
+
+    async def test_initialize_retries_on_network_error(self):
+        calls = 0
+        async def fake_initialize(_app):
+            nonlocal calls
+            calls += 1
+            if calls <= 2:
+                raise telegram.error.TimedOut()
+
+        with patch.object(Application, "initialize", fake_initialize):
+            await self.application.initialize()
+
+        self.assertEqual(calls, 3)
+        self.assertEqual(self.delays, [5, 10])
+
+    async def test_initialize_propagates_invalid_token(self):
+        calls = 0
+        async def fake_initialize(_app):
+            nonlocal calls
+            calls += 1
+            raise telegram.error.InvalidToken()
+
+        with patch.object(Application, "initialize", fake_initialize):
+            with self.assertRaises(telegram.error.InvalidToken):
+                await self.application.initialize()
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(self.delays, [])
+
+    async def test_initialize_caps_delay_at_300(self):
+        calls = 0
+        async def fake_initialize(_app):
+            nonlocal calls
+            calls += 1
+            if calls <= 8:
+                raise telegram.error.TimedOut()
+
+        with patch.object(Application, "initialize", fake_initialize):
+            await self.application.initialize()
+
+        self.assertEqual(calls, 9)
+        self.assertEqual(self.delays, [5, 10, 20, 40, 80, 160, 300, 300])
+
+    async def test_default_sleep_is_called_with_the_delay_only(self):
+        app = (
+            Application.builder()
+            .token("123456:TESTTOKEN")
+            .application_class(AgentResultPollingApplication)
+            .build()
+        )
+        calls = 0
+
+        async def fake_initialize(_app):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise telegram.error.TimedOut()
+
+        slept = []
+
+        async def fake_asyncio_sleep(delay, *args):
+            slept.append((delay, *args))
+
+        with (patch.object(Application, "initialize", fake_initialize),
+              patch("asyncio.sleep", fake_asyncio_sleep)):
+            await app.initialize()
+        self.assertEqual(slept, [(5,)])
 
 
 if __name__ == "__main__":
