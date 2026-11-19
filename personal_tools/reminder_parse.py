@@ -17,6 +17,9 @@ _ISO = re.compile(
 
 _CN_NUM = r"[0-9零〇一二两三四五六七八九十]{1,4}"
 _CN_IN = re.compile(rf"({_CN_NUM})\s*(分钟|个?小时)(?:之|以)?后")
+_CN_DATE = re.compile(
+    rf"(?:(\d{{4}})\s*年\s*)?({_CN_NUM})\s*月\s*({_CN_NUM})\s*[日号號]"
+)
 _CN_AT = re.compile(
     rf"(今天|明天|后天)?\s*(早上|早晨|上午|中午|下午|傍晚|晚上|今晚)?\s*({_CN_NUM})\s*[点點时:：]"
     rf"\s*(?:(半)|({_CN_NUM})\s*分?)?"
@@ -42,6 +45,81 @@ def _cn_int(token: str) -> int | None:
     return value
 
 
+def _parse_cn_time(match: re.Match[str]) -> tuple[int, int] | None:
+    """Extract (hour, minute) from a _CN_AT match and apply period rules."""
+    hour = _cn_int(match.group(3))
+    minute = 30 if match.group(4) else (_cn_int(match.group(5)) if match.group(5) else 0)
+    if hour is None or minute is None or hour > 23 or minute > 59:
+        return None
+    period = match.group(2) or ""
+    if period in ("下午", "傍晚", "晚上", "今晚") and hour < 12:
+        hour += 12
+    elif period == "中午" and hour < 6:
+        hour += 12
+    return hour, minute
+
+
+def _parse_cn_date(
+    text: str, date_m: re.Match[str], now_local: datetime
+) -> tuple[str, datetime] | None:
+    """Parse an explicit Chinese date with an optional following time."""
+    year_raw = date_m.group(1)
+    month = _cn_int(date_m.group(2))
+    day = _cn_int(date_m.group(3))
+    if month is None or day is None or not (1 <= month <= 12):
+        return None
+    year = int(year_raw) if year_raw else now_local.year
+    try:
+        datetime(year, month, day, tzinfo=now_local.tzinfo)
+    except ValueError:
+        return None
+
+    time_m = _CN_AT.search(text, date_m.end())
+    if time_m:
+        if time_m.group(1):
+            return None
+        if not (
+            time_m.group(2)
+            or text[time_m.end(3) : time_m.end(3) + 1] in "点點时"
+            or time_m.group(5)
+        ):
+            time_m = None
+
+    if time_m:
+        parsed_time = _parse_cn_time(time_m)
+        if parsed_time is None:
+            return None
+        hour, minute = parsed_time
+    else:
+        hour, minute = 9, 0
+
+    try:
+        due = datetime(year, month, day, hour, minute, tzinfo=now_local.tzinfo)
+    except ValueError:
+        return None
+    if year_raw is None:
+        if due <= now_local:
+            try:
+                due = datetime(year + 1, month, day, hour, minute, tzinfo=now_local.tzinfo)
+            except ValueError:
+                return None
+    elif due <= now_local:
+        return None
+
+    if time_m is None:
+        body = _strip_match(text, date_m)
+    elif not text[date_m.end() : time_m.start()].strip():
+        body = _strip_span(text, date_m.start(), time_m.end())
+    else:
+        parts = (
+            text[: date_m.start()].strip(),
+            text[date_m.end() : time_m.start()].strip(),
+            text[time_m.end() :].strip(),
+        )
+        body = " ".join(p for p in parts if p)
+    return body, due
+
+
 def _parse_chinese(text: str, now_local: datetime) -> tuple[str, datetime] | None:
     """明天早上8点 / 下午3点半 / 今晚九点十五分 / 10分钟后 / 2小时后."""
     m = _CN_IN.search(text)
@@ -51,22 +129,20 @@ def _parse_chinese(text: str, now_local: datetime) -> tuple[str, datetime] | Non
             return None
         delta = timedelta(minutes=amount) if m.group(2) == "分钟" else timedelta(hours=amount)
         return _strip_match(text, m), now_local + delta
+    date_m = _CN_DATE.search(text)
+    if date_m:
+        return _parse_cn_date(text, date_m, now_local)
     m = _CN_AT.search(text)
     if not m or not (m.group(1) or m.group(2) or text[m.end(3):m.end(3) + 1] in "点點时"):
         return None
-    hour = _cn_int(m.group(3))
-    minute = 30 if m.group(4) else (_cn_int(m.group(5)) if m.group(5) else 0)
-    if hour is None or minute is None or hour > 23 or minute > 59:
+    parsed_time = _parse_cn_time(m)
+    if parsed_time is None:
         return None
-    period = m.group(2) or ""
-    if period in ("下午", "傍晚", "晚上", "今晚") and hour < 12:
-        hour += 12
-    elif period == "中午" and hour < 6:
-        hour += 12
+    hour, minute = parsed_time
     day = {"今天": 0, "明天": 1, "后天": 2}.get(m.group(1) or "", 0)
     base = (now_local + timedelta(days=day)).date()
     due = datetime(base.year, base.month, base.day, hour, minute, tzinfo=now_local.tzinfo)
-    if not m.group(1) and period != "今晚" and due <= now_local:
+    if not m.group(1) and (m.group(2) or "") != "今晚" and due <= now_local:
         due += timedelta(days=1)  # "下午3点" said after 3pm means tomorrow
     return _strip_match(text, m), due
 
@@ -77,7 +153,7 @@ REMIND_USAGE = (
     "  in 10m / in 2h\n"
     "  tomorrow HH:MM\n"
     "  ISO 时间 (2026-06-16T09:00:00)\n"
-    "  中文: 10分钟后 / 2小时后 / 明天早上8点 / 下午3点半 / 今晚九点\n"
+    "  中文: 10分钟后 / 2小时后 / 明天早上8点 / 下午3点半 / 今晚九点 / 2027年1月1日上午9点 / 12月25号晚上8点\n"
     "示例:\n"
     "  /remind in 10m 取快递\n"
     "  /remind 站会 tomorrow 09:00\n"
@@ -85,7 +161,12 @@ REMIND_USAGE = (
 )
 
 
-def parse_reminder_text(raw: str, *, tz_name: str) -> tuple[str, datetime] | None:
+def parse_reminder_text(
+    raw: str,
+    *,
+    tz_name: str,
+    now: datetime | None = None,
+) -> tuple[str, datetime] | None:
     """Return (body, due_at) or None if no time token found."""
     text = (raw or "").strip()
     if not text:
@@ -95,7 +176,7 @@ def parse_reminder_text(raw: str, *, tz_name: str) -> tuple[str, datetime] | Non
     except Exception:
         tz = ZoneInfo("UTC")
 
-    now_local = datetime.now(tz)
+    now_local = now.astimezone(tz) if now is not None else datetime.now(tz)
 
     m = _IN_MINUTES.search(text)
     if m:
@@ -148,9 +229,13 @@ def parse_reminder_text(raw: str, *, tz_name: str) -> tuple[str, datetime] | Non
     return None
 
 
-def _strip_match(text: str, match: re.Match[str]) -> str:
-    before = text[: match.start()].strip()
-    after = text[match.end() :].strip()
+def _strip_span(text: str, start: int, end: int) -> str:
+    before = text[:start].strip()
+    after = text[end:].strip()
     if before and after:
         return f"{before} {after}".strip()
     return (before or after).strip()
+
+
+def _strip_match(text: str, match: re.Match[str]) -> str:
+    return _strip_span(text, match.start(), match.end())
