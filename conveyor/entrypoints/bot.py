@@ -4,19 +4,16 @@ import asyncio
 import dataclasses
 import logging
 import re
-import time
 import warnings
 from datetime import datetime
 
-import telegram
-import telegram.error
 from telegram import Update
-from telegram.request import HTTPXRequest
 from telegram.warnings import PTBUserWarning
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                                ContextTypes, ConversationHandler,
                                MessageHandler, filters)
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+import telegram.error
 
 from channel import InboundMessage
 from channel.auth import is_allowed
@@ -1047,56 +1044,7 @@ async def telegram_error_handler(update: object, context: ContextTypes.DEFAULT_T
         logger.exception("Failed to send error reply")
 
 
-async def _probe_get_me(token: str) -> None:
-    """Verify Telegram API reachability with a short-timeout getMe call."""
-    request = HTTPXRequest(connect_timeout=15, read_timeout=30)
-    async with telegram.Bot(token, request=request) as tg_bot:
-        await tg_bot.get_me()
-
-
-def _run_on_private_loop(coro) -> None:
-    """Run a coroutine on its own loop without touching the thread's current loop.
-
-    asyncio.run() would leave the main thread with no current loop, and PTB's
-    run_polling() calls asyncio.get_event_loop(), which then raises.
-    """
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
-def wait_for_telegram(
-    token: str,
-    *,
-    sleep=time.sleep,
-    probe=None,
-    max_delay: float = 300.0,
-) -> None:
-    """Block startup with exponential backoff while api.telegram.org is unreachable."""
-    if probe is None:
-        probe = lambda: _run_on_private_loop(_probe_get_me(token))
-    delay: float = 5
-    attempts = 0
-    while True:
-        attempts += 1
-        try:
-            probe()
-        except (telegram.error.InvalidToken, telegram.error.Forbidden):
-            raise
-        except telegram.error.NetworkError as exc:
-            logger.warning("Telegram unreachable (%s); retrying in %ds", exc, int(delay))
-            sleep(delay)
-            delay = min(delay * 2, max_delay)
-        else:
-            if attempts > 1:
-                logger.info("Telegram reachable again after %d attempts", attempts)
-            return
-
-
 def main() -> None:
-    wait_for_telegram(settings.telegram_bot_token)
     application = (
         Application.builder()
         .application_class(AgentResultPollingApplication)
