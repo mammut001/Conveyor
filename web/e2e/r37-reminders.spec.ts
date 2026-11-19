@@ -27,7 +27,7 @@ const provider = {
 
 const pageErrors: string[] = [];
 
-async function install(page: Page, initialReminders: Reminder[]) {
+async function install(page: Page, initialReminders: Reminder[], options?: { routines?: boolean }) {
   pageErrors.length = 0;
   page.on('pageerror', error => pageErrors.push(error.message));
 
@@ -55,7 +55,7 @@ async function install(page: Page, initialReminders: Reminder[]) {
         channels: { telegram: { configured: true }, feishu: { configured: false } },
         nodes: [],
         features: {
-          agents: true, long_term_memory: true, routines: true, teammate: true,
+          agents: true, long_term_memory: true, routines: options?.routines ?? true, teammate: true,
           approval_inbox: true, skills: true, workflows: true, mcp: true, webhooks: false,
         },
       });
@@ -145,5 +145,28 @@ test.describe('R37: inbox reminders', () => {
     await expect(panel.getByRole('heading', { name: /^运行结果/ })).toBeVisible();
     await expect(panel.getByRole('heading', { name: /^定时任务/ })).toBeVisible();
     await expect(panel.getByRole('heading', { name: /^提醒/ })).toHaveCount(0);
+  });
+
+  test('reminders show even when routines are off (R38)', async ({ page }) => {
+    const seed: Reminder[] = [
+      { id: 19, text: '下午三点开项目会', due_at: '2026-11-20T02:00:00+00:00', channel: 'telegram' },
+    ];
+    const { cancelCalls } = await install(page, seed, { routines: false });
+    const panel = page.locator('.kn-inbox');
+
+    await expect(panel.getByText('定时任务功能未开启。')).toBeVisible();
+    await expect(panel.getByRole('heading', { name: /^提醒/ })).toBeVisible();
+    await expect(panel.getByText('下午三点开项目会')).toBeVisible();
+
+    const list = panel.getByRole('list', { name: '提醒列表' });
+    const rows = list.locator('li');
+    await expect(rows).toHaveCount(1);
+    await rows.nth(0).getByRole('button', { name: '取消' }).click();
+    await expect(rows.nth(0)).toContainText('确定取消？');
+    await rows.nth(0).getByRole('button', { name: '取消提醒' }).click();
+
+    await expect.poll(() => cancelCalls).toEqual(['/api/reminders/19/cancel']);
+    await expect(rows).toHaveCount(0);
+    await expect(panel.getByText('下午三点开项目会')).toHaveCount(0);
   });
 });
