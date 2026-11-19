@@ -1338,7 +1338,7 @@ export function WorkersPanel({ token }: { token: string }) {
               const cooling = worker.quota?.state === 'cooling'
               const coolingReason = humanCoolingReason(worker.quota?.reason ?? null)
               const showUsage = worker.installed && Boolean(worker.usage)
-              const showThreshold = worker.installed && typeof worker.threshold_percent === 'number'
+              const showThreshold = worker.installed && typeof worker.threshold_percent === 'number' && worker.usage?.available === true && (worker.usage?.windows?.length ?? 0) > 0
               // 测试：装好的执行者都能测；测不了的（kind: unsupported）不显示按钮。
               const check = worker.last_check ?? null
               const isChecking = checkingId === worker.id

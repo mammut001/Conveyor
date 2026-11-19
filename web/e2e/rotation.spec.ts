@@ -658,4 +658,27 @@ test.describe('Usage-based rotation (执行者)', () => {
       await p.screenshot({ path: `${R4_SHOTS}/r4-fix-workers-${size.width}.png`, fullPage: true, animations: 'disabled' })
     }
   })
+
+  test('threshold: do not show when usage is unavailable (R31)', async ({ page }) => {
+    // 1. Claude Code: available false, windows []
+    // 2. A card with available: true, but windows: []
+    const workers = FIXTURE().map(w => {
+        if (w.id === 'claude-code') return { ...w, threshold_percent: 95 }
+        if (w.id === 'grok') return { ...w, threshold_percent: 95, usage: { ...w.usage, available: true, windows: [] } }
+        return w
+    })
+
+    await installApi(page, { workers })
+    await open(page)
+
+    // Claude Code
+    const claude = cardByLabel(page, 'Claude Code')
+    await expect(claude.getByRole('spinbutton', { name: 'Claude Code 换班线百分比' })).toHaveCount(0)
+    await expect(claude.getByText('% 时换下一个')).toHaveCount(0)
+
+    // Grok
+    const grok = cardByLabel(page, 'Super Grok')
+    await expect(grok.getByRole('spinbutton', { name: 'Super Grok 换班线百分比' })).toHaveCount(0)
+    await expect(grok.getByText('% 时换下一个')).toHaveCount(0)
+  })
 })
