@@ -314,14 +314,14 @@ def github_pr(settings: Settings, number: str) -> ToolResult:
     return ToolResult(ok=True, text=truncate("\n".join(lines)))
 
 
-def github_ci(
+def _fetch_check_runs(
     settings: Settings,
     ref_or_empty: str = "",
-) -> ToolResult:
-    """Get CI status for a ref (branch/commit SHA). Defaults to default branch."""
+) -> tuple[str, list[dict[str, Any]], ToolResult | None]:
+    """Fetch raw GitHub check runs for a ref or the repository's default branch."""
     err = _check_config(settings)
     if err:
-        return ToolResult(ok=False, text=err)
+        return "", [], ToolResult(ok=False, text=err)
 
     owner, repo = _parse_repo(settings.github_default_repo)
 
@@ -329,7 +329,7 @@ def github_ci(
     if not ref_or_empty.strip():
         repo_ok, repo_data = _github_request(settings, "GET", f"/repos/{owner}/{repo}")
         if not repo_ok:
-            return ToolResult(ok=False, text=f"⚠️ 获取仓库信息失败: {repo_data}")
+            return "", [], ToolResult(ok=False, text=f"⚠️ 获取仓库信息失败: {repo_data}")
         ref = repo_data.get("default_branch", "main")
     else:
         ref = ref_or_empty.strip()
@@ -338,16 +338,52 @@ def github_ci(
     endpoint = f"/repos/{owner}/{repo}/commits/{ref}/check-runs"
     ok, data = _github_request(settings, "GET", endpoint)
     if not ok:
-        return ToolResult(ok=False, text=f"⚠️ 获取 CI 状态失败: {data}")
+        return "", [], ToolResult(ok=False, text=f"⚠️ 获取 CI 状态失败: {data}")
 
-    check_runs = data.get("check_runs", [])
+    return ref, data.get("check_runs", []), None
+
+
+def _count_check_runs(check_runs: list[dict[str, Any]]) -> dict[str, int]:
+    """Summarize check runs into total, success, failure, and pending counts."""
+    return {
+        "total": len(check_runs),
+        "success": sum(1 for c in check_runs if c.get("conclusion") == "success"),
+        "failure": sum(1 for c in check_runs if c.get("conclusion") == "failure"),
+        "pending": sum(1 for c in check_runs if c.get("status") != "completed"),
+    }
+
+
+def github_ci_counts(
+    settings: Settings,
+    ref_or_empty: str = "",
+) -> tuple[str, dict[str, int]] | None:
+    """Return (ref, {"total", "success", "failure", "pending"}), or None on error."""
+    try:
+        ref, check_runs, err_res = _fetch_check_runs(settings, ref_or_empty)
+    except ValueError:
+        return None
+    if err_res is not None:
+        return None
+    return ref, _count_check_runs(check_runs)
+
+
+def github_ci(
+    settings: Settings,
+    ref_or_empty: str = "",
+) -> ToolResult:
+    """Get CI status for a ref (branch/commit SHA). Defaults to default branch."""
+    ref, check_runs, err_res = _fetch_check_runs(settings, ref_or_empty)
+    if err_res is not None:
+        return err_res
+
     if not check_runs:
         return ToolResult(ok=True, text=f"分支 {ref}: 无 CI 检查")
 
-    total = len(check_runs)
-    success = sum(1 for c in check_runs if c.get("conclusion") == "success")
-    failure = sum(1 for c in check_runs if c.get("conclusion") == "failure")
-    pending = sum(1 for c in check_runs if c.get("status") != "completed")
+    counts = _count_check_runs(check_runs)
+    total = counts["total"]
+    success = counts["success"]
+    failure = counts["failure"]
+    pending = counts["pending"]
 
     lines = [
         f"CI 状态 ({ref}):",
