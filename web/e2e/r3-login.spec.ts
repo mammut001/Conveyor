@@ -388,6 +388,7 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await confirmBtn.click()
 
     // Assert POST body
+    await expect.poll(() => api.calls.some(c => c.path === '/api/workers/agy/install')).toBe(true)
     const installCall = api.calls.find(c => c.path === '/api/workers/agy/install')
     expect(installCall).toBeTruthy()
     expect(installCall?.body).toEqual({ confirm: true })
@@ -420,9 +421,8 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await expect(loginBtn).toBeVisible()
     await loginBtn.click()
 
-    // Assert /login/start was called
-    const startCall = api.calls.find(c => c.path === '/api/workers/claude-code/login/start')
-    expect(startCall).toBeTruthy()
+    // Assert /login/start was called (the request lands after the click resolves)
+    await expect.poll(() => api.calls.some(c => c.path === '/api/workers/claude-code/login/start')).toBe(true)
 
     // Primary 打开登录页面 button
     const openUrlBtn = claudeCard.locator('a[role="button"]', { hasText: '打开登录页面' })
@@ -458,6 +458,7 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await submitBtn.click()
 
     // Assert code POST body
+    await expect.poll(() => api.calls.some(c => c.path.endsWith('/code'))).toBe(true)
     const codeCall = api.calls.find(c => c.path.endsWith('/code'))
     expect(codeCall).toBeTruthy()
     expect(codeCall?.body).toEqual({ code: 'AUTH-CODE-98765' })
@@ -491,6 +492,7 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await retryBtn.click()
 
     // Assert a second /login/start call was dispatched
+    await expect.poll(() => api.calls.filter(c => c.path === '/api/workers/claude-code/login/start').length).toBe(2)
     const startCalls = api.calls.filter(c => c.path === '/api/workers/claude-code/login/start')
     expect(startCalls.length).toBe(2)
   })
@@ -527,6 +529,7 @@ test.describe('Round 3 UI (e2e/r3-login.spec.ts)', () => {
     await cancelBtn.click()
 
     // Assert cancel POST was called
+    await expect.poll(() => api.calls.some(c => c.path.endsWith('/cancel'))).toBe(true)
     const cancelCall = api.calls.find(c => c.path.endsWith('/cancel'))
     expect(cancelCall).toBeTruthy()
     expect(api.isCancelled()).toBe(true)

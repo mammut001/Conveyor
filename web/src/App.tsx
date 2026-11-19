@@ -907,6 +907,8 @@ export default function App() {
       setError(reason instanceof Error ? reason.message : 'Could not connect')
     }
   }, [api, creatingSession, selectedJobId, selectedSessionId, token])
+  const refreshRef = useRef(refresh)
+  refreshRef.current = refresh
 
   // The chat panel reports the conversation it is showing (restored, opened or new),
   // so the 对话 sidebar can highlight it and the session list stays current.
@@ -940,14 +942,32 @@ export default function App() {
       if (transcriptRequestRef.current === request) transcriptRequestRef.current = null
     }
   }, [api, authenticated, selectedSessionId])
+  const refreshTranscriptRef = useRef(refreshTranscript)
+  refreshTranscriptRef.current = refreshTranscript
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => { void refreshRef.current() }, [token])
   useEffect(() => {
     if (!authenticated || isLockedRef.current) return
-    const timer = window.setInterval(() => { void refresh(); void refreshTranscript() }, 3_000)
+    const tick = () => {
+      if (document.visibilityState !== 'visible' || isLockedRef.current) return
+      void refreshRef.current()
+      void refreshTranscriptRef.current()
+    }
+    const timer = window.setInterval(tick, 3_000)
     pollTimerRef.current = timer
-    return () => { window.clearInterval(timer); pollTimerRef.current = null }
-  }, [authenticated, refresh, refreshTranscript])
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !isLockedRef.current) {
+        void refreshRef.current()
+        void refreshTranscriptRef.current()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.clearInterval(timer)
+      pollTimerRef.current = null
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [authenticated])
 
   useEffect(() => {
     const handleOnline = () => { setIsOnline(true); void refresh() }
