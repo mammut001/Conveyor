@@ -1326,8 +1326,8 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           if (message.notice) {
             const wantsIntentSettings = message.text.includes('设置 › 理解指令');
             return (
-              <article key={message.id} className="transcript-message role-assistant chat-turn chat-system-notice" role="status">
-                <div className="transcript-content">
+              <article key={message.id} className="transcript-message role-assistant chat-turn chat-system-notice">
+                <div className="transcript-content" role="status">
                   <p className="formatted-paragraph">{message.text}</p>
                   {wantsIntentSettings && onOpenIntentSettings && (
                     <button type="button" className="chat-open-settings-button" onClick={onOpenIntentSettings}>

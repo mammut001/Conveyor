@@ -1798,7 +1798,7 @@ export default function App() {
         <QueueSummary states={system?.queue.states} />
       </aside>
 
-      <section className="stream-panel panel">
+      <section className="stream-panel panel" id="main-content">
         <div className={`stream-header ${!mobileUiOn ? 'stream-header-standard' : ''} ${view === 'chat' ? 'stream-header-chat' : ''}`}>
           {narrowViewport && <button type="button" className="shell-header-button shell-agent-switch" onClick={openAgentDrawer}
             aria-haspopup="dialog" aria-expanded={sessionsDrawerOpen} aria-controls="shell-side-panel"
