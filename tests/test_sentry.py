@@ -18,6 +18,7 @@ from personal_tools.registry import execute_personal_tool, get_personal_tool
 from personal_tools.sentry import (
     SentryAlert,
     SentryState,
+    _is_ssh_scanner_noise,
     check_cpu_and_load,
     check_disk_space,
     check_github_ci,
@@ -267,6 +268,83 @@ class TestSentryEngine(unittest.TestCase):
             alerts = check_log_error_spikes(self.settings)
             self.assertEqual(len(alerts), 1)
             self.assertEqual(alerts[0].source, "host.logs")
+
+    _SSH_NOISE_TEMPLATES = (
+        "Nov 19 07:01:02 dogecoin sshd[12345]: error: kex_exchange_identification: Connection closed by remote host",
+        "Nov 19 07:01:05 dogecoin sshd[12346]: error: maximum authentication attempts exceeded for invalid user test from 1.2.3.4 port 5555 ssh2 [preauth]",
+        "Nov 19 07:01:09 dogecoin sshd[12347]: error: kex_exchange_identification: banner line contains invalid characters",
+        "Nov 19 07:01:10 dogecoin sshd[12348]: fatal: userauth_pubkey: parse publickey packet: incomplete message [preauth]",
+        "Nov 19 07:01:11 dogecoin sshd[12349]: error: send_error: write: Connection reset by peer",
+    )
+
+    def test_check_log_error_spikes_ignores_ssh_scanner_noise(self):
+        stdout = "\n".join(
+            self._SSH_NOISE_TEMPLATES[i % len(self._SSH_NOISE_TEMPLATES)] for i in range(25)
+        )
+        with patch("shutil.which", return_value="/bin/journalctl"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=stdout)
+            alerts = check_log_error_spikes(self.settings)
+        self.assertEqual(alerts, [])
+
+    def test_check_log_error_spikes_mixed_noise_and_real_errors(self):
+        noise_lines = [
+            self._SSH_NOISE_TEMPLATES[i % len(self._SSH_NOISE_TEMPLATES)] for i in range(25)
+        ]
+        real_lines = [
+            f"Nov 19 07:02:00 dogecoin python[999]: ERROR conveyor.web boom {n}"
+            for n in range(1, 7)
+        ]
+        stdout = "\n".join(["-- Logs begin at ... --", *noise_lines, *real_lines])
+        with patch("shutil.which", return_value="/bin/journalctl"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=stdout)
+            alerts = check_log_error_spikes(self.settings)
+        self.assertEqual(len(alerts), 1)
+        alert = alerts[0]
+        self.assertEqual(alert.source, "host.logs")
+        self.assertEqual(alert.title, "日志错误突增预警")
+        self.assertEqual(alert.fingerprint, "host.logs.error_burst")
+        first_line = alert.summary.splitlines()[0]
+        self.assertIn("有 6 条错误日志", first_line)
+        self.assertIn("python[999]: ERROR conveyor.web boom 6", first_line)
+        self.assertNotIn("Nov 19 07:02:00 dogecoin", first_line)
+        self.assertIn("最新错误样例：", alert.summary)
+        argv = mock_run.call_args[0][0]
+        self.assertIn("-n", argv)
+        self.assertEqual(argv[argv.index("-n") + 1], "200")
+
+    def test_is_ssh_scanner_noise_keeps_real_sshd_errors(self):
+        real_sshd = "sshd[1]: error: Bind to port 22 on 0.0.0.0 failed: Address already in use."
+        self.assertFalse(_is_ssh_scanner_noise(real_sshd))
+        self.assertTrue(
+            _is_ssh_scanner_noise(
+                "Nov 19 07:01:11 dogecoin sshd: error: send_error: write: Connection reset by peer"
+            )
+        )
+        stdout = "\n".join(real_sshd for _ in range(5))
+        with patch("shutil.which", return_value="/bin/journalctl"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=stdout)
+            alerts = check_log_error_spikes(self.settings)
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("有 5 条错误日志", alerts[0].summary.splitlines()[0])
+
+    def test_check_log_error_spikes_truncates_first_line_sample(self):
+        long_msg = "x" * 200
+        stdout = "\n".join(
+            f"Nov 19 07:02:00 dogecoin python[999]: {long_msg}" for _ in range(5)
+        )
+        with patch("shutil.which", return_value="/bin/journalctl"), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=stdout)
+            alerts = check_log_error_spikes(self.settings)
+        self.assertEqual(len(alerts), 1)
+        first_line = alerts[0].summary.splitlines()[0]
+        prefix, _, sample = first_line.partition("最新一条：")
+        self.assertTrue(prefix)
+        self.assertTrue(sample.endswith("…"))
+        self.assertLessEqual(len(sample), 160)
 
     def test_check_repo_git(self):
         (self.ws / ".git").mkdir(parents=True, exist_ok=True)

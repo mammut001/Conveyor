@@ -416,6 +416,25 @@ def check_services(settings: Settings) -> list[SentryAlert]:
     return alerts
 
 
+_SSH_SCANNER_MARKERS = (
+    "[preauth]",
+    "kex_exchange_identification",
+    "Connection closed by",
+    "Connection reset by peer",
+    "invalid user",
+    "send_error",
+)
+_JOURNAL_PREFIX_RE = re.compile(r"^\w{3} +\d+ [\d:]+ \S+ ")
+_FIRST_LINE_SAMPLE_MAX = 160
+
+
+def _is_ssh_scanner_noise(line: str) -> bool:
+    """Return True if a journal line is routine internet SSH scanner noise."""
+    if "sshd[" not in line and " sshd:" not in line:
+        return False
+    return any(marker in line for marker in _SSH_SCANNER_MARKERS)
+
+
 def check_log_error_spikes(settings: Settings) -> list[SentryAlert]:
     """Detect sudden bursts of errors in host system journal."""
     alerts: list[SentryAlert] = []
@@ -426,18 +445,27 @@ def check_log_error_spikes(settings: Settings) -> list[SentryAlert]:
     try:
         # Check errors in the last 10 minutes
         res = subprocess.run(
-            ["journalctl", "-p", "err", "--since", "10 minutes ago", "-n", "30", "--no-pager"],
+            ["journalctl", "-p", "err", "--since", "10 minutes ago", "-n", "200", "--no-pager"],
             capture_output=True,
             text=True,
             timeout=8,
         )
         if res.returncode == 0 and res.stdout.strip():
-            lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
+            lines = [
+                line
+                for raw in res.stdout.splitlines()
+                if (line := raw.strip())
+                and not line.startswith("--")
+                and not _is_ssh_scanner_noise(line)
+            ]
             error_count = len(lines)
             if error_count >= threshold:
+                latest_sample = _JOURNAL_PREFIX_RE.sub("", lines[-1]).strip()
+                if len(latest_sample) > _FIRST_LINE_SAMPLE_MAX:
+                    latest_sample = latest_sample[: _FIRST_LINE_SAMPLE_MAX - 1].rstrip() + "…"
                 sample_errors = lines[-3:]
                 summary = (
-                    f"最近 10 分钟检测到 {error_count} 条错误日志，出现异常峰值。\n"
+                    f"最近 10 分钟有 {error_count} 条错误日志，最新一条：{latest_sample}\n"
                     f"最新错误样例：\n• " + "\n• ".join(sample_errors)
                 )
                 alerts.append(
