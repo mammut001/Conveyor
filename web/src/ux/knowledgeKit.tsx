@@ -123,6 +123,7 @@ const KNOWN_ERRORS: Array<[RegExp, string]> = [
   [/memory editing requires/i, '当前的记忆版本不支持编辑'],
   [/agent not found/i, '找不到这个助手，请刷新页面后重试'],
   [/memory not found/i, '这条记忆已经不存在了，请刷新'],
+  [/reminder not found/i, '这条提醒已经不存在了，请刷新'],
   [/routine #?\d* ?not found/i, '这个定时任务已经不存在了，请刷新'],
   [/hook not found/i, '这个 Webhook 已经不存在了'],
   [/name must be 1-80/i, '名称需要 1–80 个字'],

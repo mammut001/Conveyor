@@ -378,19 +378,31 @@ class PersonalToolsStore:
             retry_count=0,
         )
 
-    def list_reminders(self, operator_id: str, *, limit: int = 20) -> list[ReminderRow]:
+    def list_reminders(
+        self,
+        operator_id: str,
+        *,
+        limit: int = 20,
+        status: str | None = None,
+    ) -> list[ReminderRow]:
+        where = "WHERE operator_id = ?"
+        params: list[object] = [operator_id]
+        if status is not None:
+            where += " AND status = ?"
+            params.append(status)
+        params.append(limit)
         with _connect(self._settings) as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, operator_id, text, due_at, status, created_at,
                        channel, chat_id, delivered_at, delivery_status,
                        delivery_error, retry_count
                 FROM reminders
-                WHERE operator_id = ?
+                {where}
                 ORDER BY due_at ASC
                 LIMIT ?
                 """,
-                (operator_id, limit),
+                tuple(params),
             ).fetchall()
         return [_reminder_from_row(r) for r in rows]
 
