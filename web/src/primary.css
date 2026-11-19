@@ -525,7 +525,7 @@
 .formatted-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid #e3e6eb; border-radius: 9px; }
 .formatted-table-scroll:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
 .formatted-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
-.formatted-table th, .formatted-table td { min-width: 100px; padding: 8px 12px; border-bottom: 1px solid #e3e6eb; overflow-wrap: anywhere; }
+.formatted-table th, .formatted-table td { min-width: 4.5em; padding: 8px 12px; border-bottom: 1px solid #e3e6eb; overflow-wrap: break-word; }
 .formatted-table th { background: #f6f7f9; font-weight: 600; text-align: left; }
 .formatted-table tr:last-child td { border-bottom: 0; }
 .formatted-text-flow .code-block-container { min-width: 0; max-width: 100%; }

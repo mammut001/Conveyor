@@ -1401,3 +1401,11 @@
     border: 1px solid ButtonText !important;
   }
 }
+
+/* ≤760px: reduce horizontal padding for tables */
+@media (max-width: 760px) {
+  .primary-interface .mobile-ui .formatted-table th,
+  .primary-interface .mobile-ui .formatted-table td {
+    padding: 8px 8px;
+  }
+}
