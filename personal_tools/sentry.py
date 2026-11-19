@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -263,6 +265,61 @@ def check_disk_space(settings: Settings) -> list[SentryAlert]:
     return alerts
 
 
+def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
+    """Return top (command, user, total_pcpu) groups using platform ps flags."""
+    if limit <= 0:
+        return []
+    is_darwin = sys.platform == "darwin"
+    cmd = (
+        ["ps", "-Ao", "user,pcpu,comm", "-r"]
+        if is_darwin
+        else ["ps", "-eo", "user:32,pcpu,comm", "--sort=-pcpu", "--no-headers"]
+    )
+    try:
+        res = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return []
+    if res.returncode != 0:
+        return []
+
+    lines = [line for line in (res.stdout or "").splitlines() if line.strip()]
+    if is_darwin:
+        lines = lines[1:]
+
+    totals: dict[tuple[str, str], float] = {}
+    for line in lines:
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3:
+            continue
+        user, pcpu_str, comm = parts
+        try:
+            pcpu = float(pcpu_str)
+        except ValueError:
+            continue
+        if not math.isfinite(pcpu):
+            continue
+        comm = os.path.basename(comm.strip()) or comm.strip()
+        # Linux cuts process titles to 15 chars, e.g. "next-server (v1": drop the version tail.
+        comm = re.sub(r"\s*\(.*$", "", comm).strip()
+        if not comm:
+            continue
+        key = (comm, user)
+        totals[key] = totals.get(key, 0.0) + pcpu
+
+    groups = [
+        (comm, user, total)
+        for (comm, user), total in totals.items()
+        if total > 0
+    ]
+    groups.sort(key=lambda item: item[2], reverse=True)
+    return groups[:limit]
+
+
 def check_cpu_and_load(settings: Settings) -> list[SentryAlert]:
     """Check system load average and detect runaway processes."""
     alerts: list[SentryAlert] = []
@@ -276,30 +333,14 @@ def check_cpu_and_load(settings: Settings) -> list[SentryAlert]:
     threshold_ratio = getattr(settings, "sentry_load_threshold_ratio", 2.0)
 
     if load_ratio >= threshold_ratio:
-        # Check top CPU hog process via ps
-        top_proc_info = ""
-        top_cmd = "unknown"
-        try:
-            res = subprocess.run(
-                ["ps", "-eo", "pid,pcpu,comm", "-r"],
-                capture_output=True,
-                text=True,
-                timeout=5,
+        summary = f"1分钟负载达到 {load1:.2f} ({cpus} 核 CPU，负载比例 {load_ratio:.1f}x)。"
+        top_procs = _top_cpu_processes()
+        if top_procs:
+            items = "、".join(
+                f"{comm}（{user}，{pcpu:.0f}%）"
+                for comm, user, pcpu in top_procs
             )
-            if res.returncode == 0:
-                lines = [line.strip() for line in res.stdout.strip().splitlines() if line.strip()]
-                if len(lines) > 1:
-                    top_proc_info = f"\n高耗能进程排名前列：\n" + "\n".join(lines[1:4])
-                    parts = lines[1].split()
-                    if len(parts) >= 3:
-                        top_cmd = parts[2]
-        except Exception:
-            pass
-
-        summary = (
-            f"1分钟负载达到 {load1:.2f} ({cpus} 核 CPU，负载比例 {load_ratio:.1f}x)。"
-            f"{top_proc_info}"
-        )
+            summary += f"占用最多：{items}。"
         alerts.append(
             SentryAlert(
                 source="host.cpu",

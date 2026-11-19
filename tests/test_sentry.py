@@ -137,11 +137,70 @@ class TestSentryEngine(unittest.TestCase):
 
     def test_check_cpu_and_load(self):
         with patch("os.getloadavg", return_value=(8.0, 6.0, 5.0)), \
-             patch("os.cpu_count", return_value=2):
+             patch("os.cpu_count", return_value=2), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
             alerts = check_cpu_and_load(self.settings)
             self.assertEqual(len(alerts), 1)
             self.assertEqual(alerts[0].source, "host.cpu")
             self.assertIn("CPU 负载过高", alerts[0].title)
+
+    def test_check_cpu_and_load_linux_top_processes(self):
+        ps_stdout = (
+            "ghrunner         65.5 chrome-headless\n"
+            "ghrunner         61.0 chrome-headless\n"
+            "ghrunner         59.3 next-server (v1\n"
+            "ubuntu           21.8 python\n"
+            "root              0.0 systemd\n"
+        )
+        with patch("os.getloadavg", return_value=(17.63, 12.0, 8.0)), \
+             patch("os.cpu_count", return_value=4), \
+             patch("sys.platform", "linux"), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)) as mock_run:
+            alerts = check_cpu_and_load(self.settings)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].source, "host.cpu")
+        # One line: the 值守 card shows only the first line of a summary.
+        self.assertEqual(
+            alerts[0].summary,
+            "1分钟负载达到 17.63 (4 核 CPU，负载比例 4.4x)。"
+            "占用最多：chrome-headless（ghrunner，126%）、next-server（ghrunner，59%）、python（ubuntu，22%）。",
+        )
+        argv = mock_run.call_args.args[0]
+        self.assertIn("--sort=-pcpu", argv)
+        self.assertNotIn("-r", argv)
+
+    def test_check_cpu_and_load_darwin_top_processes(self):
+        ps_stdout = (
+            "USER              %CPU COMM\n"
+            "alice             45.2 /Applications/My App.app/Contents/MacOS/My App\n"
+            "root              10.4 /usr/bin/foo\n"
+        )
+        with patch("os.getloadavg", return_value=(8.0, 6.0, 5.0)), \
+             patch("os.cpu_count", return_value=2), \
+             patch("sys.platform", "darwin"), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)) as mock_run:
+            alerts = check_cpu_and_load(self.settings)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("占用最多：My App（alice，45%）、foo（root，10%）。", alerts[0].summary)
+        argv = mock_run.call_args.args[0]
+        self.assertIn("-r", argv)
+
+    def test_check_cpu_and_load_ps_failure(self):
+        expected_summary = "1分钟负载达到 8.00 (2 核 CPU，负载比例 4.0x)。"
+        for run_patch in (
+            patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")),
+            patch("subprocess.run", side_effect=OSError("ps failed")),
+        ):
+            with self.subTest(run_patch=run_patch):
+                with patch("os.getloadavg", return_value=(8.0, 6.0, 5.0)), \
+                     patch("os.cpu_count", return_value=2), \
+                     run_patch:
+                    alerts = check_cpu_and_load(self.settings)
+                self.assertEqual(len(alerts), 1)
+                self.assertEqual(alerts[0].summary, expected_summary)
+                self.assertNotIn("占用最多", alerts[0].summary)
 
     def test_check_services(self):
         with patch("shutil.which", return_value="/bin/systemctl"), \
