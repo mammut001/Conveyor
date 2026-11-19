@@ -62,7 +62,12 @@ async function goto(page: Page, view: string) {
   await expect(page.locator('main.app-shell')).toBeVisible()
 }
 
-test('F1: top bar connection state reflects startup, live, poll failure, and offline events', async ({ page }) => {
+test('F1: top bar connection state reflects startup, live, poll failure, and offline events', async ({ page }, testInfo) => {
+  // This test once hit the 页面出了点问题 boundary in CI only; keep what the page said so the
+  // next failure names the error instead of just "element(s) not found".
+  const pageErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(`pageerror: ${error.stack || error}`))
+  page.on('console', message => { if (message.type() === 'error') pageErrors.push(`console: ${message.text()}`) })
   let backendFail = false
   await page.addInitScript(() => { localStorage.setItem('conveyor-token', 't') })
   await page.route('**/api/**', async route => {
@@ -83,6 +88,7 @@ test('F1: top bar connection state reflects startup, live, poll failure, and off
     return json({ items: [], approvals: [], sessions: [], jobs: [], skills: [], workflows: [], messages: [] })
   })
 
+  try {
   await page.goto('/#chat')
   const statusPill = page.locator('.top-status')
   // Successful poll gives 'live'
@@ -108,6 +114,12 @@ test('F1: top bar connection state reflects startup, live, poll failure, and off
   await expect(statusPill.locator('.top-status-label')).toHaveText('在线')
 
   await page.screenshot({ path: `${SHOTS}/f1-connection-live.png` })
+  } catch (failure) {
+    const boundary = await page.locator('details code').allTextContents().catch(() => [])
+    await testInfo.attach('page-errors', { body: [...boundary.map(text => `boundary: ${text}`), ...pageErrors].join('\n') || '(none)', contentType: 'text/plain' })
+    console.log('[F1 page errors]', boundary, pageErrors)
+    throw failure
+  }
 })
 
 test('F2: phone zoom below 340px (260x560 and 320x568) collapses rail, keeps composer full width', async ({ page }) => {
