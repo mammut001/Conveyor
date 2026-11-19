@@ -15,8 +15,9 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         <span className="code-lang-tag">{language && language !== 'text' ? language : '代码'}</span>
         <CopyButton text={code} className="code-copy-btn" title="复制代码" />
       </div>
-      {/* Long lines scroll sideways: keyboard users need to reach it (axe scrollable-region-focusable). */}
-      <pre className="code-block-pre" tabIndex={0} role="region" aria-label={`${language && language !== 'text' ? language : ''}代码`}><code>{code}</code></pre>
+      {/* Long lines scroll sideways: keyboard users need to reach it (axe scrollable-region-focusable). A group, not a
+          region: every reply's code blocks would otherwise be duplicate landmarks. */}
+      <pre className="code-block-pre" tabIndex={0} role="group" aria-label={`${language && language !== 'text' ? language : ''}代码`}><code>{code}</code></pre>
     </div>
   );
 }
@@ -29,7 +30,7 @@ const components: Components = {
   code: ({ children, className }) => <code className={className || 'inline-code'}>{children}</code>,
   pre: CodeBlock,
   table: ({ children }) => (
-    <div className="formatted-table-scroll" role="region" aria-label="表格" tabIndex={0}>
+    <div className="formatted-table-scroll" role="group" aria-label="表格" tabIndex={0}>
       <table className="formatted-table">{children}</table>
     </div>
   ),
