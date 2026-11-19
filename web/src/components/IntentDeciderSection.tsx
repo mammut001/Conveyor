@@ -261,7 +261,7 @@ export function IntentDeciderSection({
   return (
     <section className="intent-decider-section" aria-labelledby="intent-decider-title">
       <div className="intent-decider-head">
-        <h3 id="intent-decider-title">理解指令</h3>
+        <h3 id="intent-decider-title" tabIndex={-1}>理解指令</h3>
         <p className="intent-decider-desc">用轻量判断模型理解更多日常口语（查进度、暂停、接着做等），超时会自动按普通对话回复。</p>
       </div>
       {health && (

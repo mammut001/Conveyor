@@ -693,6 +693,7 @@
   font-size: 14px;
   font-weight: 600;
 }
+.primary-interface .provider-settings .intent-decider-head h3:focus { outline: none; }
 .primary-interface .provider-settings .intent-decider-desc {
   margin: 0;
   color: #6b7280;

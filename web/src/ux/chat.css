@@ -1064,7 +1064,8 @@
 .primary-interface .chat-approval-card .chat-approval-detail p { color: #6b7280; font-size: 12px; }
 .primary-interface .chat-failed-reply summary { width: fit-content; color: #6b7280; font-size: 12px; cursor: pointer; }
 .primary-interface .chat-failed-reply code { display: block; color: #6b7280; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
-.primary-interface .chat-failed-reply .chat-open-settings-button {
+.primary-interface .chat-failed-reply .chat-open-settings-button,
+.primary-interface .chat-system-notice .chat-open-settings-button {
   align-self: flex-start;
   margin-top: 6px;
   padding: 4px 10px;
@@ -1077,7 +1078,9 @@
   font-weight: 600;
   cursor: pointer;
 }
-.primary-interface .chat-failed-reply .chat-open-settings-button:hover { border-color: #a94c34; background: #fdf3f0; }
+.primary-interface .chat-failed-reply .chat-open-settings-button:hover,
+.primary-interface .chat-system-notice .chat-open-settings-button:hover { border-color: #a94c34; background: #fdf3f0; }
+.primary-interface .chat-system-notice .chat-open-settings-button { display: block; }
 
 /* A system-style notice (理解指令 is down): smaller, muted, no avatar or footer. */
 .primary-interface .chat-system-notice { margin: 2px 0; }
