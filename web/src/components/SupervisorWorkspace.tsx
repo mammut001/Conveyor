@@ -3811,7 +3811,7 @@ export function SupervisorWorkspace({
                         id="sup-criteria-input"
                         aria-label="验收标准"
                         type="text"
-                        placeholder="例如：通过单元测试与构建检查，不改动后端接口"
+                        placeholder="例如：测试通过，不改后端接口"
                         value={currentDraft.acceptanceCriteria}
                         disabled={dispatchBusy}
                         onChange={e => updateCurrentDraft({ acceptanceCriteria: e.target.value })}
