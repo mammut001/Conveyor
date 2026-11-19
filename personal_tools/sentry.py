@@ -522,23 +522,30 @@ def check_repo_git(settings: Settings) -> list[SentryAlert]:
 
 
 def check_github_ci(settings: Settings) -> list[SentryAlert]:
-    """Check if the latest GitHub Actions CI run on main failed (when configured)."""
+    """Check if the latest GitHub Actions CI run on the default branch failed (when configured)."""
     alerts: list[SentryAlert] = []
     token = getattr(settings, "github_token", None)
-    repo = getattr(settings, "github_repo", None)
+    repo = getattr(settings, "github_default_repo", None)
     if not token or not repo:
         return alerts
 
     try:
-        from personal_tools.github_tools import get_ci_status
-        ci_res = get_ci_status(settings, ref="main")
-        if ci_res.ok and "failure" in ci_res.text.lower():
+        from personal_tools.github_tools import github_ci_counts
+
+        res = github_ci_counts(settings, "")
+        if res is None:
+            return alerts
+        ref, counts = res
+        failure = counts.get("failure", 0)
+        pending = counts.get("pending", 0)
+        total = counts.get("total", 0)
+        if failure > 0 and pending == 0:
             alerts.append(
                 SentryAlert(
                     source="repo.ci",
                     severity="critical",
                     title="自动构建没有通过",
-                    summary=f"仓库「{repo}」默认分支（main）最新一次自动构建失败。\n{truncate(ci_res.text, 200)}",
+                    summary=f"仓库「{repo}」{ref} 分支最新一次自动构建失败（{failure}/{total} 项检查失败）。",
                     fingerprint=f"repo.ci.{repo}.failure",
                     suggested_actions=[
                         {"label": "查看构建状态", "command": "/github_ci"},
@@ -547,7 +554,7 @@ def check_github_ci(settings: Settings) -> list[SentryAlert]:
                 )
             )
     except Exception as exc:
-        logger.debug("GitHub CI check failed: %s", exc)
+        logger.warning("GitHub CI check failed: %s", exc)
     return alerts
 
 

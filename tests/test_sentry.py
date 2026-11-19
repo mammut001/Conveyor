@@ -247,17 +247,93 @@ class TestSentryEngine(unittest.TestCase):
                 self.assertEqual(_describe_unit_state(state, show), expected)
 
     def test_ci_failure_suggests_chinese_fix_command(self):
-        from types import SimpleNamespace
-        from personal_tools.base import ToolResult
-
-        settings = SimpleNamespace(github_token="t", github_repo="owner/repo")
-        with patch("personal_tools.github_tools.get_ci_status", create=True,
-                   return_value=ToolResult(ok=True, text="main: failure")):
+        settings = dataclasses.replace(
+            self.settings,
+            github_token="t",
+            github_default_repo="owner/repo",
+        )
+        with patch(
+            "personal_tools.github_tools.github_ci_counts",
+            return_value=("main", {"total": 3, "success": 2, "failure": 1, "pending": 0}),
+        ):
             alerts = check_github_ci(settings)
         self.assertEqual(len(alerts), 1)
         self.assertEqual(
             alerts[0].suggested_actions[1],
             {"label": "启动自动排查与修复", "command": "/fix 排查并修复默认分支的构建失败"},
+        )
+
+    def test_check_github_ci_alerts_on_finished_failure(self):
+        settings = dataclasses.replace(
+            self.settings,
+            github_token="t",
+            github_default_repo="owner/repo",
+        )
+        with patch(
+            "personal_tools.github_tools.github_ci_counts",
+            return_value=("main", {"total": 3, "success": 2, "failure": 1, "pending": 0}),
+        ) as mock_counts:
+            alerts = check_github_ci(settings)
+        mock_counts.assert_called_once_with(settings, "")
+        self.assertEqual(len(alerts), 1)
+        alert = alerts[0]
+        self.assertEqual(alert.source, "repo.ci")
+        self.assertEqual(alert.severity, "critical")
+        self.assertEqual(alert.title, "自动构建没有通过")
+        self.assertEqual(alert.fingerprint, "repo.ci.owner/repo.failure")
+        self.assertEqual(
+            alert.summary.splitlines()[0],
+            "仓库「owner/repo」main 分支最新一次自动构建失败（1/3 项检查失败）。",
+        )
+        self.assertEqual(
+            alert.suggested_actions,
+            [
+                {"label": "查看构建状态", "command": "/github_ci"},
+                {"label": "启动自动排查与修复", "command": "/fix 排查并修复默认分支的构建失败"},
+            ],
+        )
+
+    def test_check_github_ci_skips_when_pending(self):
+        settings = dataclasses.replace(
+            self.settings,
+            github_token="t",
+            github_default_repo="owner/repo",
+        )
+        with patch(
+            "personal_tools.github_tools.github_ci_counts",
+            return_value=("main", {"total": 3, "success": 1, "failure": 1, "pending": 1}),
+        ):
+            alerts = check_github_ci(settings)
+        self.assertEqual(alerts, [])
+
+    def test_check_github_ci_missing_token_does_not_call_helper(self):
+        settings = dataclasses.replace(
+            self.settings,
+            github_token=None,
+            github_default_repo="owner/repo",
+        )
+        with patch("personal_tools.github_tools.github_ci_counts") as mock_counts:
+            alerts = check_github_ci(settings)
+        self.assertEqual(alerts, [])
+        mock_counts.assert_not_called()
+
+    def test_check_github_ci_uses_github_default_repo(self):
+        settings = dataclasses.replace(
+            self.settings,
+            github_token="t",
+            github_default_repo="acme/conveyor",
+        )
+        with patch(
+            "personal_tools.github_tools.github_ci_counts",
+            return_value=("master", {"total": 4, "success": 2, "failure": 2, "pending": 0}),
+        ) as mock_counts:
+            alerts = check_github_ci(settings)
+        mock_counts.assert_called_once_with(settings, "")
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0].fingerprint, "repo.ci.acme/conveyor.failure")
+        self.assertEqual(
+            alerts[0].summary.splitlines()[0],
+            "仓库「acme/conveyor」master 分支最新一次自动构建失败（2/4 项检查失败）。",
         )
 
     def test_check_log_error_spikes(self):
