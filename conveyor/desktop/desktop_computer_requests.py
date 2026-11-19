@@ -411,6 +411,43 @@ def _load_unlocked(settings: Settings) -> dict[str, dict]:
         return {"tasks": {}, "arm": {}}
 
 
+# The web console polls computer status every few seconds and the store keeps
+# every past task with its step log (about 1 MB on production). A "quiet" store
+# (nothing armed, no running task, no unfinished step) cannot change by the clock
+# alone, only by a write, so while the file's signature is the one last seen
+# quiet, the expiry pass, the active-task lookup and the arm countdown skip
+# parsing it. The signature is taken under the file lock writers hold.
+_QUIET_SIGNATURE: dict[str, tuple[int, int, int]] = {}
+
+
+def _file_signature(settings: Settings) -> tuple[int, int, int] | None:
+    try:
+        st = computer_requests_path(settings).stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _store_is_quiet(store: dict[str, dict]) -> bool:
+    arm = store.get("arm") or {}
+    if isinstance(arm, dict) and arm.get("active"):
+        return False
+    for record in (store.get("tasks") or {}).values():
+        if not isinstance(record, dict):
+            continue
+        if record.get("status") == "running":
+            return False
+        for step in (record.get("steps") or {}).values():
+            if isinstance(step, dict) and step.get("status") not in ("completed", "failed", "cancelled", "expired"):
+                return False
+    return True
+
+
+def _known_quiet(settings: Settings) -> bool:
+    sig = _file_signature(settings)
+    return sig is not None and _QUIET_SIGNATURE.get(str(computer_requests_path(settings))) == sig
+
+
 def _save_unlocked(settings: Settings, store: dict[str, dict]) -> None:
     path = computer_requests_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -534,6 +571,8 @@ def _arm_active_unlocked(settings: Settings, now: datetime | None = None) -> boo
 
 
 def arm_remaining_seconds(settings: Settings, now: datetime | None = None) -> int:
+    if _known_quiet(settings):
+        return 0
     store = _load_unlocked(settings)
     arm = store.get("arm") or {}
     if not isinstance(arm, dict) or not arm.get("active"):
@@ -798,6 +837,8 @@ def load_computer_session(settings: Settings, *, now: datetime | None = None) ->
 def get_active_task(settings: Settings) -> dict | None:
     """Return the single running task, if any (single-operator model)."""
     expire_old_computer(settings)
+    if _known_quiet(settings):
+        return None
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
             store = _load_unlocked(settings)
@@ -1340,8 +1381,11 @@ def expire_old_computer(settings: Settings, now: datetime | None = None) -> int:
     """Expire stale arms, tasks, and steps. Returns number of changes."""
     changed = 0
     current = _utc_now(now)
+    if _known_quiet(settings):
+        return 0
     with _lock:
         with file_lock(computer_requests_lock_path(settings)):
+            signature = _file_signature(settings)
             store = _load_unlocked(settings)
             # arm
             arm = store.get("arm") or {}
@@ -1377,6 +1421,8 @@ def expire_old_computer(settings: Settings, now: datetime | None = None) -> int:
                         changed += 1
             if changed:
                 _save_unlocked(settings, store)
+            elif signature is not None and _store_is_quiet(store):
+                _QUIET_SIGNATURE[str(computer_requests_path(settings))] = signature
     return changed
 
 
