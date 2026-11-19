@@ -69,7 +69,7 @@ class WebControl:
         for item in jobs:
             event = latest.get(item["id"])
             item["latest_event"] = event.to_dict() if event else None
-            item["changed_files"] = self._changed_files(item)
+            item["changed_files"] = self._changed_files(item, cached=True)
         return jobs
 
     def provider_config(self) -> dict[str, Any]:
@@ -341,10 +341,25 @@ class WebControl:
             return None
         return path
 
-    def _changed_files(self, job: dict[str, Any]) -> list[dict[str, Any]]:
+    # The job list is polled every few seconds and runs `git status` per job with
+    # a worktree. A finished job's worktree only changes through Apply/Discard
+    # (decide_approval clears this) or a manual edit, so its list entry may be up
+    # to _CHANGED_FILES_TTL seconds old. Running jobs and get_job stay live.
+    _CHANGED_FILES_TTL = 20.0
+    _FINISHED_STATES = frozenset({"completed", "failed", "cancelled", "interrupted"})
+
+    def _changed_files(self, job: dict[str, Any], *, cached: bool = False) -> list[dict[str, Any]]:
         worktree = self._worktree(job)
         if not worktree or not worktree.exists():
             return []
+        use_cache = cached and str(job.get("state") or "") in self._FINISHED_STATES
+        cache: dict[str, tuple[float, list[dict[str, Any]]]] = self.__dict__.setdefault("_changed_files_cache", {})
+        key = str(worktree)
+        now = time.monotonic()
+        if use_cache:
+            hit = cache.get(key)
+            if hit and hit[0] > now:
+                return [dict(entry) for entry in hit[1]]
         import subprocess
         result = subprocess.run(
             ["git", "status", "--short"], cwd=worktree,
@@ -355,6 +370,10 @@ class WebControl:
         for line in result.stdout.splitlines()[:200]:
             if len(line) >= 4:
                 files.append({"status": line[:2].strip(), "path": line[3:]})
+        if result.returncode == 0:
+            if len(cache) > 256:
+                cache.clear()
+            cache[key] = (now + self._CHANGED_FILES_TTL, [dict(entry) for entry in files])
         return files
 
     async def diff(self, job_id: str) -> dict[str, Any] | None:
@@ -466,6 +485,15 @@ class WebControl:
         return approvals
 
     async def decide_approval(self, approval_id: str, approve: bool) -> dict[str, Any] | None:
+        # Apply/Discard changes a worktree: drop cached file lists before and after,
+        # so a poll that lands mid-decision cannot keep the old list for the TTL.
+        self.__dict__.get("_changed_files_cache", {}).clear()
+        try:
+            return await self._decide_approval(approval_id, approve)
+        finally:
+            self.__dict__.get("_changed_files_cache", {}).clear()
+
+    async def _decide_approval(self, approval_id: str, approve: bool) -> dict[str, Any] | None:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
