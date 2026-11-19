@@ -288,6 +288,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       setLoaded({ inbox: true, routines: true });
       return;
     }
+    disabledRef.current = false;
+    setDisabled(false);
     void fetchInbox();
     void fetchRoutines();
   }, [fetchInbox, fetchRoutines, fetchReminders, routinesEnabled]);

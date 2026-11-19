@@ -27,7 +27,7 @@ const provider = {
 
 const pageErrors: string[] = [];
 
-async function install(page: Page, initialReminders: Reminder[], options?: { routines?: boolean }) {
+async function install(page: Page, initialReminders: Reminder[], options?: { routines?: boolean; systemDelayMs?: number }) {
   pageErrors.length = 0;
   page.on('pageerror', error => pageErrors.push(error.message));
 
@@ -48,6 +48,9 @@ async function install(page: Page, initialReminders: Reminder[], options?: { rou
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
     if (path === '/api/system/status') {
+      if (options?.systemDelayMs) {
+        await new Promise((resolve) => setTimeout(resolve, options.systemDelayMs));
+      }
       return json({
         uptime_seconds: 10, load_average: [0.2, 0.1, 0.1], cpu_count: 2,
         memory: { total: null, available: null }, disk: { total: 1000, used: 0, free: 1000 },
@@ -168,5 +171,15 @@ test.describe('R37: inbox reminders', () => {
     await expect.poll(() => cancelCalls).toEqual(['/api/reminders/19/cancel']);
     await expect(rows).toHaveCount(0);
     await expect(panel.getByText('下午三点开项目会')).toHaveCount(0);
+  });
+
+  test('收件箱 opened before system status loads still shows 定时任务 (R39)', async ({ page }) => {
+    const statusPromise = page.waitForResponse((res) => new URL(res.url()).pathname === '/api/system/status');
+    await install(page, [], { routines: true, systemDelayMs: 1500 });
+    await statusPromise;
+    const panel = page.locator('.kn-inbox');
+
+    await expect(panel.getByRole('heading', { name: /^定时任务/ })).toBeVisible();
+    await expect(panel.getByText('定时任务功能未开启。')).toHaveCount(0);
   });
 });

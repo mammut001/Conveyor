@@ -1837,7 +1837,7 @@ export default function App() {
             agentName={selectedAgent?.name}
             token={token}
             webhooksEnabled={Boolean(system?.features?.webhooks)}
-            routinesEnabled={Boolean(system?.features?.routines)}
+            routinesEnabled={system ? Boolean(system.features?.routines) : undefined}
             onUnreadChange={setInboxUnread}
             onApprovalDecided={() => {
               void refresh()
