@@ -261,6 +261,9 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     } catch { /* Typing still works if browser storage is unavailable. */ }
   }, [draftKey, input]);
   const [busy, setBusy] = useState(false);
+  const [resumeWaiting, setResumeWaiting] = useState(false);
+  // Set below, once checkResumeWaiting exists; the initial history load calls it through this ref.
+  const checkResumeWaitingRef = useRef<(msgs: ChatMessage[]) => Promise<void>>(async () => {});
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const [error, setError] = useState<ChatError | null>(null);
   // Not an error: tells the owner that a reply cut off by leaving the page was put back in the box.
@@ -457,12 +460,78 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     if (initialSessionId.current) {
       const startVersion = historyVersionRef.current + 1;
       void loadHistory(initialSessionId.current).then(stored => {
-        if (historyVersionRef.current === startVersion) restoreInterrupted(pending, stored);
+        if (historyVersionRef.current === startVersion) {
+          restoreInterrupted(pending, stored);
+          if (stored) void checkResumeWaitingRef.current(mapHistoryMessages(stored));
+        }
       });
     } else {
       restoreInterrupted(pending, null);
     }
-  }, [loadHistory, takeInflight, restoreInterrupted]);
+  }, [loadHistory, takeInflight, restoreInterrupted, mapHistoryMessages]);
+
+  const checkResumeWaiting = useCallback(async (msgs: ChatMessage[]) => {
+    const lastMessage = [...msgs].reverse().find(m => !m.notice);
+    if (!lastMessage || lastMessage.role !== 'user') return;
+    const now = new Date();
+    const created = new Date(lastMessage.created_at);
+    if (isNaN(created.getTime()) || (now.getTime() - created.getTime()) > 15 * 60 * 1000) return;
+
+    try {
+      const res = await fetch('/api/jobs', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const job = data.jobs.find((j: any) => j.channel === 'web' && (j.state === 'queued' || j.state === 'running') && j.metadata?.original_text === lastMessage.text);
+      if (job && !sendingRef.current) setResumeWaiting(true);
+    } catch { }
+  }, [token]);
+  checkResumeWaitingRef.current = checkResumeWaiting;
+  // A new message or another conversation ends the wait for the old reply.
+  useEffect(() => { if (busy) setResumeWaiting(false); }, [busy]);
+  useEffect(() => { setResumeWaiting(false); }, [sessionId]);
+
+  useEffect(() => {
+    if (!resumeWaiting) return;
+    let alive = true;
+    let startTime = Date.now();
+    const interval = window.setInterval(async () => {
+      if (Date.now() - startTime > 10 * 60 * 1000) {
+        setResumeWaiting(false);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!alive || !res.ok) return;
+        const data = await res.json();
+        const newMessages = mapHistoryMessages(data.messages);
+        const lastMessage = [...newMessages].reverse().find(m => !m.notice);
+        if (lastMessage && lastMessage.role === 'assistant') {
+          setMessages(newMessages);
+          setResumeWaiting(false);
+          return;
+        }
+
+        const jobsRes = await fetch('/api/jobs', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!jobsRes.ok) return;
+        const jobsData = await jobsRes.json();
+        const job = jobsData.jobs.find((j: any) => j.channel === 'web' && (j.state === 'queued' || j.state === 'running') && j.metadata?.original_text === [...newMessages].reverse().find(m => !m.notice)?.text);
+        if (!job) {
+          setResumeWaiting(false);
+          void loadHistory(sessionId);
+        }
+      } catch { }
+    }, 3000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, [resumeWaiting, sessionId, token, mapHistoryMessages, loadHistory]);
 
   // Open a conversation another surface asked for (a 会话 sidebar row in 对话):
   // the panel becomes that session and reads its messages.
@@ -1511,6 +1580,13 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             {avatar}
             <span className="chat-thinking-dots" aria-hidden="true"><i /><i /><i /></span>
             <span>{statusText || '正在思考…'}</span>
+          </div>
+        )}
+
+        {resumeWaiting && !busy && (
+          <div className="chat-thinking" role="status">
+            {avatar}
+            <span>还在回复，好了会自动显示…</span>
           </div>
         )}
 

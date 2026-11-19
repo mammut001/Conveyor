@@ -59,7 +59,7 @@ const tasks = [
   { id: 'e'.repeat(32), from_agent: finance.id, to_agent: conveyor.id, status: 'dead', attempts: 3, created_at: epoch(60 * 30), deadline: epoch(60 * 20) },
 ]
 
-type Options = { chat?: (route: Route) => Promise<void> | void; emptyHistory?: boolean; agentsOff?: boolean }
+type Options = { chat?: (route: Route) => Promise<void> | void; jobs?: (route: Route) => Promise<void> | void; history?: (route: Route) => Promise<void> | void; emptyHistory?: boolean; agentsOff?: boolean }
 
 async function fixture(page: Page, options: Options = {}) {
   // Skip the unlock form (its labels differ between branches): a remembered token unlocks on load.
@@ -69,6 +69,7 @@ async function fixture(page: Page, options: Options = {}) {
     const path = url.pathname
     const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
     if (path === '/api/chat' && options.chat) return options.chat(route)
+    if (path === '/api/jobs' && options.jobs) return options.jobs(route)
     if (path === '/api/agents') return json(options.agentsOff ? { enabled: false, agents: [] } : { enabled: true, agents: [conveyor, finance, researcher, coder] })
     if (path === '/api/agent-screens/config') return json({ enabled: true, inbox: true, tasks: true })
     if (path === '/api/agent-screens') return json({ agent_id: url.searchParams.get('agent_id'), items: url.searchParams.get('view') === 'inbox' ? inbox : tasks })
@@ -83,8 +84,11 @@ async function fixture(page: Page, options: Options = {}) {
         ] : []),
       ] })
     }
-    if (path === '/api/chat/history') return json({ session_id: url.searchParams.get('session_id'),
-      messages: !options.emptyHistory && url.searchParams.get('session_id') === conveyor.session_id ? history : [] })
+    if (path === '/api/chat/history') {
+      if (options.history) return options.history(route);
+      return json({ session_id: url.searchParams.get('session_id'),
+        messages: !options.emptyHistory && url.searchParams.get('session_id') === conveyor.session_id ? history : [] })
+    }
     if (path === '/api/system/status') return json({
       uptime_seconds: 10, load_average: [0, 0, 0], cpu_count: 1,
       memory: { total: null, available: null }, disk: { total: 1000, used: 0, free: 1000 },
@@ -393,4 +397,74 @@ test('phone (375px): the conversation bar keeps the title whole', async ({ page 
   await expect(bar.getByRole('button', { name: '助手消息', exact: true })).toBeVisible()
   await expect(bar.getByRole('button', { name: '其他记录' })).toHaveCount(0)
   await expect(bar.locator('.chat-new-label')).toBeVisible()
+})
+
+test.describe('resume long-running jobs', () => {
+    test('shows status row and disappears after completion', async ({ page }) => {
+        const userText = '找出 /opt/conveyor 里最大的 5 个子目录，各多大'
+        const historyWithUser = [
+            ...history.slice(0, -1),
+            { role: 'user', text: userText, origin_channel: 'web', created_at: iso(1) },
+        ]
+        const historyWithAssistant = [
+            ...historyWithUser,
+            { role: 'assistant', text: '5 个子目录分别是...', origin_channel: 'web', created_at: iso(0) },
+        ]
+
+        let requestCount = 0
+        await fixture(page, {
+            jobs: route => route.fulfill({ status: 200, contentType: 'application/json',
+                body: JSON.stringify({ jobs: [{ id: 'j1', channel: 'web', state: 'running', metadata: { original_text: userText } }] })
+            }),
+            history: route => {
+                requestCount++
+                if (requestCount === 1) {
+                    return route.fulfill({ status: 200, contentType: 'application/json',
+                        body: JSON.stringify({ session_id: conveyor.session_id, messages: historyWithUser })
+                    })
+                }
+                return route.fulfill({ status: 200, contentType: 'application/json',
+                    body: JSON.stringify({ session_id: conveyor.session_id, messages: historyWithAssistant })
+                })
+            }
+        })
+        await page.goto('/')
+        
+        await expect(page.getByText('还在回复，好了会自动显示…')).toBeVisible()
+        await expect(page.getByText('5 个子目录分别是...')).toBeVisible({ timeout: 10000 })
+        await expect(page.getByText('还在回复，好了会自动显示…')).toBeHidden()
+    })
+
+    test('no row if no running job', async ({ page }) => {
+        const userText = '找出 /opt/conveyor 里最大的 5 个子目录，各多大'
+        const historyWithUser = [
+            ...history.slice(0, -1),
+            { role: 'user', text: userText, origin_channel: 'web', created_at: iso(1) },
+        ]
+
+        await fixture(page, {
+            jobs: route => route.fulfill({ status: 200, contentType: 'application/json',
+                body: JSON.stringify({ jobs: [] })
+            }),
+            history: route => route.fulfill({ status: 200, contentType: 'application/json',
+                body: JSON.stringify({ session_id: conveyor.session_id, messages: historyWithUser })
+            })
+        })
+        await page.goto('/')
+        await expect(page.getByText(userText)).toBeVisible()
+        await page.waitForTimeout(3500)
+        await expect(page.getByText('还在回复，好了会自动显示…')).toHaveCount(0)
+    })
+
+    test('no row if last message is assistant', async ({ page }) => {
+        await fixture(page, {
+            jobs: route => route.fulfill({ status: 200, contentType: 'application/json',
+                body: JSON.stringify({ jobs: [{ id: 'j1', channel: 'web', state: 'running' }] })
+            })
+        })
+        await page.goto('/')
+        await expect(page.getByRole('textbox', { name: '给 Conveyor 发消息', exact: true })).toBeVisible()
+        await page.waitForTimeout(3500)
+        await expect(page.getByText('还在回复，好了会自动显示…')).toHaveCount(0)
+    })
 })
