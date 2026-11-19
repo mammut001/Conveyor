@@ -65,6 +65,11 @@ def _is_first_party(mod: str, repo_root: Path) -> bool:
 
 
 def _is_missing_env_error(exc: BaseException) -> bool:
+    # A module that refuses to load under this configuration (e.g. desktop_agent_server
+    # calls sys.exit() when its token is empty with the desktop node on) is a config
+    # gate, not a broken import.
+    if isinstance(exc, SystemExit):
+        return True
     if not isinstance(exc, RuntimeError):
         return False
     msg = str(exc).lower()
@@ -114,7 +119,7 @@ def find_broken_first_party_imports(
                     if key not in seen:
                         try:
                             imported = importlib.import_module(mod)
-                        except Exception as exc:
+                        except (Exception, SystemExit) as exc:
                             if _is_missing_env_error(exc):
                                 seen[key] = _SKIPPED
                             else:
@@ -128,7 +133,7 @@ def find_broken_first_party_imports(
                                 submod = f"{mod}.{alias.name}"
                                 try:
                                     importlib.import_module(submod)
-                                except Exception as exc:
+                                except (Exception, SystemExit) as exc:
                                     if _is_missing_env_error(exc):
                                         seen[key] = _SKIPPED
                                     elif isinstance(exc, ModuleNotFoundError) and exc.name == submod:
