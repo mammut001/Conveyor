@@ -226,7 +226,9 @@ jobs:
       options: --ipc=host
       volumes:
         - /home/ci/.cache/conveyor-pip-playwright:/pip-cache
-    timeout-minutes: 10
+    # Tests take ~4 min; the margin is for a cold cache on greencloud's
+    # sometimes ~150 kB/s link to PyPI (the playwright wheel is 53 MB).
+    timeout-minutes: 20
     env:
       CONVEYOR_REAL_BROWSER: "1"
       CONVEYOR_REQUIRE_REAL_BROWSER: "1"
