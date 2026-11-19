@@ -209,7 +209,7 @@ test('N21/N17a: a supervisor worktree session never joins the 任务 list and is
   await expect(sidebarRow(page, SUPWT_TITLE)).toHaveCount(0)
   await expect(sidebarRow(page, NORMAL_TITLE)).toBeVisible()
   // The newest normal session is the selected one, not the worktree conversation.
-  await expect(page.locator('.shell-heading h2')).toHaveText(NORMAL_TITLE)
+  await expect(page.locator('.shell-heading h1')).toHaveText(NORMAL_TITLE)
   await expect(page.getByLabel('任务内容')).toBeVisible()
 })
 
@@ -238,7 +238,7 @@ test('N17b: opening a worktree session on 任务 swaps the composer for where to
   await expect(page.getByText(READ_ONLY_LINE)).toBeVisible()
   await page.locator('.task-composer--notice').getByRole('button', { name: '新建会话' }).click()
   await expect(page.getByLabel('任务内容')).toBeVisible()
-  await expect(page.locator('.shell-heading h2')).toHaveText('新会话')
+  await expect(page.locator('.shell-heading h1')).toHaveText('新会话')
 })
 
 test('N17c: a 409 from POST /api/tasks shows its reason next to the composer', async ({ page }) => {

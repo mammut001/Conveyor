@@ -440,7 +440,7 @@
   gap: 10px;
   min-width: 0;
 }
-.primary-interface .stream-header .shell-heading h2 {
+.primary-interface .stream-header .shell-heading h1 {
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
@@ -694,7 +694,7 @@
   }
   .primary-interface .app-shell.mobile-ui .stream-header .shell-subtitle { display: none; }
   .primary-interface .app-shell.mobile-ui .stream-header-chat .shell-heading { visibility: hidden; }
-  .primary-interface .app-shell.mobile-ui .stream-header .shell-heading h2 {
+  .primary-interface .app-shell.mobile-ui .stream-header .shell-heading h1 {
     font-size: 16px;
   }
   .shell-header-button {

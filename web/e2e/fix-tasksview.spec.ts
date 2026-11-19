@@ -74,7 +74,7 @@ test('failed run shows own request, Chinese summary, raw detail folded, title fr
   await expect(notice.locator('.task-notice-detail')).toBeHidden()
   await notice.getByText('详情').click()
   await expect(notice.locator('.task-notice-detail')).toContainText('codex')
-  await expect(page.locator('.shell-heading h2')).toHaveText('把登录按钮改成蓝色')
+  await expect(page.locator('.shell-heading h1')).toHaveText('把登录按钮改成蓝色')
   await shoot(page, 'failed')
 })
 
@@ -106,7 +106,7 @@ test('older failure does not stay above a later successful run', async ({ page }
   await expect(page.getByText('这是回答。')).toBeVisible()
   await expect(page.locator('.task-notice.failed')).toHaveCount(0)
   await expect(page.locator('.shell-heading')).not.toContainText('失败')
-  await expect(page.locator('.shell-heading h2')).toHaveText('成功的新提问')
+  await expect(page.locator('.shell-heading h1')).toHaveText('成功的新提问')
   await expect(page.locator('.stream-panel')).not.toContainText('任务执行失败')
   // The old failure stays collapsed in 运行记录 behind the newer successful run;
   // expanding 运行记录 lists it without resurrecting the card above the newer chat.

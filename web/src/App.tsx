@@ -1808,7 +1808,8 @@ export default function App() {
             <ShellIcon name="chevron" size={14} />
           </button>}
           <div className="shell-heading">
-            <h2 title={headerTitle}>{headerTitle}</h2>
+            {/* The page title is the one <h1>; section headings below stay <h2>/<h3>. */}
+            <h1 title={headerTitle}>{headerTitle}</h1>
             {view === 'tasks' && selectedJob && !staleTerminalRun && <StatusBadge state={selectedJob.state} />}
             {headerSubtitle && <p className="shell-subtitle">{headerSubtitle}</p>}
           </div>
