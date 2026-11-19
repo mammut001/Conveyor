@@ -101,6 +101,8 @@ export type ChatPanelProps = {
   onMessageSent?: () => void;
   /** Opens the 模型设置 dialog (used by a failed turn whose explanation points at 模型设置). */
   onOpenModelSettings?: () => void;
+  /** Opens the 模型设置 dialog scrolled to the 理解指令 section (used by an intent-decider notice). */
+  onOpenIntentSettings?: () => void;
   /** When true, this conversation is a worktree-scoped planning/discussion surface
    *  that prepares task goals rather than directly running commands or nightly jobs. */
   discussionOnly?: boolean;
@@ -244,7 +246,7 @@ function approvalLabel(status: string): string {
     : '已处理';
 }
 
-export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, onOpenModelSettings, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '', onOpenSupervisorProject, onOpenWorkers, recentProjectName = '', hasRunningGoal = false, onSupervisorActivity }: ChatPanelProps) {
+export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName, agentColor, onBusyChange, setupChecklist, openSessionRequest, onMessageSent, onOpenModelSettings, onOpenIntentSettings, discussionOnly = false, discussionHandoffHint = '', onMakeGoal, makeGoalDisabledReason = '', onOpenSupervisorProject, onOpenWorkers, recentProjectName = '', hasRunningGoal = false, onSupervisorActivity }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   // Reading a restored conversation must not flash the welcome state first.
@@ -1322,10 +1324,16 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           }
 
           if (message.notice) {
+            const wantsIntentSettings = message.text.includes('设置 › 理解指令');
             return (
               <article key={message.id} className="transcript-message role-assistant chat-turn chat-system-notice" role="status">
                 <div className="transcript-content">
                   <p className="formatted-paragraph">{message.text}</p>
+                  {wantsIntentSettings && onOpenIntentSettings && (
+                    <button type="button" className="chat-open-settings-button" onClick={onOpenIntentSettings}>
+                      打开理解指令设置
+                    </button>
+                  )}
                 </div>
               </article>
             );

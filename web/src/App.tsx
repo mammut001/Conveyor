@@ -266,6 +266,7 @@ export default function App() {
   // POST /api/tasks failed: the reason sits next to the composer, never only as a border.
   const [submitError, setSubmitError] = useState<{ text: string; detail?: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsFocus, setSettingsFocus] = useState<'intent' | null>(null)
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState<{ text: string; detail?: string } | null>(null)
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
@@ -1245,7 +1246,8 @@ export default function App() {
     if (node) node.scrollTo({ top: node.scrollHeight, behavior: 'smooth' })
   }, [events.length, transcript.length, selectedJobId])
 
-  async function openSettings() {
+  async function openSettings(focus?: 'intent') {
+    setSettingsFocus(focus ?? null)
     setSettingsOpen(true); setError('')
     try {
       const p = await api<any>('/api/config/provider')
@@ -1570,6 +1572,8 @@ export default function App() {
     setupChecklist: view === 'chat' ? checklistNode : undefined,
     // A failed turn whose explanation points at 模型设置 can open that dialog in one tap.
     onOpenModelSettings: () => void openSettings(),
+    // An intent-decider notice can jump straight to the 理解指令 section inside 模型设置.
+    onOpenIntentSettings: () => void openSettings('intent'),
     onOpenSupervisorProject: (req) => {
       if (req.repoId) {
         try {
@@ -2326,12 +2330,15 @@ export default function App() {
       config={providerConfig} loadError={providerConfig ? '' : error}
       system={system}
       token={token}
+      focusSection={settingsFocus}
       onOpenSecrets={() => {
         setSettingsOpen(false)
+        setSettingsFocus(null)
         historyModeRef.current = 'push'
         setView('secrets')
       }}
-      onRetry={() => void openSettings()} onClose={() => setSettingsOpen(false)}
+      onRetry={() => void openSettings(settingsFocus ?? undefined)}
+      onClose={() => { setSettingsOpen(false); setSettingsFocus(null) }}
       onSave={async payload => {
         const result = await api<{ config: ProviderConfig }>('/api/config/provider', { method: 'POST', body: JSON.stringify(payload) })
         setProviderConfig(result.config)
@@ -2596,8 +2603,8 @@ const PROVIDER_PRESETS = [
   },
 ] as const
 
-function ProviderSettings({ config, loadError, system, token, onOpenSecrets, onClose, onRetry, onSave }: {
-  config: ProviderConfig | null; loadError: string; system: SystemStatus | null; token: string; onOpenSecrets: () => void; onClose: () => void; onRetry: () => void
+function ProviderSettings({ config, loadError, system, token, focusSection = null, onOpenSecrets, onClose, onRetry, onSave }: {
+  config: ProviderConfig | null; loadError: string; system: SystemStatus | null; token: string; focusSection?: 'intent' | null; onOpenSecrets: () => void; onClose: () => void; onRetry: () => void
   onSave: (payload: Record<string, string>) => Promise<void>
 }) {
   const [draft, setDraft] = useState<ProviderDraft>(() => providerDraft(config))
@@ -2741,6 +2748,32 @@ function ProviderSettings({ config, loadError, system, token, onOpenSecrets, onC
     sheetRef.current?.focus()
     return () => { if (opener?.isConnected) opener.focus() }
   }, [])
+  useEffect(() => {
+    if (focusSection !== 'intent') return
+    let cancelled = false
+    let rafId = 0
+    let timerId = 0
+    const deadline = Date.now() + 1500
+    const tryFocusIntent = () => {
+      if (cancelled) return
+      const heading = sheetRef.current?.querySelector<HTMLElement>('#intent-decider-title')
+      if (heading) {
+        heading.scrollIntoView({ block: 'start' })
+        heading.focus({ preventScroll: true })
+        return
+      }
+      if (Date.now() >= deadline) return
+      timerId = window.setTimeout(() => {
+        if (!cancelled) rafId = window.requestAnimationFrame(tryFocusIntent)
+      }, 32)
+    }
+    rafId = window.requestAnimationFrame(tryFocusIntent)
+    return () => {
+      cancelled = true
+      if (rafId) window.cancelAnimationFrame(rafId)
+      if (timerId) window.clearTimeout(timerId)
+    }
+  }, [focusSection])
   const requestClose = useCallback(() => {
     if (confirmDiscard) {
       setConfirmDiscard(false)
