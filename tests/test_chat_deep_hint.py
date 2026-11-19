@@ -162,7 +162,9 @@ class RoutinesOffConsoleContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         app = (root / "web/src/App.tsx").read_text(encoding="utf-8")
         panel = (root / "web/src/components/InboxPanel.tsx").read_text(encoding="utf-8")
-        self.assertIn("routinesEnabled={Boolean(system?.features?.routines)}", app)
+        # "Not loaded yet" is passed as undefined, never as false, and the panel waits for it.
+        self.assertIn("routinesEnabled={system ? Boolean(system.features?.routines) : undefined}", app)
+        self.assertIn("if (routinesEnabled === undefined) return;", panel)
         self.assertIn("if (!routinesEnabled)", panel)
         # The owner-facing sentence is unchanged.
         self.assertIn("定时任务功能未开启。", panel)
