@@ -201,13 +201,17 @@ test('phone: agent edit buttons and small buttons are at least 40px; desktop sta
   await page.getByRole('button', { name: /助手|会话|切换/ }).first().click().catch(() => {})
   const edit = page.locator('.agent-edit-btn').first()
   if (await edit.count()) {
-    const box = await edit.boundingBox()
-    if (box) { expect(box.width).toBeGreaterThanOrEqual(40); expect(box.height).toBeGreaterThanOrEqual(40) }
+    // 40px CSS can measure as 39.99998 after sub-pixel layout (CI run 44598494942),
+    // so allow half a pixel, and measure once the switcher has settled.
+    await expect.poll(async () => {
+      const box = await edit.boundingBox()
+      return box ? Math.min(box.width, box.height) : 0
+    }).toBeGreaterThanOrEqual(39.5)
   }
   await switchView(page, 'memory')
   const retry = page.getByRole('button', { name: '重试' }).first()
   await expect(retry).toBeVisible()
-  expect((await retry.boundingBox())!.height).toBeGreaterThanOrEqual(40)
+  expect((await retry.boundingBox())!.height).toBeGreaterThanOrEqual(39.5)
   await page.screenshot({ path: `${SHOTS}/memory-error-390.png` })
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.screenshot({ path: `${SHOTS}/memory-error-1440.png` })
