@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import gzip
 import hmac
 import ipaddress
 import json
@@ -39,6 +40,20 @@ from conveyor.core.transcript_store import session_identity
 logger = logging.getLogger("conveyor.web")
 MAX_BODY_BYTES = 65_536
 STATIC_ROOT = Path(__file__).resolve().parents[2] / "web" / "dist"
+_COMPRESSIBLE_CONTENT_TYPES = frozenset({
+    "application/javascript",
+    "application/json",
+    "image/svg+xml",
+    "application/manifest+json",
+})
+_STATIC_GZIP_CACHE_MAX = 64
+_STATIC_GZIP_CACHE: dict[tuple[str, int], bytes] = {}
+_STATIC_GZIP_LOCK = threading.Lock()
+
+
+def _is_compressible_content_type(content_type: str) -> bool:
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type.startswith("text/") or media_type in _COMPRESSIBLE_CONTENT_TYPES
 
 # 409 answers for features that are switched off in the configuration, by
 # their machine-readable ``code``. Keep the ``error`` texts as they are: the
@@ -355,9 +370,42 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
         self.end_headers()
 
+    def _accepts_gzip(self) -> bool:
+        headers = getattr(self, "headers", None)
+        if headers is None:
+            return False
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all("Accept-Encoding") or []
+        else:
+            values = [
+                str(v)
+                for k, v in headers.items()
+                if str(k).lower() == "accept-encoding" and v
+            ]
+        for item in ",".join(values).split(","):
+            parts = [p.strip() for p in item.split(";") if p.strip()]
+            if not parts or parts[0].lower() != "gzip":
+                continue
+            q = 1.0
+            for param in parts[1:]:
+                if "=" in param:
+                    key, val = param.split("=", 1)
+                    if key.strip().lower() == "q":
+                        try:
+                            q = float(val.strip())
+                        except ValueError:
+                            q = 0.0
+            return q > 0.0
+        return False
+
     def _json(self, status: int, value: Any, extra_headers: list[tuple[str, str]] | None = None) -> None:
         data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        self._headers(status, "application/json; charset=utf-8", len(data), extra_headers=extra_headers)
+        headers = list(extra_headers) if extra_headers else None
+        if len(data) >= 1024 and self._accepts_gzip():
+            data = gzip.compress(data, compresslevel=5, mtime=0)
+            headers = [*(headers or []), ("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
+        self._headers(status, "application/json; charset=utf-8", len(data), extra_headers=headers)
         self.wfile.write(data)
 
     def _feature_off(self, code: str) -> None:
@@ -2492,10 +2540,28 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
         if not candidate.is_file():
             self._json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "frontend not built"})
             return
-        data = candidate.read_bytes()
         content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
-        self._headers(HTTPStatus.OK, f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type, len(data),
-                      extra_headers=[("Cache-Control", "no-store")] if relative == "sw.js" else None)
+        header_type = f"{content_type}; charset=utf-8" if content_type.startswith("text/") else content_type
+        extra_headers: list[tuple[str, str]] | None = [("Cache-Control", "no-store")] if relative == "sw.js" else None
+        if self._accepts_gzip() and _is_compressible_content_type(content_type):
+            stat = candidate.stat()
+            if stat.st_size >= 1024:
+                cache_key = (str(candidate), stat.st_mtime_ns)
+                with _STATIC_GZIP_LOCK:
+                    compressed = _STATIC_GZIP_CACHE.get(cache_key)
+                if compressed is None:
+                    compressed = gzip.compress(candidate.read_bytes(), compresslevel=5, mtime=0)
+                    with _STATIC_GZIP_LOCK:
+                        if cache_key not in _STATIC_GZIP_CACHE and len(_STATIC_GZIP_CACHE) >= _STATIC_GZIP_CACHE_MAX:
+                            _STATIC_GZIP_CACHE.clear()
+                        _STATIC_GZIP_CACHE[cache_key] = compressed
+                data = compressed
+                extra_headers = [*(extra_headers or []), ("Content-Encoding", "gzip"), ("Vary", "Accept-Encoding")]
+            else:
+                data = candidate.read_bytes()
+        else:
+            data = candidate.read_bytes()
+        self._headers(HTTPStatus.OK, header_type, len(data), extra_headers=extra_headers)
         self.wfile.write(data)
 
     def _screen(self, agent_id: str) -> LiveScreen | None:
