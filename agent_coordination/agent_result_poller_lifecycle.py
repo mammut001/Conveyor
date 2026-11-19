@@ -6,6 +6,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from telegram.ext import Application
+import telegram.error
 
 log = logging.getLogger("agent_result_poller_lifecycle")
 
@@ -48,6 +49,30 @@ def configure_telegram_poller(application: Application, factory: PollerFactory) 
 
 class AgentResultPollingApplication(Application):
     """PTB invokes start after post_init; stop precedes post_shutdown."""
+
+    async def _sleep(self, delay: float) -> None:
+        # Seam for tests; looked up at call time so patching asyncio.sleep works.
+        await asyncio.sleep(delay)
+
+    async def initialize(self) -> None:
+        """Retry startup network errors in-process (with backoff) instead of
+        exiting: on a slow api.telegram.org systemd would restart us every 5 s."""
+        delay = 5
+        attempt = 1
+        while True:
+            try:
+                await super().initialize()
+                return
+            except telegram.error.NetworkError as e:
+                if isinstance(e, (telegram.error.InvalidToken, telegram.error.Forbidden)):
+                    raise
+                log.warning(
+                    "Attempt %d: Telegram initialization failed: %s. Retrying in %ss...",
+                    attempt, e, delay,
+                )
+                await self._sleep(delay)
+                attempt += 1
+                delay = min(delay * 2, 300)
 
     async def start(self) -> None:
         await super().start()
