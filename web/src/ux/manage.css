@@ -32,9 +32,9 @@
   white-space: nowrap;
   cursor: pointer;
 }
-.primary-interface .agent-new-btn > span { color: #bd5c40; font-size: 16px; font-weight: 600; }
-.primary-interface .agent-new-btn:hover { border-color: #bd5c40; color: #bd5c40; background: #fff; }
-.primary-interface .agent-new-btn:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.primary-interface .agent-new-btn > span { color: #b45539; font-size: 16px; font-weight: 600; }
+.primary-interface .agent-new-btn:hover { border-color: #b45539; color: #b45539; background: #fff; }
+.primary-interface .agent-new-btn:focus-visible { outline: 2px solid #b45539; outline-offset: 2px; }
 
 /* ---- Left list: rows ------------------------------------------------------------- */
 /* Always a vertical list (the legacy narrow layout turned it into a sideways strip). */
@@ -76,9 +76,9 @@
   left: -1px;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: #bd5c40;
+  background: #b45539;
 }
-.primary-interface .agent-list .agent-item:focus-visible { outline: 2px solid #bd5c40; outline-offset: 1px; }
+.primary-interface .agent-list .agent-item:focus-visible { outline: 2px solid #b45539; outline-offset: 1px; }
 /* The edit button takes the place of the time: on hover or keyboard focus, and on touch
    screens (no hover) on the selected row. */
 .primary-interface .agent-list .agent-row:has(:focus-visible) .agent-item { padding-right: 46px; }
@@ -121,11 +121,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.primary-interface .agent-list .agent-item .agent-item-time { flex: none; color: #6b7280; font-size: 12px; line-height: 20px; white-space: nowrap; }
+.primary-interface .agent-list .agent-item .agent-item-time { flex: none; color: #646b78; font-size: 12px; line-height: 20px; white-space: nowrap; }
 .primary-interface .agent-list .agent-item small.agent-item-preview {
   display: block;
   overflow: hidden;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   font-weight: 400;
   line-height: 18px;
@@ -151,7 +151,7 @@
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
-  color: #6b7280;
+  color: #646b78;
   opacity: 0;
   transform: translateY(-50%);
   cursor: pointer;
@@ -167,12 +167,12 @@
   .primary-interface .agent-list .agent-edit-btn { pointer-events: none; }
   .primary-interface .agent-list .agent-row.is-active .agent-edit-btn { opacity: 1; pointer-events: auto; }
 }
-.primary-interface .agent-list .agent-edit-btn:hover { border-color: #bd5c40; background: #fff; color: #bd5c40; }
-.primary-interface .agent-list .agent-edit-btn:focus-visible { outline: 2px solid #bd5c40; outline-offset: 1px; }
+.primary-interface .agent-list .agent-edit-btn:hover { border-color: #b45539; background: #fff; color: #b45539; }
+.primary-interface .agent-list .agent-edit-btn:focus-visible { outline: 2px solid #b45539; outline-offset: 1px; }
 .primary-interface .sessions-panel .agent-list .agent-list-empty,
 .primary-interface .sessions-panel .session-list > .empty {
   padding: 20px 8px;
-  color: #6b7280;
+  color: #646b78;
   font-family: inherit;
   font-size: 13px;
   line-height: 1.5;
@@ -191,8 +191,8 @@
 .primary-interface .sessions-panel .session-item.active { background: #fbeee9; box-shadow: inset 0 0 0 1px #efd3c8; }
 .primary-interface .sessions-panel .session-item-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .primary-interface .sessions-panel .session-item-title strong { flex: 1 1 auto; min-width: 0; color: #1f2328; font-size: 14px; font-weight: 600; line-height: 20px; }
-.primary-interface .sessions-panel .session-item-title time { flex: none; color: #6b7280; font-size: 12px; white-space: nowrap; }
-.primary-interface .sessions-panel .session-item small { margin-top: 2px; overflow: hidden; color: #6b7280; font-family: inherit; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
+.primary-interface .sessions-panel .session-item-title time { flex: none; color: #646b78; font-size: 12px; white-space: nowrap; }
+.primary-interface .sessions-panel .session-item small { margin-top: 2px; overflow: hidden; color: #646b78; font-family: inherit; font-size: 12px; line-height: 1.45; text-overflow: ellipsis; white-space: nowrap; }
 .primary-interface .sessions-panel .session-item .status-rail { margin-top: 7px; }
 .primary-interface .sessions-panel .session-archive-btn {
   position: absolute;
@@ -206,13 +206,13 @@
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
-  color: #6b7280;
+  color: #646b78;
   font-size: 18px;
   opacity: 0;
   transform: translateY(-50%);
 }
 .primary-interface .sessions-panel .session-archive-btn:hover { border-color: #b42318; background: #fff; color: #b42318; }
-.primary-interface .sessions-panel .session-archive-btn:focus-visible { opacity: 1; outline: 2px solid #bd5c40; outline-offset: 1px; }
+.primary-interface .sessions-panel .session-archive-btn:focus-visible { opacity: 1; outline: 2px solid #b45539; outline-offset: 1px; }
 .primary-interface .sessions-panel .session-item-row:has(:focus-visible) .session-archive-btn { opacity: 1; }
 .primary-interface .sessions-panel .session-item-row:has(:focus-visible) .session-item { padding-right: 44px; }
 .primary-interface .sessions-panel .session-item-row:has(:focus-visible) .session-item-title time { display: none; }
@@ -237,7 +237,7 @@
   padding: 10px 16px;
   border-top: 1px solid #e5e7eb;
   background: transparent;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -301,7 +301,7 @@
 .primary-interface .provider-settings > header p {
   margin: 2px 0 0;
   overflow: hidden;
-  color: #6b7280;
+  color: #646b78;
   font-size: 13px;
   line-height: 1.45;
   text-overflow: ellipsis;
@@ -319,7 +319,7 @@
   border: 1px solid #e5e7eb;
   border-radius: 8px;
   background: #fff;
-  color: #6b7280;
+  color: #646b78;
   font-size: 22px;
   line-height: 1;
 }
@@ -353,7 +353,7 @@
 /* 技术设置: the two machine names (服务商代号 / 密钥名称) live one level deeper (QA N26). */
 .provider-settings .provider-tech { margin: 0 0 14px; }
 .provider-settings .provider-tech > summary { width: fit-content; color: #475467; font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
-.provider-settings .provider-tech-note { margin: 8px 0 0; color: #6b7280; font-size: 12px; line-height: 1.5; }
+.provider-settings .provider-tech-note { margin: 8px 0 0; color: #646b78; font-size: 12px; line-height: 1.5; }
 .provider-settings .provider-tech-grid { margin-top: 10px; }
 .provider-settings .provider-fetch-tech { margin-top: 4px; }
 
@@ -369,7 +369,7 @@
   font-weight: 600;
   line-height: 1.4;
 }
-.primary-interface .settings-sheet .field-optional { color: #6b7280; font-size: 12px; font-weight: 400; }
+.primary-interface .settings-sheet .field-optional { color: #646b78; font-size: 12px; font-weight: 400; }
 .primary-interface .settings-sheet .dialog-field input,
 .primary-interface .settings-sheet .dialog-field textarea,
 .primary-interface .settings-sheet .dialog-field select {
@@ -393,7 +393,7 @@
 .primary-interface .settings-sheet .dialog-field textarea::placeholder { color: #9ca3af; }
 .primary-interface .settings-sheet .dialog-field input:focus,
 .primary-interface .settings-sheet .dialog-field textarea:focus,
-.primary-interface .settings-sheet .dialog-field select:focus { border-color: #bd5c40; box-shadow: 0 0 0 3px rgba(189, 92, 64, .15); }
+.primary-interface .settings-sheet .dialog-field select:focus { border-color: #b45539; box-shadow: 0 0 0 3px rgba(189, 92, 64, .15); }
 .primary-interface .settings-sheet .dialog-field.has-error input,
 .primary-interface .settings-sheet .dialog-field.has-error textarea,
 .primary-interface .settings-sheet .dialog-field.has-error select { border-color: #b42318; }
@@ -406,7 +406,7 @@
   justify-content: space-between;
   gap: 8px;
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -425,7 +425,7 @@
   line-height: 1.5;
 }
 .primary-interface .settings-sheet footer .dialog-error { flex: 1 1 100%; }
-.primary-interface .settings-sheet .dialog-error small { color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.primary-interface .settings-sheet .dialog-error small { color: #646b78; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 
 .primary-interface .agent-dialog .agent-colors { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px 0; }
 .primary-interface .agent-dialog .agent-colors button {
@@ -468,7 +468,7 @@
 }
 .primary-interface .settings-sheet footer button:hover:not(:disabled) { background: #f9fafb; }
 .primary-interface .settings-sheet footer button:disabled { opacity: .6; cursor: default; }
-.primary-interface .settings-sheet footer .primary { border-color: #bd5c40; background: #bd5c40; color: #fff; }
+.primary-interface .settings-sheet footer .primary { border-color: #b45539; background: #b45539; color: #fff; }
 .primary-interface .settings-sheet footer .primary:hover:not(:disabled) { border-color: #a94c34; background: #a94c34; }
 .primary-interface .settings-sheet footer .danger { border-color: #f4c7c3; color: #b42318; }
 .primary-interface .settings-sheet footer .danger:hover:not(:disabled) { border-color: #b42318; background: #fef3f2; }
@@ -502,17 +502,17 @@
 }
 .primary-interface .provider-settings .config-note > * { text-wrap: pretty; }
 .primary-interface .provider-settings .config-note strong { color: #1f2328; font-size: 13px; font-weight: 600; }
-.primary-interface .provider-settings .config-note small { color: #6b7280; font-size: 12px; }
+.primary-interface .provider-settings .config-note small { color: #646b78; font-size: 12px; }
 .primary-interface .provider-settings .config-note code { font-size: 12px; }
 .primary-interface .provider-settings .save-status { flex: 1 1 auto; margin-right: auto; color: #15803d; font-size: 13px; font-weight: 500; opacity: 0; }
 .primary-interface .provider-settings .save-status.visible { opacity: 1; }
-.primary-interface .provider-settings .settings-loading { padding: 48px 20px; color: #6b7280; font-size: 14px; text-align: center; }
+.primary-interface .provider-settings .settings-loading { padding: 48px 20px; color: #646b78; font-size: 14px; text-align: center; }
 .primary-interface .provider-settings .settings-load-error {
   display: grid;
   justify-items: center;
   gap: 8px;
   padding: 40px 20px 44px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 13px;
   text-align: center;
 }
@@ -569,8 +569,8 @@
   color: #1f2328;
 }
 .primary-interface .provider-settings .provider-preset-chip.is-active {
-  background: #bd5c40;
-  border-color: #bd5c40;
+  background: #b45539;
+  border-color: #b45539;
   color: #fff;
   font-weight: 600;
 }
@@ -644,7 +644,7 @@
   border-radius: 8px;
   background: #f9fafb;
 }
-.primary-interface .provider-settings .system-stats span { color: #6b7280; font-size: 12px; white-space: nowrap; }
+.primary-interface .provider-settings .system-stats span { color: #646b78; font-size: 12px; white-space: nowrap; }
 .primary-interface .provider-settings .system-stats strong {
   overflow: hidden;
   color: #1f2328;
@@ -658,7 +658,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px 14px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 .primary-interface .provider-settings .system-channels span::before {
@@ -696,7 +696,7 @@
 .primary-interface .provider-settings .intent-decider-head h3:focus { outline: none; }
 .primary-interface .provider-settings .intent-decider-desc {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -732,7 +732,7 @@
   color: #b42318;
 }
 .primary-interface .provider-settings .intent-decider-secret-link {
-  color: #bd5c40;
+  color: #b45539;
   font-size: 13px;
   font-weight: 500;
   text-decoration: underline;
@@ -850,7 +850,7 @@
 }
 .primary-interface .unlock-card .brand-mark { width: 40px; height: 40px; margin: 0 0 16px; border-radius: 10px; font: 700 18px/1 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .primary-interface .unlock-card h1 { margin: 0; color: #1f2328; font-size: 22px; font-weight: 650; letter-spacing: 0; line-height: 1.35; }
-.primary-interface .unlock-card > p.unlock-lead { margin: 6px 0 22px; color: #6b7280; font-size: 14px; line-height: 1.6; text-wrap: pretty; }
+.primary-interface .unlock-card > p.unlock-lead { margin: 6px 0 22px; color: #646b78; font-size: 14px; line-height: 1.6; text-wrap: pretty; }
 .primary-interface .unlock-card label.unlock-label { display: block; margin: 0 0 6px; color: #1f2328; font-size: 13px; font-weight: 600; }
 /* 令牌确认中的那一秒：居中一个牌子，没有输入框，键盘落不到任何地方。 */
 .primary-interface .unlock-card--opening { display: grid; justify-items: center; padding: 34px 28px 30px; text-align: center; }
@@ -863,7 +863,7 @@
   border-radius: 8px;
   background: #fff;
 }
-.primary-interface .unlock-card .token-field:focus-within { border-color: #bd5c40; box-shadow: 0 0 0 3px rgba(189, 92, 64, .15); }
+.primary-interface .unlock-card .token-field:focus-within { border-color: #b45539; box-shadow: 0 0 0 3px rgba(189, 92, 64, .15); }
 .primary-interface .unlock-card .token-field.has-error { border-color: #b42318; }
 .primary-interface .unlock-card .token-field.has-error:focus-within { box-shadow: 0 0 0 3px rgba(180, 35, 24, .14); }
 .primary-interface .unlock-card .token-field input {
@@ -894,8 +894,8 @@
   font-size: 13px;
   cursor: pointer;
 }
-.primary-interface .unlock-card .token-toggle:hover { color: #bd5c40; }
-.primary-interface .unlock-card .token-toggle:focus-visible { outline: 2px solid #bd5c40; outline-offset: -2px; }
+.primary-interface .unlock-card .token-toggle:hover { color: #b45539; }
+.primary-interface .unlock-card .token-toggle:focus-visible { outline: 2px solid #b45539; outline-offset: -2px; }
 .primary-interface .unlock-card .unlock-error {
   display: flex;
   flex-wrap: wrap;
@@ -911,7 +911,7 @@
   line-height: 1.5;
 }
 .primary-interface .unlock-card .unlock-error > span { flex: 1 1 auto; min-width: 0; }
-.primary-interface .unlock-card .unlock-error small { flex-basis: 100%; order: 3; color: #6b7280; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.primary-interface .unlock-card .unlock-error small { flex-basis: 100%; order: 3; color: #646b78; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .primary-interface .unlock-card .unlock-error button {
   flex: none;
   min-height: 30px;
@@ -932,16 +932,16 @@
   font-size: 14px;
   cursor: pointer;
 }
-.primary-interface .unlock-card label.remember-token input { flex: none; width: 16px; height: 16px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #bd5c40; }
+.primary-interface .unlock-card label.remember-token input { flex: none; width: 16px; height: 16px; min-height: 0; margin: 2px 0 0; padding: 0; accent-color: #b45539; }
 .primary-interface .unlock-card label.remember-token span { display: grid; gap: 2px; font-size: 14px; line-height: 1.45; }
-.primary-interface .unlock-card label.remember-token small { color: #6b7280; font-size: 12px; line-height: 1.5; }
+.primary-interface .unlock-card label.remember-token small { color: #646b78; font-size: 12px; line-height: 1.5; }
 .primary-interface .unlock-card button.primary {
   width: 100%;
   min-height: 42px;
   margin: 0;
-  border: 1px solid #bd5c40;
+  border: 1px solid #b45539;
   border-radius: 8px;
-  background: #bd5c40;
+  background: #b45539;
   color: #fff;
   font-size: 15px;
   font-weight: 600;

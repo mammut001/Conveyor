@@ -142,8 +142,8 @@
 .primary-interface .send-button,
 .primary-interface .primary,
 .primary-interface .action-row .primary {
-  border-color: #bd5c40;
-  background: #bd5c40;
+  border-color: #b45539;
+  background: #b45539;
 }
 
 .primary-interface .send-button:hover:not(:disabled),
@@ -301,7 +301,7 @@
 /* Nothing is armed: the stop control stays available but is not a red alarm on the first screen. */
 .emergency.is-idle,
 .primary-interface .emergency.is-idle {
-  color: #6b7280;
+  color: #646b78;
   border-color: #d7dde7;
   background: #fff;
 }
@@ -498,7 +498,7 @@
   box-shadow: 0 4px 16px rgba(31, 35, 42, .12);
   cursor: pointer;
 }
-.chat-jump-latest:focus-visible { outline: 2px solid #bd5c40; outline-offset: 3px; }
+.chat-jump-latest:focus-visible { outline: 2px solid #b45539; outline-offset: 3px; }
 
 .composer-handoff-note { grid-column: 1 / -1; color: #6b554c; font-size: 12px; line-height: 1.5; padding: 2px 4px; }
 
@@ -523,7 +523,7 @@
 .formatted-quote > :first-child { margin-top: 0; }
 .formatted-quote > :last-child { margin-bottom: 0; }
 .formatted-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid #e3e6eb; border-radius: 9px; }
-.formatted-table-scroll:focus-visible { outline: 2px solid #bd5c40; outline-offset: 2px; }
+.formatted-table-scroll:focus-visible { outline: 2px solid #b45539; outline-offset: 2px; }
 .formatted-table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
 .formatted-table th, .formatted-table td { min-width: 4.5em; padding: 8px 12px; border-bottom: 1px solid #e3e6eb; overflow-wrap: break-word; }
 .formatted-table th { background: #f6f7f9; font-weight: 600; text-align: left; }
@@ -532,11 +532,11 @@
 .formatted-text-flow hr { width: 100%; border: 0; border-top: 1px solid #e3e6eb; margin: 10px 0; }
 
 /* Keep assistant identity and message origin visible across channel entries. */
-.transcript-source { font-size: 11px; color: #6b7280; margin-right: 8px; }
+.transcript-source { font-size: 11px; color: #646b78; margin-right: 8px; }
 
 .transcript-footer { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; line-height: 1.4; }
 .transcript-footer .transcript-source { margin-right: 0; }
-.transcript-footer > span:not(.transcript-source) { font-size: 11px; color: #6b7280; }
+.transcript-footer > span:not(.transcript-source) { font-size: 11px; color: #646b78; }
 
 /* Agent identity is a switcher; conversation history lives inside the workspace. */
 @media (max-width: 600px) {
@@ -544,3 +544,4 @@
   .primary-interface .agent-list .agent-item.active { box-shadow: inset 0 0 0 1px #e5d5c8; }
 }
 
+.code-block-pre:focus-visible { outline: 2px solid #b45539; outline-offset: 2px; }
