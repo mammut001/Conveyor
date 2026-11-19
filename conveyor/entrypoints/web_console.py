@@ -844,6 +844,30 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
+            elif path == "/api/reminders" or parts == ["api", "reminders"]:
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from conveyor.core.config import load_runtime_settings
+                    settings = load_runtime_settings()
+                owner_id = getattr(settings, "telegram_allowed_user_id", None)
+                if not owner_id:
+                    self._json(HTTPStatus.OK, {"reminders": []})
+                    return
+                from personal_tools.store import PersonalToolsStore
+                rows = PersonalToolsStore(settings).list_reminders(
+                    str(owner_id), limit=50, status="pending",
+                )
+                self._json(HTTPStatus.OK, {
+                    "reminders": [
+                        {
+                            "id": r.id,
+                            "text": r.text,
+                            "due_at": r.due_at,
+                            "channel": r.channel,
+                        }
+                        for r in rows
+                    ],
+                })
             elif path == "/api/routines" or path.startswith("/api/routines"):
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -1352,6 +1376,28 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 from mcp_client import get_mcp_manager
                 item, status = self._await(get_mcp_manager().refresh_server(settings, server_name), timeout=60.0)
                 self._json(status, item)
+                return
+
+            if len(parts) == 4 and parts[:2] == ["api", "reminders"] and parts[3] == "cancel":
+                reminder_id_str = parts[2]
+                if not reminder_id_str.isascii() or not reminder_id_str.isdigit():
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid reminder id"})
+                    return
+                reminder_id = int(reminder_id_str)
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from conveyor.core.config import load_runtime_settings
+                    settings = load_runtime_settings()
+                owner_id = getattr(settings, "telegram_allowed_user_id", None)
+                if not owner_id:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "reminder not found"})
+                    return
+                from personal_tools.store import PersonalToolsStore
+                ok = PersonalToolsStore(settings).cancel_reminder(str(owner_id), reminder_id)
+                if not ok:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "reminder not found"})
+                    return
+                self._json(HTTPStatus.OK, {"ok": True})
                 return
 
             if parsed.path.startswith("/api/routines") or parsed.path.startswith("/api/inbox"):

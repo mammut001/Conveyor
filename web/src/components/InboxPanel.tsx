@@ -31,6 +31,13 @@ export type Routine = {
   agent_id?: string | null;
 };
 
+export type Reminder = {
+  id: number;
+  text: string;
+  due_at: string;
+  channel?: string;
+};
+
 export type InboxItem = {
   id: number;
   routine_id: number;
@@ -167,6 +174,12 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
   const [routineBusy, setRoutineBusy] = useState<{ id: number; action: 'run' | 'toggle' | 'delete' } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
+  // Reminders
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [confirmCancelReminderId, setConfirmCancelReminderId] = useState<number | null>(null);
+  const [reminderBusyId, setReminderBusyId] = useState<number | null>(null);
+  const [reminderErrors, setReminderErrors] = useState<Record<number, string>>({});
+
   // Webhook state
   const [confirmHookAction, setConfirmHookAction] = useState<ConfirmHookAction | null>(null);
   const [createdHookInfo, setCreatedHookInfo] = useState<CreatedHookInfo | null>(null);
@@ -247,6 +260,25 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
     }
   }, [token]);
 
+  const fetchReminders = useCallback(async () => {
+    if (disabledRef.current || !token) return;
+    try {
+      const res = await fetch('/api/reminders', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const data = await readJson(res);
+      // Tolerate unrelated fallback mocks that return `{ items: [] }` without a `reminders` key.
+      const list =
+        data && typeof data === 'object' && !Array.isArray(data) && !('reminders' in data)
+          ? []
+          : pickArray<Reminder>(data, 'reminders');
+      setReminders(list);
+    } catch {
+      // Keep 运行结果 and 定时任务 usable if reminders fail to load.
+    }
+  }, [token]);
+
   useEffect(() => {
     // The feature is off: the page says so without asking the server (no 409 in the console).
     if (!routinesEnabled) {
@@ -257,7 +289,8 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
     }
     void fetchInbox();
     void fetchRoutines();
-  }, [fetchInbox, fetchRoutines, routinesEnabled]);
+    void fetchReminders();
+  }, [fetchInbox, fetchRoutines, fetchReminders, routinesEnabled]);
 
   useEffect(() => {
     if (disabled || disabledRef.current || !routinesEnabled) return;
@@ -265,9 +298,10 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       if (disabledRef.current) return;
       void fetchInbox();
       void fetchRoutines();
+      void fetchReminders();
     }, 15_000);
     return () => window.clearInterval(timer);
-  }, [fetchInbox, fetchRoutines, disabled]);
+  }, [fetchInbox, fetchRoutines, fetchReminders, disabled, routinesEnabled]);
 
   useEffect(() => {
     if (!notice) return;
@@ -410,6 +444,32 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       setError(friendlyError(err, '删除失败，请重试'));
     } finally {
       setRoutineBusy(null);
+    }
+  };
+
+  const handleCancelReminder = async (rem: Reminder) => {
+    setReminderBusyId(rem.id);
+    setReminderErrors((prev) => {
+      if (!(rem.id in prev)) return prev;
+      const next = { ...prev };
+      delete next[rem.id];
+      return next;
+    });
+    try {
+      const res = await fetch(`/api/reminders/${rem.id}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}',
+      });
+      if (!res.ok) throw await responseError(res);
+      setReminders((prev) => prev.filter((item) => item.id !== rem.id));
+      setConfirmCancelReminderId((prev) => (prev === rem.id ? null : prev));
+    } catch (err) {
+      const friendly = friendlyError(err, '取消失败，请重试');
+      setReminderErrors((prev) => ({ ...prev, [rem.id]: friendly.message }));
+      setConfirmCancelReminderId((prev) => (prev === rem.id ? null : prev));
+    } finally {
+      setReminderBusyId(null);
     }
   };
 
@@ -618,7 +678,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
       {error && (
         <ErrorNote
           error={error}
-          onRetry={() => { setError(null); void fetchInbox(); void fetchRoutines(); }}
+          onRetry={() => { setError(null); void fetchInbox(); void fetchRoutines(); void fetchReminders(); }}
           onDismiss={() => setError(null)}
         />
       )}
@@ -787,6 +847,89 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
           </ul>
         )}
       </section>
+
+      {reminders.length > 0 && (
+        <section className="kn-section" aria-labelledby="kn-reminders-title">
+          <header className="kn-section-head">
+            <div>
+              <h3 id="kn-reminders-title">
+                提醒<span className="kn-count">{reminders.length}</span>
+              </h3>
+              <p className="kn-section-sub">在对话里说“提醒我……”就能添加，到点会发到 Telegram。</p>
+            </div>
+          </header>
+
+          <ul className="kn-routine-list" aria-label="提醒列表">
+            {reminders.map((rem) => {
+              const busy = reminderBusyId === rem.id;
+              const rowError = reminderErrors[rem.id];
+              return (
+                <li key={rem.id} className="kn-card kn-routine">
+                  <div className="kn-routine-main">
+                    <div className="kn-routine-title">
+                      <strong>{rem.text}</strong>
+                    </div>
+                    <p className="kn-routine-when">
+                      <span className="kn-routine-schedule">
+                        <time dateTime={rem.due_at} title={formatDateTime(rem.due_at)}>
+                          {formatUpcoming(rem.due_at) || rem.due_at}
+                        </time>
+                      </span>
+                      {rem.channel ? <span>发到 {channelLabel(rem.channel)}</span> : null}
+                    </p>
+                    {rowError && <p className="kn-field-error" role="alert">{rowError}</p>}
+                  </div>
+
+                  <div className="kn-routine-actions">
+                    {confirmCancelReminderId === rem.id ? (
+                      <div className="kn-confirm" role="group" aria-label="确认取消">
+                        <span className="kn-confirm-text">确定取消？</span>
+                        <div className="kn-row-actions">
+                          <button
+                            type="button"
+                            className="kn-btn kn-btn-small kn-btn-danger"
+                            disabled={busy}
+                            onClick={() => void handleCancelReminder(rem)}
+                          >
+                            {busy ? '取消中…' : '取消提醒'}
+                          </button>
+                          <button
+                            type="button"
+                            className="kn-btn kn-btn-small"
+                            disabled={busy}
+                            onClick={() => setConfirmCancelReminderId(null)}
+                          >
+                            不了
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="kn-row-actions">
+                        <button
+                          type="button"
+                          className="kn-btn kn-btn-small kn-btn-danger-text"
+                          disabled={busy}
+                          onClick={() => {
+                            setReminderErrors((prev) => {
+                              if (!(rem.id in prev)) return prev;
+                              const next = { ...prev };
+                              delete next[rem.id];
+                              return next;
+                            });
+                            setConfirmCancelReminderId(rem.id);
+                          }}
+                        >
+                          取消
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="kn-section" aria-labelledby="kn-routines-title">
         <header className="kn-section-head">
