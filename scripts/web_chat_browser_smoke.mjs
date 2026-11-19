@@ -237,7 +237,7 @@ try {
   await page.evaluate(() => { delete navigator.clipboard; document.execCommand = window.__execCommand; });
   await page.setViewportSize({width:390,height:844});
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'rich markdown must not widen the mobile page');
-  assert.ok(await page.locator('.formatted-table-scroll').evaluate(node => node.scrollWidth > node.clientWidth), 'wide table scrolls inside its own region');
+  assert.ok(await page.locator('.formatted-table-scroll').evaluate(node => node.scrollWidth <= node.clientWidth + 1), 'a short 4-column table fits a phone without sideways scroll');
   assert.ok(await page.locator('.code-block-pre').evaluate(node => node.scrollWidth > node.clientWidth), 'long code scrolls inside the code block');
   await page.getByRole('heading', {name:'执行计划',exact:true}).scrollIntoViewIfNeeded();
   if (process.env.CHAT_MARKDOWN_SCREENSHOT) await page.screenshot({path:process.env.CHAT_MARKDOWN_SCREENSHOT,fullPage:true});
