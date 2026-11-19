@@ -727,7 +727,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus
 /* Raw provider text behind a collapsed 技术细节; 打开模型设置 jumps to the 模型设置 dialog. */
 .transcript-error-card .transcript-error-tech { margin-top: 6px; }
 .transcript-error-card .transcript-error-tech summary { width: fit-content; color: #981b1e; font-size: 12px; cursor: pointer; }
-.transcript-error-card .transcript-error-tech code { display: block; color: #6b7280; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.transcript-error-card .transcript-error-tech code { display: block; color: #646b78; font-size: 12px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .transcript-error-card .transcript-error-settings {
   margin-top: 8px;
   min-height: 40px;

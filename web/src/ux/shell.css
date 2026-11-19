@@ -53,7 +53,7 @@
 }
 .primary-interface .topbar .brand small {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-family: inherit;
   font-size: 12px;
   font-weight: 400;
@@ -119,11 +119,11 @@
 .shell-lock-button:focus-visible,
 .shell-button:focus-visible,
 .primary-interface .topbar .settings-button:focus-visible {
-  outline: 2px solid #bd5c40;
+  outline: 2px solid #b45539;
   outline-offset: 2px;
 }
 .shell-nav-group--more .shell-nav-item:not(.active) {
-  color: #6b7280;
+  color: #646b78;
 }
 .shell-nav-badge {
   display: inline-grid;
@@ -132,7 +132,7 @@
   height: 18px;
   padding: 0 5px;
   border-radius: 9px;
-  background: #bd5c40;
+  background: #b45539;
   color: #fff;
   font-size: 12px;
   font-weight: 600;
@@ -180,7 +180,7 @@
   justify-content: center;
   flex: none;
   margin-top: 2px;
-  color: #6b7280;
+  color: #646b78;
 }
 .shell-nav-menu .shell-nav-item--menu.active .shell-nav-menu-icon {
   color: currentColor;
@@ -206,7 +206,7 @@
   font-weight: 600;
 }
 .shell-nav-menu-desc {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   font-weight: 400;
   line-height: 1.4;
@@ -308,7 +308,7 @@
   border: 0;
   border-radius: 8px;
   background: transparent;
-  color: #6b7280;
+  color: #646b78;
   font-size: 13px;
   cursor: pointer;
 }
@@ -464,7 +464,7 @@
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -717,7 +717,7 @@
     font-weight: 600;
     text-overflow: ellipsis;
   }
-  .shell-agent-switch .shell-icon { flex: none; color: #6b7280; }
+  .shell-agent-switch .shell-icon { flex: none; color: #646b78; }
   /* Outside 对话 the page title needs the room: the switch shrinks to the avatar. */
   .primary-interface .stream-header:not(.stream-header-chat) .shell-agent-switch { padding: 0 6px; gap: 2px; }
   .primary-interface .stream-header:not(.stream-header-chat) .shell-agent-switch > span:not(.agent-avatar) {
@@ -823,7 +823,7 @@
     border: 0;
     border-radius: 8px;
     background: transparent;
-    color: #6b7280;
+    color: #646b78;
     font-size: 24px;
     line-height: 1;
     cursor: pointer;
@@ -930,7 +930,7 @@
     min-width: 0;
     gap: 12px;
   }
-  .mobile-sheet-label .shell-icon { color: #6b7280; margin-top: 2px; flex: none; }
+  .mobile-sheet-label .shell-icon { color: #646b78; margin-top: 2px; flex: none; }
   .mobile-sheet-copy {
     display: grid;
     min-width: 0;
@@ -945,7 +945,7 @@
     font-weight: 600;
   }
   .mobile-sheet-desc {
-    color: #6b7280;
+    color: #646b78;
     font-size: 12px;
     font-weight: 400;
     line-height: 1.4;
@@ -954,7 +954,7 @@
   .primary-interface .app-shell.mobile-ui .mobile-badge {
     padding: 2px 7px;
     border-radius: 10px;
-    background: #bd5c40;
+    background: #b45539;
     color: #fff;
     font-size: 12px;
     font-weight: 600;
@@ -990,7 +990,7 @@
     padding: 4px 2px;
     border: 0;
     background: transparent;
-    color: #6b7280;
+    color: #646b78;
     font-size: 12px;
     font-weight: 500;
     line-height: 1.1;
@@ -1001,7 +1001,7 @@
     font-weight: 600;
   }
   .primary-interface .app-shell.mobile-ui .mobile-nav-item:focus-visible {
-    outline: 2px solid #bd5c40;
+    outline: 2px solid #b45539;
     outline-offset: -4px;
   }
   .primary-interface .app-shell.mobile-ui .mobile-nav-icon {
@@ -1018,7 +1018,7 @@
     min-width: 16px;
     padding: 1px 5px;
     border-radius: 9px;
-    background: #bd5c40;
+    background: #b45539;
     color: #fff;
     font-size: 12px;
     font-weight: 700;

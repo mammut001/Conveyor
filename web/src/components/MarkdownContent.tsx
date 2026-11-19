@@ -15,7 +15,8 @@ function CodeBlock({ children }: { children?: ReactNode }) {
         <span className="code-lang-tag">{language && language !== 'text' ? language : '代码'}</span>
         <CopyButton text={code} className="code-copy-btn" title="复制代码" />
       </div>
-      <pre className="code-block-pre"><code>{code}</code></pre>
+      {/* Long lines scroll sideways: keyboard users need to reach it (axe scrollable-region-focusable). */}
+      <pre className="code-block-pre" tabIndex={0} role="region" aria-label={`${language && language !== 'text' ? language : ''}代码`}><code>{code}</code></pre>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 /* UX layer (Code / Supervisor workspace).
  * Uses existing light surfaces (#fff, #f5f6f7, #f6f7f8), pale gray borders (#e5e7eb, #d0d5dd),
- * and terracotta accent tokens (#bd5c40, #a94c34, #fbede7).
+ * and terracotta accent tokens (#b45539, #a94c34, #fbede7).
  */
 
 .primary-interface .app-shell[data-view="code"] > .workspace {
@@ -87,7 +87,7 @@
 }
 
 .sup-search-box input:focus-visible {
-  outline: 2px solid #bd5c40;
+  outline: 2px solid #b45539;
   outline-offset: 1px;
 }
 
@@ -140,7 +140,7 @@
   border: 1px solid #e5e7eb;
   border-radius: 6px;
   background: #fff;
-  color: #6b7280;
+  color: #646b78;
   font-size: 11px;
   line-height: 1.4;
   cursor: pointer;
@@ -188,7 +188,7 @@
   padding: 8px 10px;
   font-size: 12px;
   font-weight: 500;
-  color: #6b7280;
+  color: #646b78;
   cursor: pointer;
   user-select: none;
   list-style: none;
@@ -201,7 +201,7 @@
 .sup-archived-summary::before {
   content: "▸";
   width: 10px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -246,7 +246,7 @@
 .sup-tree-chevron {
   flex: none;
   width: 12px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -269,7 +269,7 @@
 
 .sup-repo-info small {
   font-size: 11px;
-  color: #6b7280;
+  color: #646b78;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -353,7 +353,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 11px;
 }
 
@@ -489,7 +489,7 @@
 }
 
 .sup-create-wt-btn:hover {
-  border-color: #bd5c40;
+  border-color: #b45539;
   color: #a94c34;
 }
 
@@ -555,7 +555,7 @@
 
 .sup-empty-tree {
   padding: 18px 12px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 13px;
   line-height: 1.55;
 }
@@ -613,7 +613,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -712,7 +712,7 @@
 
 .sup-chat-pane-header small {
   display: block;
-  color: #6b7280;
+  color: #646b78;
   font-size: 11px;
 }
 
@@ -722,14 +722,14 @@
 }
 .sup-chat-pane-header .sup-chat-tech > summary {
   width: fit-content;
-  color: #98a2b3;
+  color: #667085;
   font-size: 10px;
   cursor: pointer;
   user-select: none;
 }
 .sup-chat-pane-header .sup-chat-tech > span {
   display: block;
-  color: #6b7280;
+  color: #646b78;
   font-size: 10px;
   overflow-wrap: anywhere;
 }
@@ -739,14 +739,14 @@
 }
 .sup-role-Static .sup-role-tech > summary {
   width: fit-content;
-  color: #98a2b3;
+  color: #667085;
   font-size: 10px;
   cursor: pointer;
   user-select: none;
 }
 .sup-role-Static .sup-role-tech > span {
   display: block;
-  color: #6b7280;
+  color: #646b78;
   font-size: 10px;
   overflow-wrap: anywhere;
 }
@@ -816,7 +816,7 @@
 }
 
 .sup-card-hint {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -832,7 +832,7 @@
 /* N25: a small line saying the typed draft is kept on this device. */
 .sup-draft-hint {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -987,7 +987,7 @@
 
 .primary-interface .composer.sup-goal-composer > textarea:focus,
 .primary-interface .sup-goal-composer > textarea:focus {
-  border-color: #bd5c40;
+  border-color: #b45539;
   outline: none;
   box-shadow: 0 0 0 3px rgba(189, 92, 64, 0.12);
 }
@@ -1023,7 +1023,7 @@
 }
 
 .sup-criteria-row input:focus {
-  border-color: #bd5c40;
+  border-color: #b45539;
   outline: none;
   box-shadow: 0 0 0 3px rgba(189, 92, 64, 0.12);
 }
@@ -1074,7 +1074,7 @@
 
 /* One plain line under each role name (N20: 分析 / 动手改 / 检查 explain themselves). */
 .sup-role-hint {
-  color: #6b7280;
+  color: #646b78;
   font-size: 11px;
   line-height: 1.4;
 }
@@ -1154,7 +1154,7 @@
 
 .sup-role-Static small {
   font-size: 11px;
-  color: #6b7280;
+  color: #646b78;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1200,7 +1200,7 @@
 
 .sup-quota-disclaimer {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -1221,7 +1221,7 @@
 }
 
 .sup-dispatch-context-tag {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -1268,7 +1268,7 @@
 }
 
 .sup-progress-pill span {
-  color: #6b7280;
+  color: #646b78;
 }
 
 .sup-acceptance-box {
@@ -1392,7 +1392,7 @@
 }
 
 .sup-changes .changed-file-name { flex: 0 1 auto; min-width: 0; overflow: hidden; color: #1f2328; text-overflow: ellipsis; }
-.sup-changes .changed-file-dir { flex: 1 1 0%; min-width: 0; overflow: hidden; color: #6b7280; text-overflow: ellipsis; }
+.sup-changes .changed-file-dir { flex: 1 1 0%; min-width: 0; overflow: hidden; color: #646b78; text-overflow: ellipsis; }
 
 .sup-changes .diff-stat {
   flex: none;
@@ -1426,7 +1426,7 @@
 .sup-changes .diff-line--add { background: #ecfdf3; color: #14532d; }
 .sup-changes .diff-line--del { background: #fef3f2; color: #7a271a; }
 .sup-changes .diff-line--hunk { background: #f5f8ff; color: #3e4784; }
-.sup-changes .diff-line--meta { color: #6b7280; }
+.sup-changes .diff-line--meta { color: #646b78; }
 .sup-changes .diff-line--file {
   margin-top: 6px;
   padding-top: 3px;
@@ -1439,12 +1439,12 @@
 .sup-changes .diff-line--file:first-child { margin-top: -6px; border-top: 0; }
 .sup-changes pre.diff-body--empty {
   padding: 10px;
-  color: #6b7280;
+  color: #646b78;
   font-family: inherit;
   font-size: 13px;
   white-space: pre-wrap;
 }
-.sup-changes .diff-truncated { display: block; padding: 6px 10px 2px; color: #6b7280; font-family: inherit; }
+.sup-changes .diff-truncated { display: block; padding: 6px 10px 2px; color: #646b78; font-family: inherit; }
 
 /* 文件多的时候一个文件一块，默认收起。 */
 .sup-changes-files {
@@ -1476,7 +1476,7 @@
 }
 
 .sup-changes-file > summary::-webkit-details-marker { display: none; }
-.sup-changes-file > summary::before { content: "▸"; width: 10px; color: #6b7280; font-size: 12px; }
+.sup-changes-file > summary::before { content: "▸"; width: 10px; color: #646b78; font-size: 12px; }
 .sup-changes-file[open] > summary::before { content: "▾"; }
 .sup-changes-file > summary .diff-stat { margin-left: auto; }
 .sup-changes-file-path { min-width: 0; overflow: hidden; color: #1f2328; text-overflow: ellipsis; white-space: nowrap; }
@@ -1515,7 +1515,7 @@
 
 .sup-separation-note {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -1549,7 +1549,7 @@
 }
 
 .sup-run-history-chevron {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -1560,7 +1560,7 @@
 
 .sup-run-history-hint {
   margin-left: auto;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -1639,7 +1639,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 11px;
 }
 
@@ -1651,7 +1651,7 @@
 
 .sup-run-row-note {
   padding: 0 10px 8px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -1717,7 +1717,7 @@
 }
 
 .sup-tech-meta {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   font-weight: 400;
 }
@@ -1802,7 +1802,7 @@
 
 .sup-exec-switch-note time {
   margin-right: 8px;
-  color: #6b7280;
+  color: #646b78;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1881,7 +1881,7 @@
 
 .sup-muted-note {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -1926,7 +1926,7 @@
 
 .sup-deploy-subtitle {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 13px;
 }
 
@@ -1979,7 +1979,7 @@
 
 .sup-topology-node small {
   font-size: 11px;
-  color: #6b7280;
+  color: #646b78;
 }
 
 .sup-topology-meta {
@@ -2020,7 +2020,7 @@
 }
 
 .sup-stage-step.is-active-stage {
-  border-color: #bd5c40;
+  border-color: #b45539;
   box-shadow: 0 0 0 2px rgba(189, 92, 64, .12);
 }
 
@@ -2064,7 +2064,7 @@
 }
 
 .sup-stage-step--running .sup-stage-step-num {
-  background: #bd5c40;
+  background: #b45539;
   color: #fff;
 }
 
@@ -2075,7 +2075,7 @@
 
 .sup-stage-step-status {
   font-size: 11px;
-  color: #6b7280;
+  color: #646b78;
 }
 
 .sup-stage-step-label {
@@ -2085,7 +2085,7 @@
 
 .sup-stage-step-code {
   font-size: 11px;
-  color: #6b7280;
+  color: #646b78;
 }
 
 .sup-stage-step-detail {
@@ -2132,7 +2132,7 @@
 }
 
 .sup-kv-list > div > span {
-  color: #6b7280;
+  color: #646b78;
 }
 
 .sup-empty-workspace {
@@ -2182,7 +2182,7 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: #bd5c40;
+  color: #b45539;
   font-family: inherit;
   font-size: 13px;
   font-weight: 600;
@@ -2410,7 +2410,7 @@
 }
 
 .sup-goal-result-note {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -2475,7 +2475,7 @@
 }
 
 .sup-goal-extend textarea:focus {
-  border-color: #bd5c40;
+  border-color: #b45539;
   outline: none;
   box-shadow: 0 0 0 3px rgba(189, 92, 64, 0.12);
 }
@@ -2528,7 +2528,7 @@
 }
 
 .sup-goal-reply textarea:focus {
-  border-color: #bd5c40;
+  border-color: #b45539;
   outline: none;
   box-shadow: 0 0 0 3px rgba(189, 92, 64, 0.12);
 }
@@ -2649,7 +2649,7 @@
 }
 .sup-goal-iteration-reason {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -2664,7 +2664,7 @@
 }
 
 .sup-goal-iteration-time {
-  color: #6b7280;
+  color: #646b78;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
@@ -2680,7 +2680,7 @@
 }
 
 .sup-goal-link-button:hover {
-  border-color: #bd5c40;
+  border-color: #b45539;
   color: #a94c34;
 }
 
@@ -2713,7 +2713,7 @@
 }
 
 .sup-goal-form > textarea:focus {
-  border-color: #bd5c40;
+  border-color: #b45539;
   outline: none;
   box-shadow: 0 0 0 3px rgba(189, 92, 64, 0.12);
 }
@@ -2762,7 +2762,7 @@
 }
 
 .sup-goal-segment-btn.is-active {
-  background: #bd5c40;
+  background: #b45539;
   color: #fff;
 }
 
@@ -2789,12 +2789,12 @@
 }
 
 .sup-goal-preset-btn:hover {
-  border-color: #bd5c40;
+  border-color: #b45539;
   color: #a94c34;
 }
 
 .sup-goal-preset-btn.is-active {
-  border-color: #bd5c40;
+  border-color: #b45539;
   background: #fff4ef;
   color: #a94c34;
   font-weight: 600;
@@ -2817,7 +2817,7 @@
 .sup-goal-continuous-check input {
   width: 16px;
   height: 16px;
-  accent-color: #bd5c40;
+  accent-color: #b45539;
 }
 
 .sup-goal-timebox-bar {
@@ -2840,7 +2840,7 @@
 }
 
 .sup-goal-mode-note {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -2896,7 +2896,7 @@
 
 .sup-goal-form-hint {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2951,7 +2951,7 @@
 }
 
 .sup-goal-history-row-meta {
-  color: #6b7280;
+  color: #646b78;
   font-size: 11px;
 }
 
@@ -3096,7 +3096,7 @@
 
 .sup-checks-summary-hint {
   margin-left: auto;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   font-weight: 400;
 }
@@ -3105,7 +3105,7 @@
   flex: none;
   display: inline-block;
   width: 12px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   transition: transform 120ms ease;
 }
@@ -3138,7 +3138,7 @@
 }
 
 .sup-checks-hint {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
 }
 
@@ -3193,7 +3193,7 @@
 }
 
 .sup-checks-item.is-unavailable .sup-checks-label {
-  color: #6b7280;
+  color: #646b78;
   cursor: not-allowed;
 }
 
@@ -3202,7 +3202,7 @@
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: #bd5c40;
+  accent-color: #b45539;
   cursor: pointer;
 }
 
@@ -3216,7 +3216,7 @@
 
 .sup-checks-reason {
   margin-left: 24px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 11.5px;
   line-height: 1.45;
   overflow-wrap: anywhere;
@@ -3236,14 +3236,14 @@
 }
 .sup-checks-tech > summary {
   width: fit-content;
-  color: #98a2b3;
+  color: #667085;
   font-size: 10px;
   cursor: pointer;
   user-select: none;
 }
 .sup-checks-tech > code {
   display: block;
-  color: #6b7280;
+  color: #646b78;
   font-size: 10.5px;
   overflow-wrap: anywhere;
 }
@@ -3273,7 +3273,7 @@
 
 .sup-checks-note {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -3300,7 +3300,7 @@
 }
 
 .sup-merge-entry-hint {
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -3337,7 +3337,7 @@
 
 .sup-merge-note {
   margin: 0;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -3422,7 +3422,7 @@
 
 .sup-notes-summary-hint {
   margin-left: auto;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   font-weight: 400;
 }
@@ -3431,7 +3431,7 @@
   flex: none;
   display: inline-block;
   width: 12px;
-  color: #6b7280;
+  color: #646b78;
   font-size: 12px;
   transition: transform 120ms ease;
 }
