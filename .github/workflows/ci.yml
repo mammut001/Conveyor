@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# greencloud's link to PyPI is slow and sometimes returns truncated JSON:
+# retry, wait longer, and keep a pip cache on the host between runs.
+env:
+  PIP_RETRIES: "10"
+  PIP_DEFAULT_TIMEOUT: "60"
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -25,6 +31,8 @@ jobs:
       # --init reaps killed children; without it zombies look "alive" to the
       # process-group lifecycle tests.
       options: --init
+      volumes:
+        - /home/ci/.cache/conveyor-pip-py311:/root/.cache/pip
     # Two full unit-test passes plus smokes take ~16 min on greencloud.
     timeout-minutes: 30
     env:
@@ -154,6 +162,8 @@ jobs:
     container:
       image: mcr.microsoft.com/playwright:v1.64.1-noble
       options: --ipc=host
+      volumes:
+        - /home/ci/.cache/conveyor-pip-playwright:/root/.cache/pip
     timeout-minutes: 10
     defaults:
       run:
