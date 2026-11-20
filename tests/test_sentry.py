@@ -147,11 +147,11 @@ class TestSentryEngine(unittest.TestCase):
 
     def test_check_cpu_and_load_linux_top_processes(self):
         ps_stdout = (
-            "ghrunner         65.5 chrome-headless\n"
-            "ghrunner         61.0 chrome-headless\n"
-            "ghrunner         59.3 next-server (v1\n"
-            "ubuntu           21.8 python\n"
-            "root              0.0 systemd\n"
+            "ghrunner         65.5  101 chrome-headless\n"
+            "ghrunner         61.0  102 chrome-headless\n"
+            "ghrunner         59.3  103 next-server (v1\n"
+            "ubuntu           21.8  104 python\n"
+            "root              0.0    1 systemd\n"
         )
         with patch("os.getloadavg", return_value=(17.63, 12.0, 8.0)), \
              patch("os.cpu_count", return_value=4), \
@@ -171,11 +171,36 @@ class TestSentryEngine(unittest.TestCase):
         self.assertIn("--sort=-pcpu", argv)
         self.assertNotIn("-r", argv)
 
+    def test_node_main_thread_is_named_by_its_program(self):
+        # Node.js renames its main thread; ps then reports comm "MainThread".
+        ps_stdout = (
+            "ghrunner        168.0  3185231 MainThread\n"
+            "ghrunner        129.0  3185239 MainThread\n"
+            "ubuntu           13.7  3178306 python\n"
+        )
+        def fake_program(pid):
+            return {"3185231": "node", "3185239": "node"}.get(pid, "")
+        with patch("os.getloadavg", return_value=(13.15, 10.0, 8.0)), \
+             patch("os.cpu_count", return_value=4), \
+             patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._program_name", side_effect=fake_program), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)):
+            alerts = check_cpu_and_load(self.settings)
+        self.assertIn("占用最多：node（ghrunner，297%）、python（ubuntu，14%）。", alerts[0].summary)
+        self.assertNotIn("MainThread", alerts[0].summary)
+
+    def test_program_name_reads_proc_cmdline_and_tolerates_missing_pids(self):
+        from personal_tools.sentry import _program_name
+        self.assertEqual(_program_name("not-a-pid"), "")
+        self.assertEqual(_program_name("999999999"), "")
+        if Path("/proc/self/cmdline").exists():
+            self.assertTrue(_program_name(str(os.getpid())))
+
     def test_check_cpu_and_load_darwin_top_processes(self):
         ps_stdout = (
-            "USER              %CPU COMM\n"
-            "alice             45.2 /Applications/My App.app/Contents/MacOS/My App\n"
-            "root              10.4 /usr/bin/foo\n"
+            "USER              %CPU   PID COMM\n"
+            "alice             45.2   501 /Applications/My App.app/Contents/MacOS/My App\n"
+            "root              10.4   502 /usr/bin/foo\n"
         )
         with patch("os.getloadavg", return_value=(8.0, 6.0, 5.0)), \
              patch("os.cpu_count", return_value=2), \
