@@ -32,7 +32,7 @@ class FakeControl:
     def list_sessions(self):
         return [{"id": "web-a", "title": "Session"}]
 
-    def get_session(self, session_id):
+    def get_session(self, session_id, **_kwargs):
         return {"id": session_id, "jobs": []} if session_id == "web-a" else None
 
     def archive_session(self, session_id):

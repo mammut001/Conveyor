@@ -39,6 +39,8 @@ from conveyor.core.transcript_store import session_identity
 
 logger = logging.getLogger("conveyor.web")
 MAX_BODY_BYTES = 65_536
+# Newest messages returned by GET /api/sessions/<id> (polled by the page).
+SESSION_DETAIL_MESSAGE_LIMIT = 200
 STATIC_ROOT = Path(__file__).resolve().parents[2] / "web" / "dist"
 _COMPRESSIBLE_CONTENT_TYPES = frozenset({
     "application/javascript",
@@ -710,7 +712,8 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
             elif path == "/api/sessions":
                 self._json(HTTPStatus.OK, {"sessions": self.server.control.list_sessions()})
             elif len(parts) == 3 and parts[:2] == ["api", "sessions"]:
-                item = self.server.control.get_session(parts[2])
+                # The page polls this; a long session would otherwise grow every poll forever.
+                item = self.server.control.get_session(parts[2], message_limit=SESSION_DETAIL_MESSAGE_LIMIT)
                 self._json(HTTPStatus.OK if item else HTTPStatus.NOT_FOUND, item or {"error": "not found"})
             elif path == "/api/jobs":
                 limit = int((query.get("limit") or ["100"])[0])

@@ -53,7 +53,7 @@ type Session = {
   /** kind of the newest stored message: 'error' means the last turn failed (QA N30). */
   last_message_kind?: string | null
 }
-type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; runs?: RunSummary[] }
+type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[]; runs?: RunSummary[]; messages_total?: number; messages_truncated?: boolean }
 // Chat-only sessions stay in Chat; promoted conversations with jobs also appear in Tasks.
 const isChatSessionId = (id: string) => id.includes(':webchat-') || id.startsWith('webchat-')
 const isChatSession = (session: Session) => isChatSessionId(session.id) || (session.source_chat_id || '').startsWith('webchat-')
@@ -1925,6 +1925,7 @@ export default function App() {
 
               {transcriptError && <div className="job-notice task-notice" role="status"><strong>暂时无法更新会话记录</strong><span>已收到的内容会保留。</span><button type="button" onClick={() => void refreshTranscript()}>重试读取</button></div>}
 
+              {sessionDetail?.messages_truncated && transcript.length > 0 && <p className="transcript-truncated-note" role="note">只显示最近 {transcript.length} 条，共 {sessionDetail.messages_total} 条。</p>}
               {transcript.length > 0 && <TranscriptPanel messages={transcript} agent={selectedAgent} onRetry={question => void sendPrompt(question, false)} onOpenModelSettings={() => void openSettings()} />}
               {runTurnFallback.length > 0 && <TranscriptPanel messages={runTurnFallback} agent={selectedAgent} onOpenModelSettings={() => void openSettings()} />}
 
