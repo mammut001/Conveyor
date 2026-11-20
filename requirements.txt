@@ -1,4 +1,4 @@
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 # Stdlib tomllib from Python 3.11; small compatible backport for Python 3.9/3.10.
 tomli==2.2.1; python_version < "3.11"
 python-telegram-bot==21.10
