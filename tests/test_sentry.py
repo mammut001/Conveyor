@@ -189,6 +189,25 @@ class TestSentryEngine(unittest.TestCase):
         self.assertIn("占用最多：node（ghrunner，297%）、python（ubuntu，14%）。", alerts[0].summary)
         self.assertNotIn("MainThread", alerts[0].summary)
 
+    def test_truncated_linux_names_use_the_program_name(self):
+        ps_stdout = (
+            "ubuntu            4.0   422115 Isolated Web Co\n"
+            "ubuntu            2.0   422116 Isolated Web Co\n"
+            "ghrunner         30.0      900 chrome-headless\n"
+            "root              1.5       12 kworker/R-rcu_g\n"
+        )
+        names = {"422115": "firefox", "422116": "firefox", "900": "chrome-headless-shell", "12": ""}
+        with patch("os.getloadavg", return_value=(9.0, 8.0, 8.0)), \
+             patch("os.cpu_count", return_value=4), \
+             patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._program_name", side_effect=lambda pid: names.get(pid, "")), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)):
+            alerts = check_cpu_and_load(self.settings)
+        self.assertIn(
+            "占用最多：chrome-headless-shell（ghrunner，30%）、firefox（ubuntu，6%）、kworker/R-rcu_g（root，2%）。",
+            alerts[0].summary,
+        )
+
     def test_program_name_reads_proc_cmdline_and_tolerates_missing_pids(self):
         from personal_tools.sentry import _program_name
         self.assertEqual(_program_name("not-a-pid"), "")

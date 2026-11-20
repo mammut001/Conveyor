@@ -268,6 +268,7 @@ def check_disk_space(settings: Settings) -> list[SentryAlert]:
 # Node.js renames its main thread, so ps shows every node process as
 # "MainThread"; the program name comes from the command line instead.
 _GENERIC_THREAD_NAMES = frozenset({"MainThread"})
+_LINUX_COMM_MAX = 15
 
 
 def _program_name(pid: str) -> str:
@@ -320,8 +321,12 @@ def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
             continue
         if not math.isfinite(pcpu):
             continue
-        comm = os.path.basename(comm.strip()) or comm.strip()
-        if comm in _GENERIC_THREAD_NAMES:
+        # macOS prints a full path; a Linux comm is a bare name and may contain "/" (kworker/…).
+        comm = (os.path.basename(comm.strip()) if is_darwin else comm.strip()) or comm.strip()
+        # Linux keeps only 15 characters of a process name ("Isolated Web Co" is a
+        # Firefox content process, "chrome-headless" is chrome-headless-shell), and
+        # Node.js renames its main thread; the command line has the real program.
+        if comm in _GENERIC_THREAD_NAMES or (not is_darwin and len(comm) == _LINUX_COMM_MAX):
             comm = _program_name(pid) or comm
         # Linux cuts process titles to 15 chars, e.g. "next-server (v1": drop the version tail.
         comm = re.sub(r"\s*\(.*$", "", comm).strip()
