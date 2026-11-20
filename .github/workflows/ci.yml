@@ -297,7 +297,7 @@ jobs:
         run: /usr/bin/python3 -c "import ssl; print(ssl.OPENSSL_VERSION)"
 
       - name: Install Python dependencies and Playwright
-        run: /usr/bin/python3 -m pip install -r requirements.txt "playwright==1.65.0" pytest pytest-timeout
+        run: /usr/bin/python3 -m pip install -r requirements.txt "playwright==1.65.0" pytest pytest-timeout pytest-xdist
 
       - name: Run real Chromium fixture integration tests (no skips)
-        run: /usr/bin/python3 -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py tests/test_workflow_browser_external.py tests/test_workflow_browser_g2.py tests/test_web_browser_approvals.py tests/test_browser_agent_interact.py tests/test_workflow_browser_g3.py tests/test_browser_g2_g3_hardening.py tests/test_browser_auth_sessions.py tests/test_browser_autofill_login.py tests/test_browser_g5_rollout.py -q -v --timeout=20 --timeout-method=thread
+        run: /usr/bin/python3 -m pytest tests/test_workflow_browser_playwright.py::LocalFixturePlaywrightTests tests/test_workflow_browser_guards.py tests/test_workflow_browser_external.py tests/test_workflow_browser_g2.py tests/test_web_browser_approvals.py tests/test_browser_agent_interact.py tests/test_workflow_browser_g3.py tests/test_browser_g2_g3_hardening.py tests/test_browser_auth_sessions.py tests/test_browser_autofill_login.py tests/test_browser_g5_rollout.py -q -n 3 --dist loadfile --durations=15 --timeout=20 --timeout-method=thread
