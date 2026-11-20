@@ -636,6 +636,34 @@ class TestSentryEngine(unittest.TestCase):
         sent = deliver_sentry_alerts(self.settings, [alert], dry_run=True)
         self.assertEqual(sent, 1)
 
+    def _recorded_alert(self, fingerprint="host.cpu.high_load"):
+        alert = SentryAlert(source="host.cpu", severity="warning", title="系统 CPU 负载过高",
+                            summary="x", fingerprint=fingerprint)
+        state = SentryState.load(self.settings)
+        state.record_alert(alert)
+        state.save(self.settings)
+        return alert
+
+    def test_failed_send_releases_cooldown_for_retry(self):
+        alert = self._recorded_alert()
+        self.assertFalse(SentryState.load(self.settings).can_alert(alert.fingerprint, 7200))
+        with patch("personal_tools.sentry.send_owner_message", return_value=0):
+            self.assertEqual(deliver_sentry_alerts(self.settings, [alert]), 0)
+        self.assertTrue(SentryState.load(self.settings).can_alert(alert.fingerprint, 7200))
+
+    def test_delivered_alert_keeps_cooldown(self):
+        alert = self._recorded_alert()
+        with patch("personal_tools.sentry.send_owner_message", return_value=1):
+            self.assertEqual(deliver_sentry_alerts(self.settings, [alert]), 1)
+        self.assertFalse(SentryState.load(self.settings).can_alert(alert.fingerprint, 7200))
+
+    def test_no_channel_configured_keeps_cooldown(self):
+        settings = dataclasses.replace(self.settings, telegram_bot_token="", lark_app_id=None)
+        alert = self._recorded_alert()
+        with patch("personal_tools.sentry.send_owner_message", return_value=0):
+            deliver_sentry_alerts(settings, [alert])
+        self.assertFalse(SentryState.load(self.settings).can_alert(alert.fingerprint, 7200))
+
     def test_teammate_commands(self):
         status = run_teammate_command(self.settings, "")
         self.assertIn("全天候智能体队友", status)

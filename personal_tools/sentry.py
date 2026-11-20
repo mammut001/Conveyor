@@ -790,9 +790,34 @@ def deliver_sentry_alerts(
             continue
 
         # Same channels, same helpers as every other owner-facing message.
-        delivered += send_owner_message(settings, text, label=alert.title)
+        sent = send_owner_message(settings, text, label=alert.title)
+        delivered += sent
+        if not sent and _owner_channel_configured(settings):
+            _release_cooldown(settings, alert.fingerprint)
 
     return delivered
+
+
+def _owner_channel_configured(settings: Settings) -> bool:
+    telegram = getattr(settings, "telegram_allowed_user_id", None) and getattr(settings, "telegram_bot_token", None)
+    feishu = getattr(settings, "lark_allowed_open_id", None) and getattr(settings, "lark_app_id", None)
+    return bool(telegram or feishu)
+
+
+def _release_cooldown(settings: Settings, fingerprint: str) -> None:
+    """Forget that an alert was sent when no channel accepted it.
+
+    The patrol starts the cooldown before delivery; without this a failed send
+    (for example a Telegram 502) hides the alert for the whole cooldown.
+    The next patrol tries again.
+    """
+    try:
+        state = SentryState.load(settings)
+        if state.last_alert_at.pop(fingerprint, None) is not None:
+            state.save(settings)
+        logger.warning("Alert %s was not delivered; it will be retried on the next patrol", fingerprint)
+    except Exception as exc:
+        logger.error("Could not release cooldown for %s: %s", fingerprint, exc)
 
 
 def _label_suffix(label: str) -> str:
