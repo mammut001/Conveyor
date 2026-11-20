@@ -155,7 +155,7 @@ async function installShellApi(page: Page, options: { mobileUI?: boolean; moreFe
 }
 
 const primaryNav = (page: Page) => page.getByRole('navigation', { name: '主导航' })
-const heading = (page: Page) => page.locator('.stream-header h2')
+const heading = (page: Page) => page.locator('.stream-header h1')
 const noSidewaysScroll = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
 // One scroll area per page: the document never scrolls and no scrolling region sits inside another.
 async function expectSingleScrollArea(page: Page, label: string) {
@@ -432,7 +432,7 @@ test('keyboard: Alt+number switches views, "/" jumps to the message box, Esc clo
   const hiddenChatBox = page.locator('.chat-composer textarea')
   const taskBox = page.getByRole('textbox', { name: '任务内容', exact: true })
   await expect(chatBox).toBeVisible()
-  await page.locator('.stream-header h2').click()
+  await page.locator('.stream-header h1').click()
   await page.keyboard.press('/')
   await expect(chatBox).toBeFocused()
   await expect(chatBox).toHaveValue('')
@@ -442,7 +442,7 @@ test('keyboard: Alt+number switches views, "/" jumps to the message box, Esc clo
   await page.keyboard.press('Alt+3')
   await expect(page).toHaveURL(/#tasks$/)
   await expect(hiddenChatBox).toBeHidden()
-  await page.locator('.stream-header h2').click()
+  await page.locator('.stream-header h1').click()
   await page.keyboard.press('/')
   await expect(taskBox).toBeFocused()
   await expect(hiddenChatBox).not.toBeFocused()
@@ -451,13 +451,13 @@ test('keyboard: Alt+number switches views, "/" jumps to the message box, Esc clo
   // A page without a message box: "/" focuses nothing (never the hidden chat box).
   await page.keyboard.press('Alt+4')
   await expect(page).toHaveURL(/#memory$/)
-  await page.locator('.stream-header h2').click()
+  await page.locator('.stream-header h1').click()
   await page.keyboard.press('/')
   await expect(hiddenChatBox).not.toBeFocused()
   expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('TEXTAREA')
   // And back on 对话 it is the chat box again, with its draft.
   await page.keyboard.press('Alt+1')
-  await page.locator('.stream-header h2').click({ force: true })
+  await page.locator('.stream-header h1').click({ force: true })
   await page.keyboard.press('/')
   await expect(chatBox).toBeFocused()
   await expect(chatBox).toHaveValue('/plan')

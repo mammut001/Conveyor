@@ -245,7 +245,7 @@ for (const size of SIZES) {
       for (const item of PAGES) {
         await page.goto(`/#${item.slug}`)
         await expect(page.locator(item.ready).first()).toBeVisible()
-        await expect(page.locator('.stream-header h2')).toHaveCount(1)
+        await expect(page.locator('.stream-header h1')).toHaveCount(1)
         await capture(page, item.slug, size.width)
       }
     })

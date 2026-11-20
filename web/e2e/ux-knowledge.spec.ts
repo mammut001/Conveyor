@@ -341,7 +341,7 @@ test('记忆: empty state teaches how to add, per-agent wording', async ({ page 
   await openConsole(page, { memory: [], hash: '#memory' })
   const panel = page.locator('.kn-memory')
   // One title per page: the page header says 记忆; the panel does not repeat it.
-  await expect(page.locator('.stream-header h2')).toHaveText('记忆')
+  await expect(page.locator('.stream-header h1')).toHaveText('记忆')
   await expect(panel.getByRole('heading')).toHaveCount(0)
   await expect(panel.getByText('网页、Telegram 和飞书共用这份记忆。')).toBeVisible()
   await expect(panel.getByText(/在对话里说“记住……”也能添加，需要你确认；不会保存密码和密钥/)).toBeVisible()

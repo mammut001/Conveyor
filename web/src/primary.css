@@ -82,7 +82,7 @@
   flex: 1 1 auto;
 }
 
-.primary-interface .stream-header h2 {
+.primary-interface .stream-header h1 {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -350,7 +350,7 @@
   .primary-interface .mobile-ui .stream-header {
     max-width: 100vw;
   }
-  .primary-interface .mobile-ui .stream-header h2 {
+  .primary-interface .mobile-ui .stream-header h1 {
     white-space: nowrap;
   }
 

@@ -279,7 +279,7 @@ test.describe('Workers Panel (Conveyor 执行者)', () => {
 
     // Check desktop
     await open(page, SIZES[0])
-    await expect(page.getByRole('heading', { name: '执行者', level: 2 })).toBeVisible()
+    await expect(page.getByRole('heading', { name: '执行者', level: 1 })).toBeVisible()
     await expect(page.getByText('谁来替你干活：检测、登录、按额度自动轮换')).toBeVisible()
     await expect(page.locator('.workers-actions-row')).toBeVisible()
 

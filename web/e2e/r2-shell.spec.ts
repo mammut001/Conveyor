@@ -197,7 +197,7 @@ test('F8: unknown agent in URL shows notice and cleans URL param', async ({ page
   await expect.poll(() => page.url()).not.toContain('agent=')
 
   // Header title should fallback to Conveyor
-  await expect(page.locator('.stream-header h2')).toHaveText('Conveyor')
+  await expect(page.locator('.stream-header h1')).toHaveText('Conveyor')
 
   await page.screenshot({ path: `${SHOTS}/f8-agent-unknown.png` })
 })
