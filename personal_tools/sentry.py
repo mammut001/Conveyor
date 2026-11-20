@@ -265,15 +265,32 @@ def check_disk_space(settings: Settings) -> list[SentryAlert]:
     return alerts
 
 
+# Node.js renames its main thread, so ps shows every node process as
+# "MainThread"; the program name comes from the command line instead.
+_GENERIC_THREAD_NAMES = frozenset({"MainThread"})
+
+
+def _program_name(pid: str) -> str:
+    """Basename of argv[0] from /proc (Linux), or "" when unavailable."""
+    if not pid.isdigit():
+        return ""
+    try:
+        raw = (Path("/proc") / pid / "cmdline").read_bytes()
+    except OSError:
+        return ""
+    argv0 = raw.split(b"\0", 1)[0].decode("utf-8", errors="replace").strip()
+    return os.path.basename(argv0)
+
+
 def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
     """Return top (command, user, total_pcpu) groups using platform ps flags."""
     if limit <= 0:
         return []
     is_darwin = sys.platform == "darwin"
     cmd = (
-        ["ps", "-Ao", "user,pcpu,comm", "-r"]
+        ["ps", "-Ao", "user,pcpu,pid,comm", "-r"]
         if is_darwin
-        else ["ps", "-eo", "user:32,pcpu,comm", "--sort=-pcpu", "--no-headers"]
+        else ["ps", "-eo", "user:32,pcpu,pid,comm", "--sort=-pcpu", "--no-headers"]
     )
     try:
         res = subprocess.run(
@@ -293,10 +310,10 @@ def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
 
     totals: dict[tuple[str, str], float] = {}
     for line in lines:
-        parts = line.strip().split(None, 2)
-        if len(parts) < 3:
+        parts = line.strip().split(None, 3)
+        if len(parts) < 4:
             continue
-        user, pcpu_str, comm = parts
+        user, pcpu_str, pid, comm = parts
         try:
             pcpu = float(pcpu_str)
         except ValueError:
@@ -304,6 +321,8 @@ def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
         if not math.isfinite(pcpu):
             continue
         comm = os.path.basename(comm.strip()) or comm.strip()
+        if comm in _GENERIC_THREAD_NAMES:
+            comm = _program_name(pid) or comm
         # Linux cuts process titles to 15 chars, e.g. "next-server (v1": drop the version tail.
         comm = re.sub(r"\s*\(.*$", "", comm).strip()
         if not comm:
