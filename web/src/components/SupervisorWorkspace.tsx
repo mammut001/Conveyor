@@ -20,6 +20,8 @@ import { goalRoundTaskTitle, parseGoalRoundTask, goalRoundKey } from '../taskTex
 import { useMediaQuery } from '../ux/shellNav'
 import { readDispatchDraft, writeDispatchDraft } from './supDrafts'
 import type { WorkerCheck } from './WorkersPanel'
+// Only the project page uses these styles: ship them with its lazy chunk.
+import '../ux/supervisor.css'
 
 /** The subset of GET /api/workers the role badges need: does Pi actually work right now. */
 export type SupervisorWorkersData = {
