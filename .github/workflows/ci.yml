@@ -267,6 +267,9 @@ jobs:
 
   real-browser:
     name: Local fixture Chromium (required)
+    # Four jobs share three greencloud runners: run after Web on its runner so the
+    # two Backend jobs and Web start at once (~10 min total instead of ~14).
+    needs: web
     # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
     # never run fork PRs on our own machine.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
