@@ -243,7 +243,9 @@ jobs:
         run: npm run build
 
       - name: Run Web Workbench browser E2E
-        run: npm run test:e2e
+        # Playwright defaults to half the cores (3 on greencloud); the E2E tests
+        # mostly wait on the page, so one more worker shortens the critical path.
+        run: npm run test:e2e -- --workers=4
 
       # Flaky failures (e.g. r8-onboarding N27) only reproduce on CI runners: keep the
       # screenshot and page snapshot Playwright writes so the next failure is diagnosable.
