@@ -234,8 +234,8 @@ class WebControl:
         rows.sort(key=self._activity_key, reverse=True)
         return rows[:limit]
 
-    def get_session(self, session_id: str) -> dict[str, Any] | None:
-        transcript = get_transcript_store(self.settings).get_session(session_id)
+    def get_session(self, session_id: str, *, message_limit: int | None = None) -> dict[str, Any] | None:
+        transcript = get_transcript_store(self.settings).get_session(session_id, message_limit=message_limit)
         if transcript is not None:
             source_chat_id = str(transcript.get("source_chat_id") or "")
             jobs = self.list_jobs(

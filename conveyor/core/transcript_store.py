@@ -475,17 +475,34 @@ class TranscriptStore:
         finally:
             conn.close()
 
-    def get_session(self, session_id: str) -> dict[str, Any] | None:
+    def get_session(self, session_id: str, *, message_limit: int | None = None) -> dict[str, Any] | None:
+        """The session with its messages, oldest first.
+
+        message_limit keeps only the newest N messages (still oldest first) and adds
+        messages_total / messages_truncated; without it every message is returned.
+        """
         conn = self._connect()
         try:
             row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             if row is None:
                 return None
             value = dict(row)
-            value["messages"] = [self._message_dict(item) for item in conn.execute(
-                "SELECT * FROM session_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
-                (session_id,),
-            ).fetchall()]
+            if message_limit is None:
+                rows = conn.execute(
+                    "SELECT * FROM session_messages WHERE session_id = ? ORDER BY created_at ASC, id ASC",
+                    (session_id,),
+                ).fetchall()
+            else:
+                rows = list(reversed(conn.execute(
+                    "SELECT * FROM session_messages WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (session_id, max(1, int(message_limit))),
+                ).fetchall()))
+                total = conn.execute(
+                    "SELECT COUNT(*) FROM session_messages WHERE session_id = ?", (session_id,),
+                ).fetchone()[0]
+                value["messages_total"] = int(total)
+                value["messages_truncated"] = int(total) > len(rows)
+            value["messages"] = [self._message_dict(item) for item in rows]
             return value
         finally:
             conn.close()

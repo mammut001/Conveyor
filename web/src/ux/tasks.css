@@ -946,3 +946,4 @@
 }
 .primary-interface .emergency.is-idle { color: #646b78; border-color: #d7dde7; background: transparent; }
 .primary-interface .task-notice-hint { display: block; margin-top: 4px; color: #646b78; font-size: 12px; }
+.primary-interface .transcript-truncated-note { margin: 0 0 8px; color: #646b78; font-size: 12px; text-align: center; }
