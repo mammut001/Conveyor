@@ -269,14 +269,18 @@ class ProxyTests(unittest.TestCase):
                 sockets.append(sock)
                 sock.sendall(b"GET http://not-allowed.example/ HTTP/1.1\r\n"
                              b"Host: not-allowed.example\r\nX-Slow: ")
-            until_full = time.monotonic() + 3
+            # A loaded CI runner can need several seconds to start 64 handler
+            # threads (run 44460380166 had 40 after 3 s), so wait up to 10 s.
+            until_full = time.monotonic() + 10
             while server.slots._value != 0 and time.monotonic() < until_full:
                 time.sleep(0.02)
             self.assertEqual(server.slots._value, 0, "did not occupy all 64 slots")
+            filled_at = time.monotonic()
 
             # Keep trickling bytes within ONE unfinished header line in every
-            # connection. Each handler must still expire at its original deadline.
-            while time.monotonic() - started < 11:
+            # connection. Each handler must still expire at its original 10 s
+            # deadline; the last one started no later than filled_at.
+            while time.monotonic() < filled_at + 11:
                 for sock in sockets:
                     try:
                         sock.sendall(b"x")
