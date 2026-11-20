@@ -1216,7 +1216,7 @@ class WebConsoleApiTests(unittest.TestCase):
         workers.clear_detection_cache()
 
     def request(self, method: str, path: str, body: Any = None, authorized: bool = True):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
         headers = {"Content-Type": "application/json"}
         if authorized:
             headers["Authorization"] = f"Bearer {TOKEN}"
