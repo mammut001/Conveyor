@@ -304,6 +304,14 @@ log "Syncing production Python dependencies..."
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 .venv/bin/python -m pip install -q -r requirements.txt \
   || rollback_release "dependency sync"
 
+# GTK bindings for the desktop chat window, only where that service exists. Non-fatal:
+# a missing build dependency must not block the deploy (the service check reports it).
+if [[ -f requirements-desktop.txt ]] && systemctl cat conveyor-desktop-chat.service >/dev/null 2>&1; then
+  log "Syncing desktop GTK bindings (requirements-desktop.txt)..."
+  PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 .venv/bin/python -m pip install -q -r requirements-desktop.txt \
+    || log "WARN: desktop GTK bindings failed to install; conveyor-desktop-chat may not start"
+fi
+
 # Bundled Pi coding agent (vendor/pi). Non-fatal: a failure must not block or roll back the deploy.
 log "Installing bundled Pi (vendor/pi)..."
 if bash scripts/install_pi.sh; then
