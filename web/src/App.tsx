@@ -3,20 +3,20 @@ import { ChatPanel, type ChatPanelProps } from './components/ChatPanel'
 const SupervisorWorkspace = lazy(() => import('./components/SupervisorWorkspace'))
 import { AgentWorkspace } from './components/AgentWorkspace'
 import { FormattedText } from './components/FormattedText'
-import { InboxPanel } from './components/InboxPanel'
-import { MemoryPanel } from './components/MemoryPanel'
-import { SkillsPanel } from './components/SkillsPanel'
-import { WorkflowPanel } from './components/WorkflowPanel'
-import { ConnectorsPanel } from './components/ConnectorsPanel'
+const InboxPanel = lazy(() => import('./components/InboxPanel').then(m => ({ default: m.InboxPanel })))
+const MemoryPanel = lazy(() => import('./components/MemoryPanel').then(m => ({ default: m.MemoryPanel })))
+const SkillsPanel = lazy(() => import('./components/SkillsPanel').then(m => ({ default: m.SkillsPanel })))
+const WorkflowPanel = lazy(() => import('./components/WorkflowPanel').then(m => ({ default: m.WorkflowPanel })))
+const ConnectorsPanel = lazy(() => import('./components/ConnectorsPanel').then(m => ({ default: m.ConnectorsPanel })))
 import { IntentDeciderSection } from './components/IntentDeciderSection'
-import { SecretsPanel } from './components/SecretsPanel'
-import { WorkersPanel } from './components/WorkersPanel'
-import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
+const SecretsPanel = lazy(() => import('./components/SecretsPanel').then(m => ({ default: m.SecretsPanel })))
+const WorkersPanel = lazy(() => import('./components/WorkersPanel').then(m => ({ default: m.WorkersPanel })))
+const ApprovalInboxPanel = lazy(() => import('./components/ApprovalInboxPanel').then(m => ({ default: m.ApprovalInboxPanel })))
 import { PwaNotifications } from './components/PwaNotifications'
 import { leavePwa } from './pwa'
-import { BrowserApprovalsPanel } from './components/BrowserApprovalsPanel'
-import { TeammatePanel } from './components/TeammatePanel'
-import { LiveScreenPanel } from './components/LiveScreenPanel'
+const BrowserApprovalsPanel = lazy(() => import('./components/BrowserApprovalsPanel').then(m => ({ default: m.BrowserApprovalsPanel })))
+const TeammatePanel = lazy(() => import('./components/TeammatePanel').then(m => ({ default: m.TeammatePanel })))
+const LiveScreenPanel = lazy(() => import('./components/LiveScreenPanel').then(m => ({ default: m.LiveScreenPanel })))
 import { AgentLibrary } from './components/AgentLibrary'
 import { AgentAvatar, AgentDialog, AgentList, agentTag, relativeTime, type Agent, type AgentDraft } from './components/AgentList'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
@@ -1836,6 +1836,7 @@ export default function App() {
             ? <AgentWorkspace key={selectedAgent.id} agent={selectedAgent} {...conversationProps} />
             : <ChatPanel key="free-chat" {...conversationProps} />}
         </div>
+        <Suspense fallback={<p className="kn-loading">加载中…</p>}>
         {view === 'approvals' ? (
           <ApprovalInboxPanel
             token={token}
@@ -2083,6 +2084,7 @@ export default function App() {
             )}
           </>
         )}
+        </Suspense>
       </section>
 
       <aside ref={contextDrawerRef} id="shell-context-panel" tabIndex={contextDrawerOpen ? -1 : undefined} role={contextDrawerOpen ? 'dialog' : undefined} aria-modal={contextDrawerOpen ? true : undefined} aria-label="详情" className={`context-panel panel ${contextDrawerOpen ? 'drawer-open' : ''} ${contextShown ? '' : 'shell-context-hidden'}`}>
@@ -2246,7 +2248,9 @@ export default function App() {
             <button type="button" className={`emergency ${computer?.armed ? '' : 'is-idle'}`.trim()} title="立即停止助手对电脑的所有自动操作（仅在助手正在操作电脑时需要）" onClick={() => action('/api/computer/stop')}>紧急停止</button>
           </div>
           {computer?.active_task && <KeyValue label="正在执行" value={computer.active_task.status ? stateLabel(String(computer.active_task.status)) : String(computer.active_task.task_id || '进行中')} />}
-          <LiveScreenPanel key={selectedAgent?.id || 'host'} token={token} agentId={selectedAgent?.id} agentName={selectedAgent?.name} />
+          <Suspense fallback={<p className="kn-loading">加载中…</p>}>
+            <LiveScreenPanel key={selectedAgent?.id || 'host'} token={token} agentId={selectedAgent?.id} agentName={selectedAgent?.name} />
+          </Suspense>
           {/* HumanTakeoverPanel renders the idle 人工接管 card here. */}
           <div className="takeover-slot" />
           {computer?.screen_preview_enabled || computer?.screenshots[0] ? <div className="host-screen-card">
