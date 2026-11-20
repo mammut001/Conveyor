@@ -21,6 +21,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -108,16 +109,11 @@ class TestSupervisorLiveValidation(unittest.TestCase):
             "DEEPSEEK_API_KEY": "dummy-deepseek-key-must-not-leak",
             "TELEGRAM_BOT_TOKEN": "123456:secret-token-must-not-leak",
         }
-        for k, v in test_keys.items():
-            os.environ[k] = v
-
-        try:
+        # patch.dict restores the previous values (CI sets TELEGRAM_BOT_TOKEN).
+        with patch.dict(os.environ, test_keys):
             rc, out = run_frozen_validator_cmd(probe_py, wt, timeout_seconds=5.0)
             self.assertEqual(rc, 0, f"Probe detected leaked secrets or missing config: {out}")
             self.assertIn("CREDENTIAL_FREE_PASS", out)
-        finally:
-            for k in test_keys:
-                os.environ.pop(k, None)
 
     def test_hanging_candidate_bounded_and_reaped(self) -> None:
         """Hanging validator process is stopped within deadline and reaped."""
