@@ -87,10 +87,28 @@ test('draft is restored when the submitted run fails', async ({ page }) => {
   await box.fill('重新整理按钮样式')
   await page.getByRole('button', { name: '发送' }).click()
   await expect.poll(() => submitted.length).toBe(1)
-  // The run now exists and has failed immediately.
-  await page.unrouteAll()
+  // The run now exists and has failed immediately. Newer routes take precedence, so the
+  // mocks are swapped without a gap (a gap let polls hit no backend at all).
   await install(page, [old, job('q-new', 'failed', 'run', '重新整理按钮样式', 0, { error: RAW })], { submitted })
   await expect(box).toHaveValue('重新整理按钮样式', { timeout: 15_000 })
+})
+
+test('one failed agents poll does not move the owner off 任务', async ({ page }) => {
+  // CI (run 44605614824): /api/agents failed once, refresh() read that as "agents off", the
+  // next good poll flipped them back on and the land-on-对话 effect left 任务.
+  const old = job('q0', 'completed', 'run', '之前的问题', 30)
+  await install(page, [old])
+  await openTasks(page)
+  const box = page.getByLabel('任务内容')
+  await expect(box).toBeVisible()
+  let failures = 0
+  await page.route('**/api/agents', async route => {
+    if (failures++ === 0) return route.fulfill({ status: 503, contentType: 'application/json', body: '{"error":"x"}' })
+    return route.fallback()
+  })
+  await expect.poll(() => failures, { timeout: 10_000 }).toBeGreaterThanOrEqual(2)
+  await expect(box).toBeVisible()
+  await expect(page.locator('.stream-panel > .event-stream')).toBeVisible()
 })
 
 test('older failure does not stay above a later successful run', async ({ page }) => {

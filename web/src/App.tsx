@@ -220,6 +220,9 @@ export default function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem('conveyor-token') || storedToken())
   const [rememberToken, setRememberToken] = useState(() => Boolean(storedToken()))
   const [agentState, setAgentState] = useState<{ enabled: boolean; agents: Agent[] }>({ enabled: false, agents: [] })
+  // refresh() reads the last known agents when one /api/agents poll fails (see below).
+  const agentStateRef = useRef(agentState)
+  agentStateRef.current = agentState
   const [selectedAgentId, setSelectedAgentId] = useState(() => localStorage.getItem('conveyor-agent') || '')
   const [agentDialog, setAgentDialog] = useState<null | { agent?: Agent }>(null)
   const [agentTab, setAgentTab] = useState<'details' | 'library' | 'computer'>('details')
@@ -228,8 +231,13 @@ export default function App() {
   const agentSessionRef = useRef('')
   agentSessionRef.current = selectedAgent?.session_id || ''
   // Agents are conversations first: land on Chat the moment they are on, unless the URL named a view.
+  // Only the first time agents are on: a later off→on flip (a failed poll, then a good one)
+  // must not pull the owner off the page they are working on.
+  const landedOnAgentsRef = useRef(false)
   useEffect(() => {
-    if (!agentState.enabled || explicitRouteRef.current || viewRef.current !== 'tasks') return
+    if (!agentState.enabled || landedOnAgentsRef.current) return
+    landedOnAgentsRef.current = true
+    if (explicitRouteRef.current || viewRef.current !== 'tasks') return
     historyModeRef.current = 'replace'
     setView('chat')
   }, [agentState.enabled])
@@ -848,7 +856,8 @@ export default function App() {
       const [sessionData, jobData, approvalData, agentData] = await Promise.all([
         api<{ sessions: Session[] }>('/api/sessions'), api<{ jobs: Job[] }>('/api/jobs'),
         api<{ approvals: Approval[] }>('/api/approvals'),
-        api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => ({ enabled: false, agents: [] as Agent[] })),
+        // One failed agents poll keeps what we had: treating it as "agents off" switched views.
+        api<{ enabled: boolean; agents: Agent[] }>('/api/agents').catch(() => agentStateRef.current),
       ])
       // A newer refresh (or a decision that bumped the generation) started
       // while this one was in flight. Drop it so a late poll cannot restore
