@@ -1193,6 +1193,9 @@ class RelayConsumer:
             self._task.cancel()
 
 
+_RELAY_TASKS: set[asyncio.Task] = set()
+
+
 def start_relay_worker(
     loop: asyncio.AbstractEventLoop,
     settings: Any,
@@ -1202,7 +1205,11 @@ def start_relay_worker(
     if not is_relay_enabled(settings):
         return None
     consumer = RelayConsumer(settings, channel=channel)
-    loop.create_task(consumer.run())
+    # Hold the task (the loop keeps only a weak reference to it).
+    task = loop.create_task(consumer.run())
+    _RELAY_TASKS.add(task)
+    task.add_done_callback(_RELAY_TASKS.discard)
+    consumer.task = task
     return consumer
 
 

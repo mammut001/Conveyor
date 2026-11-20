@@ -32,6 +32,20 @@ from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
 logger = logging.getLogger("conveyor.worktree")
 
+# The event loop keeps only weak references to tasks, so a task nobody holds
+# can be garbage-collected mid-flight (see asyncio.create_task docs): a job
+# would silently stop. Keep every background task here until it finishes.
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def spawn_background(coro) -> asyncio.Task:
+    """create_task that keeps a strong reference until the task is done."""
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task
+
+
 def _extract_command_name(command: str) -> str | None:
     """Pull a short human-readable executable name out of a codex
     ``command_execution.command`` string. The real-world shape is
@@ -163,7 +177,7 @@ async def start(
             self.current_job = job
             self.last_job = job
             
-        asyncio.create_task(self._run_job(job, on_progress))
+        spawn_background(self._run_job(job, on_progress))
         return job
 
 
