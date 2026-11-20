@@ -4,6 +4,7 @@ from __future__ import annotations
 import http.client
 import json
 import logging
+import os
 import tempfile
 import threading
 import time
@@ -85,6 +86,11 @@ class IntentDeciderTests(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix="conveyor-decider-")
         self.root = Path(self._tmp.name)
         self.settings = _make_settings(self.root / "env")
+        # save_provider_config writes the key to $CONVEYOR_ENV_FILE (default: ./.env,
+        # the repo checkout) and into os.environ: keep both inside this test.
+        env = patch.dict(os.environ, {"CONVEYOR_ENV_FILE": str(self.root / "provider.env")})
+        env.start()
+        self.addCleanup(env.stop)
         self.fake = _FakeDecisionServer()
 
     def tearDown(self) -> None:

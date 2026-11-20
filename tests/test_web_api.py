@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import http.client
 import json
+import os
+import tempfile
 import threading
 import unittest
 from unittest.mock import patch
@@ -164,6 +166,13 @@ class WebApiTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/jobs/q1/diff")[0], 200)
 
     def test_provider_config_is_authenticated_and_never_echoes_key(self):
+        # The POST saves the key to $CONVEYOR_ENV_FILE (default ./.env, the repo
+        # checkout) and os.environ: keep both inside this test.
+        tmp = tempfile.TemporaryDirectory(prefix="web-api-provider-")
+        self.addCleanup(tmp.cleanup)
+        env = patch.dict(os.environ, {"CONVEYOR_ENV_FILE": os.path.join(tmp.name, "provider.env")})
+        env.start()
+        self.addCleanup(env.stop)
         status, config = self.request("GET", "/api/config/provider")
         self.assertEqual(status, 200); self.assertTrue(config["api_key_configured"])
         self.assertEqual(self.request("GET", "/api/config/provider", authorized=False)[0], 401)
