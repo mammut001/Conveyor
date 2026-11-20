@@ -1,9 +1,14 @@
 import io
+import os
 import unittest
 from contextlib import redirect_stderr
 from http import HTTPStatus
+from unittest import mock
 
-from conveyor.entrypoints.desktop_agent_server import DesktopAgentHTTPHandler
+# The server exits at import when the desktop node is enabled without a token
+# (CI's all-feature-flags job); give it one for the import.
+with mock.patch.dict(os.environ, {"CONVEYOR_DESKTOP_AGENT_TOKEN": "test-token"}):
+    from conveyor.entrypoints.desktop_agent_server import DesktopAgentHTTPHandler
 
 
 def _logged(command: str, path: str, code) -> str:

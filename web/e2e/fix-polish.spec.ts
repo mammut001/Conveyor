@@ -108,7 +108,11 @@ test('memory null: loading ends with an error and a working 重试', async ({ pa
 test('a hanging request falls back to an error after 15 seconds', async ({ page }) => {
   await page.clock.install()
   await install(page, { '/api/memory': { hang: true } })
+  // The panel is lazy-loaded: the first 加载中… may be the chunk fallback, so
+  // wait until the panel itself has asked for memory before jumping the clock.
+  const asked = page.waitForRequest(r => new URL(r.url()).pathname === '/api/memory')
   await goto(page, 'memory')
+  await asked
   await expect(page.getByText('加载中…')).toBeVisible()
   await page.clock.fastForward(16_000)
   await expect(page.getByRole('button', { name: '重试' }).first()).toBeVisible()
