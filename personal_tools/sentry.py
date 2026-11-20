@@ -267,19 +267,38 @@ def check_disk_space(settings: Settings) -> list[SentryAlert]:
 
 # Node.js renames its main thread, so ps shows every node process as
 # "MainThread"; the program name comes from the command line instead.
-_GENERIC_THREAD_NAMES = frozenset({"MainThread"})
+_GENERIC_THREAD_NAMES = frozenset({
+    "MainThread",
+    # Firefox / Chromium name their child processes by role, not by program.
+    "Isolated Web Co", "Isolated Servic", "Privileged Cont", "WebExtensions",
+    "Web Content", "Utility Process", "RDD Process", "Socket Process", "GPU Process",
+})
 _LINUX_COMM_MAX = 15
 
 
 def _program_name(pid: str) -> str:
-    """Basename of argv[0] from /proc (Linux), or "" when unavailable."""
+    """Name of the program behind a pid (Linux), or "" when unavailable.
+
+    /proc/<pid>/exe is the real binary but is only readable for our own
+    processes; otherwise fall back to argv[0]. Firefox rewrites its command
+    line into one space-separated string ("…/firefox -contentproc … 8 tab"),
+    so a NUL-less command line contributes only its first word.
+    """
     if not pid.isdigit():
         return ""
+    proc = Path("/proc") / pid
     try:
-        raw = (Path("/proc") / pid / "cmdline").read_bytes()
+        return os.path.basename(os.readlink(proc / "exe")).removesuffix(" (deleted)")
+    except OSError:
+        pass
+    try:
+        raw = (proc / "cmdline").read_bytes()
     except OSError:
         return ""
-    argv0 = raw.split(b"\0", 1)[0].decode("utf-8", errors="replace").strip()
+    text = raw.rstrip(b"\0")
+    argv0 = text.split(b"\0", 1)[0].decode("utf-8", errors="replace").strip()
+    if b"\0" not in text and " " in argv0:
+        argv0 = argv0.split(" ", 1)[0]
     return os.path.basename(argv0)
 
 
@@ -326,8 +345,14 @@ def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
         # Linux keeps only 15 characters of a process name ("Isolated Web Co" is a
         # Firefox content process, "chrome-headless" is chrome-headless-shell), and
         # Node.js renames its main thread; the command line has the real program.
-        if comm in _GENERIC_THREAD_NAMES or (not is_darwin and len(comm) == _LINUX_COMM_MAX):
+        if comm in _GENERIC_THREAD_NAMES:
             comm = _program_name(pid) or comm
+        elif not is_darwin and len(comm) == _LINUX_COMM_MAX:
+            # Only take the untruncated form of the same name: for an interpreted
+            # script ("networkd-dispat") the binary would just say "python3".
+            full = _program_name(pid)
+            if full.startswith(comm):
+                comm = full
         # Linux cuts process titles to 15 chars, e.g. "next-server (v1": drop the version tail.
         comm = re.sub(r"\s*\(.*$", "", comm).strip()
         if not comm:

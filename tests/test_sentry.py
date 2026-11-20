@@ -195,8 +195,9 @@ class TestSentryEngine(unittest.TestCase):
             "ubuntu            2.0   422116 Isolated Web Co\n"
             "ghrunner         30.0      900 chrome-headless\n"
             "root              1.5       12 kworker/R-rcu_g\n"
+            "root              1.0       77 networkd-dispat\n"
         )
-        names = {"422115": "firefox", "422116": "firefox", "900": "chrome-headless-shell", "12": ""}
+        names = {"422115": "firefox", "422116": "firefox", "900": "chrome-headless-shell", "12": "", "77": "python3"}
         with patch("os.getloadavg", return_value=(9.0, 8.0, 8.0)), \
              patch("os.cpu_count", return_value=4), \
              patch("sys.platform", "linux"), \
@@ -207,6 +208,32 @@ class TestSentryEngine(unittest.TestCase):
             "占用最多：chrome-headless-shell（ghrunner，30%）、firefox（ubuntu，6%）、kworker/R-rcu_g（root，2%）。",
             alerts[0].summary,
         )
+        with patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._program_name", side_effect=lambda pid: names.get(pid, "")), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)):
+            from personal_tools.sentry import _top_cpu_processes
+            groups = {name for name, _user, _cpu in _top_cpu_processes(limit=5)}
+        # An interpreted script keeps its own (truncated) name, not "python3".
+        self.assertIn("networkd-dispat", groups)
+        self.assertNotIn("python3", groups)
+
+    def test_program_name_prefers_exe_and_handles_rewritten_cmdlines(self):
+        import tempfile
+        from personal_tools import sentry as sentry_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "41").mkdir()
+            os.symlink("/snap/firefox/9136/usr/lib/firefox/firefox", root / "41" / "exe")
+            (root / "41" / "cmdline").write_bytes(b"/snap/firefox/x/firefox -contentproc -appDir /b 8 tab")
+            (root / "42").mkdir()  # exe unreadable (another user): command line rewritten by Firefox
+            (root / "42" / "cmdline").write_bytes(b"/snap/firefox/x/firefox -contentproc -appDir /b 8 tab")
+            (root / "43").mkdir()  # ordinary NUL-separated command line
+            (root / "43" / "cmdline").write_bytes(b"/usr/bin/node\0/srv/app/server.js\0--port\0")
+            real_path = sentry_mod.Path
+            with patch.object(sentry_mod, "Path", side_effect=lambda p: root if str(p) == "/proc" else real_path(p)):
+                self.assertEqual(sentry_mod._program_name("41"), "firefox")
+                self.assertEqual(sentry_mod._program_name("42"), "firefox")
+                self.assertEqual(sentry_mod._program_name("43"), "node")
 
     def test_program_name_reads_proc_cmdline_and_tolerates_missing_pids(self):
         from personal_tools.sentry import _program_name
