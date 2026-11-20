@@ -1,13 +1,37 @@
 """personal_tools/reminders.py — local reminder tool implementations."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 from conveyor.core.config import Settings
 from personal_tools.base import ToolResult
 from personal_tools.reminder_parse import REMIND_USAGE, parse_reminder_text
 from personal_tools.store import PersonalToolsStore
 
 
-def _format_reminder(row) -> str:
+_WEEKDAYS = "一二三四五六日"
+
+
+def _format_due(value, tz_name: str | None, *, now: datetime | None = None) -> str:
+    """「11月23日 周一 10:00」 in the owner's timezone (year added when not this year)."""
+    try:
+        due = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return str(value)
+    if due.tzinfo is None:
+        due = due.replace(tzinfo=timezone.utc)
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except Exception:
+        tz = timezone.utc
+    local = due.astimezone(tz)
+    current = (now or datetime.now(timezone.utc)).astimezone(tz)
+    year = f"{local.year}年" if local.year != current.year else ""
+    return f"{year}{local.month}月{local.day}日 周{_WEEKDAYS[local.weekday()]} {local:%H:%M}"
+
+
+def _format_reminder(row, tz_name: str | None = None) -> str:
     flag = {"pending": "⏳", "cancelled": "❌", "done": "✅"}.get(row.status, "?")
     delivery = ""
     if row.channel and row.chat_id:
@@ -15,7 +39,7 @@ def _format_reminder(row) -> str:
     preview = row.text.replace("\n", " ")
     if len(preview) > 100:
         preview = preview[:97] + "..."
-    return f"{flag} #{row.id} · {row.due_at} · {preview}{delivery}"
+    return f"{flag} #{row.id} · {_format_due(row.due_at, tz_name)} · {preview}{delivery}"
 
 
 async def reminders_create(
@@ -34,13 +58,12 @@ async def reminders_create(
         return ToolResult(False, REMIND_USAGE)
     # A time already in the past (a typo'd year, "in 0m") used to be stored and
     # fire on the next tick as if it were due now.
-    from datetime import datetime, timezone
     if due_at <= datetime.now(timezone.utc):
-        return ToolResult(False, f"提醒时间 {due_at.isoformat()} 已经过去，请给一个将来的时间。\n\n{REMIND_USAGE}")
+        return ToolResult(False, f"提醒时间 {_format_due(due_at, settings.user_timezone)} 已经过去，请给一个将来的时间。\n\n{REMIND_USAGE}")
     store = PersonalToolsStore(settings)
     row = store.create_reminder(operator_id, body, due_at, channel=channel, chat_id=chat_id)
     dest = f" → {channel}" if channel else ""
-    return ToolResult(True, f"提醒已创建 #{row.id} · {row.due_at} · {body}{dest}")
+    return ToolResult(True, f"提醒已创建 #{row.id} · {_format_due(row.due_at, settings.user_timezone)} · {body}{dest}")
 
 
 async def reminders_list(settings: Settings, arg: str, *, operator_id: str, **_kw) -> ToolResult:
@@ -55,7 +78,7 @@ async def reminders_list(settings: Settings, arg: str, *, operator_id: str, **_k
     rows = store.list_reminders(operator_id, limit=limit)
     if not rows:
         return ToolResult(True, "没有提醒。用 /remind 创建。")
-    lines = [f"提醒列表 ({len(rows)}):", *(_format_reminder(r) for r in rows)]
+    lines = [f"提醒列表 ({len(rows)}):", *(_format_reminder(r, settings.user_timezone) for r in rows)]
     return ToolResult(True, "\n".join(lines))
 
 
@@ -79,5 +102,5 @@ async def reminders_due(settings: Settings, arg: str, *, operator_id: str, **_kw
     rows = store.list_due_reminders(operator_id)
     if not rows:
         return ToolResult(True, "当前没有到期的待办提醒。")
-    lines = [f"到期提醒 ({len(rows)}):", *(_format_reminder(r) for r in rows)]
+    lines = [f"到期提醒 ({len(rows)}):", *(_format_reminder(r, settings.user_timezone) for r in rows)]
     return ToolResult(True, "\n".join(lines))
