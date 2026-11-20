@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import faulthandler
+import io
 import os
 import stat
 import subprocess
@@ -226,6 +227,7 @@ class ClaudeCodeBackendTests(unittest.TestCase):
             async def scenario() -> None:
                 async def on_progress(_value: str) -> None:
                     pass
+                existing = asyncio.all_tasks()
                 job = await backend.start(JobMode.RUN, "wait", on_progress)
                 for _ in range(200):
                     if job.process is not None:
@@ -241,6 +243,17 @@ class ClaudeCodeBackendTests(unittest.TestCase):
                 self.assertEqual(job.state, JobState.CANCELLED, job.error)
                 self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "unchanged\n")
                 await backend.discard_job(job.id, job.worktree_path)
+                # Run 44691210444: the watchdog showed asyncio.run stuck cancelling a
+                # task left over after this scenario. Wait for the job's own tasks here
+                # and, if one never finishes, fail with the await it is stuck on.
+                leftover = asyncio.all_tasks() - existing - {asyncio.current_task()}
+                if leftover:
+                    _done, pending = await asyncio.wait(leftover, timeout=20)
+                    if pending:
+                        report = io.StringIO()
+                        for task in pending:
+                            task.print_stack(file=report)
+                        self.fail("job tasks still running 20 s after cancel:\n" + report.getvalue())
 
             # CI hung here twice on 2026-11-19 (runs 44553097269, 44639787020) until
             # the 30-minute job timeout; it does not reproduce locally. A hang
