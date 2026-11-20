@@ -27,12 +27,17 @@ const provider = {
 
 const pageErrors: string[] = [];
 
-async function install(page: Page, initialReminders: Reminder[], options?: { routines?: boolean; systemDelayMs?: number }) {
+async function install(
+  page: Page,
+  initialReminders: Reminder[],
+  options?: { routines?: boolean; systemDelayMs?: number; createError?: string },
+) {
   pageErrors.length = 0;
   page.on('pageerror', error => pageErrors.push(error.message));
 
   let reminders = [...initialReminders];
   const cancelCalls: string[] = [];
+  const createCalls: Array<{ text?: unknown }> = [];
 
   await page.clock.setFixedTime(NOW);
   await page.addInitScript(() => {
@@ -71,6 +76,21 @@ async function install(page: Page, initialReminders: Reminder[], options?: { rou
     if (path === '/api/inbox') return json({ unread: 0, items: [] });
     if (path === '/api/routines') return json({ routines: [] });
     if (path === '/api/reminders' && method === 'GET') return json({ reminders });
+    if (path === '/api/reminders' && method === 'POST') {
+      const payload = (req.postDataJSON() ?? {}) as { text?: unknown };
+      createCalls.push(payload);
+      if (options?.createError) {
+        return json({ error: options.createError }, 400);
+      }
+      const created: Reminder = {
+        id: 100 + reminders.length,
+        text: '开会',
+        due_at: '2026-11-20T00:00:00+00:00',
+        channel: 'telegram',
+      };
+      reminders = [...reminders, created];
+      return json({ reminder: created }, 201);
+    }
 
     const cancelMatch = /^\/api\/reminders\/(\d+)\/cancel$/.exec(path);
     if (cancelMatch && method === 'POST') {
@@ -92,7 +112,7 @@ async function install(page: Page, initialReminders: Reminder[], options?: { rou
 
   await page.goto('/#inbox');
   await expect(page.locator('.kn-inbox')).toBeVisible();
-  return { cancelCalls };
+  return { cancelCalls, createCalls };
 }
 
 test.describe('R37: inbox reminders', () => {
@@ -114,7 +134,7 @@ test.describe('R37: inbox reminders', () => {
     await expect(headings.nth(0)).toContainText('运行结果');
     await expect(headings.nth(1)).toContainText('提醒');
     await expect(headings.nth(2)).toContainText('定时任务');
-    await expect(panel.getByText('在对话里说“提醒我……”就能添加，到点会发到 Telegram。')).toBeVisible();
+    await expect(panel.getByText('在这里或在对话里说“提醒我……”都能添加，到点会发到 Telegram。')).toBeVisible();
 
     const list = panel.getByRole('list', { name: '提醒列表' });
     const rows = list.locator('li');
@@ -141,13 +161,47 @@ test.describe('R37: inbox reminders', () => {
     await expect(panel.getByText('给妈妈打电话')).toHaveCount(0);
   });
 
-  test('hides 提醒 section when there are no reminders', async ({ page }) => {
-    await install(page, []);
+  test('shows 提醒 section when empty, creates reminder via Enter, and keeps 390px layout clean (R76)', async ({ page }) => {
+    const { createCalls } = await install(page, []);
     const panel = page.locator('.kn-inbox');
 
-    await expect(panel.getByRole('heading', { name: /^运行结果/ })).toBeVisible();
-    await expect(panel.getByRole('heading', { name: /^定时任务/ })).toBeVisible();
-    await expect(panel.getByRole('heading', { name: /^提醒/ })).toHaveCount(0);
+    await expect(panel.getByRole('heading', { name: /^提醒/ })).toBeVisible();
+    await expect(panel.getByText('还没有提醒。')).toBeVisible();
+    const input = panel.getByLabel('新建提醒');
+    const addBtn = panel.getByRole('button', { name: '添加' });
+    await expect(input).toBeVisible();
+    await expect(addBtn).toBeDisabled();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+
+    await input.fill('明天早上8点 开会');
+    await expect(addBtn).toBeEnabled();
+    await input.press('Enter');
+
+    await expect.poll(() => createCalls).toEqual([{ text: '明天早上8点 开会' }]);
+    await expect(input).toHaveValue('');
+    await expect(panel.getByRole('status')).toContainText('已添加：明天 08:00 开会');
+
+    const list = panel.getByRole('list', { name: '提醒列表' });
+    const rows = list.locator('li');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.nth(0)).toContainText('明天 08:00');
+    await expect(rows.nth(0)).toContainText('开会');
+  });
+
+  test('shows server 400 error in alert and keeps input value (R76)', async ({ page }) => {
+    const { createCalls } = await install(page, [], { createError: '看不懂这个时间' });
+    const panel = page.locator('.kn-inbox');
+
+    const input = panel.getByLabel('新建提醒');
+    await input.fill('随便写写');
+    await panel.getByRole('button', { name: '添加' }).click();
+
+    await expect.poll(() => createCalls).toEqual([{ text: '随便写写' }]);
+    await expect(panel.getByRole('alert')).toContainText('看不懂这个时间');
+    await expect(input).toHaveValue('随便写写');
   });
 
   test('reminders show even when routines are off (R38)', async ({ page }) => {

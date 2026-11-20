@@ -176,6 +176,11 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
 
   // Reminders
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [remindersLoaded, setRemindersLoaded] = useState(false);
+  const [newReminderText, setNewReminderText] = useState('');
+  const [creatingReminder, setCreatingReminder] = useState(false);
+  const [createReminderError, setCreateReminderError] = useState('');
+  const [createReminderStatus, setCreateReminderStatus] = useState('');
   const [confirmCancelReminderId, setConfirmCancelReminderId] = useState<number | null>(null);
   const [reminderBusyId, setReminderBusyId] = useState<number | null>(null);
   const [reminderErrors, setReminderErrors] = useState<Record<number, string>>({});
@@ -274,6 +279,7 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
           ? []
           : pickArray<Reminder>(data, 'reminders');
       setReminders(list);
+      setRemindersLoaded(true);
     } catch {
       // Keep 运行结果 and 定时任务 usable if reminders fail to load.
     }
@@ -457,6 +463,39 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
     }
   };
 
+  const handleCreateReminder = async (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = newReminderText.trim();
+    if (!trimmed || creatingReminder) return;
+    setCreatingReminder(true);
+    setCreateReminderError('');
+    setCreateReminderStatus('');
+    try {
+      const res = await fetch('/api/reminders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ text: trimmed }),
+      });
+      if (!res.ok) throw await responseError(res);
+      const data = await readJson(res).catch(() => null) as { reminder?: Reminder } | null;
+      const created = data && typeof data === 'object' ? data.reminder : undefined;
+      const when = created?.due_at
+        ? (formatUpcoming(created.due_at) || formatDateTime(created.due_at) || created.due_at)
+        : '';
+      const bodyText = created?.text || trimmed;
+      setNewReminderText('');
+      setCreateReminderStatus(`已添加：${when ? `${when} ` : ''}${bodyText}`);
+      await fetchReminders();
+    } catch (err) {
+      setCreateReminderError(friendlyError(err, '没能添加提醒，请检查时间和内容后重试').message);
+    } finally {
+      setCreatingReminder(false);
+    }
+  };
+
   const handleCancelReminder = async (rem: Reminder) => {
     setReminderBusyId(rem.id);
     setReminderErrors((prev) => {
@@ -620,86 +659,120 @@ export function InboxPanel({ token, onUnreadChange, onApprovalDecided, webhooksE
     }
   };
 
-  const remindersSection = reminders.length > 0 ? (
+  const remindersSection = remindersLoaded ? (
     <section className="kn-section" aria-labelledby="kn-reminders-title">
       <header className="kn-section-head">
         <div>
           <h3 id="kn-reminders-title">
-            提醒<span className="kn-count">{reminders.length}</span>
+            提醒{reminders.length > 0 && <span className="kn-count">{reminders.length}</span>}
           </h3>
-          <p className="kn-section-sub">在对话里说“提醒我……”就能添加，到点会发到 Telegram。</p>
+          <p className="kn-section-sub">在这里或在对话里说“提醒我……”都能添加，到点会发到 Telegram。</p>
         </div>
       </header>
 
-      <ul className="kn-routine-list" aria-label="提醒列表">
-        {reminders.map((rem) => {
-          const busy = reminderBusyId === rem.id;
-          const rowError = reminderErrors[rem.id];
-          return (
-            <li key={rem.id} className="kn-card kn-routine">
-              <div className="kn-routine-main">
-                <div className="kn-routine-title">
-                  <strong>{rem.text}</strong>
-                </div>
-                <p className="kn-routine-when">
-                  <span className="kn-routine-schedule">
-                    <time dateTime={rem.due_at} title={formatDateTime(rem.due_at)}>
-                      {formatUpcoming(rem.due_at) || rem.due_at}
-                    </time>
-                  </span>
-                  {rem.channel ? <span>发到 {channelLabel(rem.channel)}</span> : null}
-                </p>
-                {rowError && <p className="kn-field-error" role="alert">{rowError}</p>}
-              </div>
+      <form className="kn-field" onSubmit={(e) => void handleCreateReminder(e)} noValidate>
+        <div className="kn-session-search-form">
+          <input
+            type="text"
+            className="kn-input"
+            aria-label="新建提醒"
+            placeholder="例如：明天早上8点 开会 / 下周一上午10点 交报告"
+            value={newReminderText}
+            maxLength={500}
+            disabled={creatingReminder}
+            onChange={(e) => {
+              setNewReminderText(e.target.value);
+              if (createReminderError) setCreateReminderError('');
+              if (createReminderStatus) setCreateReminderStatus('');
+            }}
+          />
+          <button
+            type="submit"
+            className="kn-btn kn-btn-primary"
+            disabled={!newReminderText.trim() || creatingReminder}
+          >
+            {creatingReminder ? '添加中…' : '添加'}
+          </button>
+        </div>
+        {createReminderError && <p className="kn-field-error" role="alert">{createReminderError}</p>}
+        {createReminderStatus && <p className="kn-saved" role="status">{createReminderStatus}</p>}
+      </form>
 
-              <div className="kn-routine-actions">
-                {confirmCancelReminderId === rem.id ? (
-                  <div className="kn-confirm" role="group" aria-label="确认取消">
-                    <span className="kn-confirm-text">确定取消？</span>
+      {reminders.length === 0 ? (
+        <div className="kn-empty">
+          <p className="kn-empty-title">还没有提醒。</p>
+        </div>
+      ) : (
+        <ul className="kn-routine-list" aria-label="提醒列表">
+          {reminders.map((rem) => {
+            const busy = reminderBusyId === rem.id;
+            const rowError = reminderErrors[rem.id];
+            return (
+              <li key={rem.id} className="kn-card kn-routine">
+                <div className="kn-routine-main">
+                  <div className="kn-routine-title">
+                    <strong>{rem.text}</strong>
+                  </div>
+                  <p className="kn-routine-when">
+                    <span className="kn-routine-schedule">
+                      <time dateTime={rem.due_at} title={formatDateTime(rem.due_at)}>
+                        {formatUpcoming(rem.due_at) || rem.due_at}
+                      </time>
+                    </span>
+                    {rem.channel ? <span>发到 {channelLabel(rem.channel)}</span> : null}
+                  </p>
+                  {rowError && <p className="kn-field-error" role="alert">{rowError}</p>}
+                </div>
+
+                <div className="kn-routine-actions">
+                  {confirmCancelReminderId === rem.id ? (
+                    <div className="kn-confirm" role="group" aria-label="确认取消">
+                      <span className="kn-confirm-text">确定取消？</span>
+                      <div className="kn-row-actions">
+                        <button
+                          type="button"
+                          className="kn-btn kn-btn-small kn-btn-danger"
+                          disabled={busy}
+                          onClick={() => void handleCancelReminder(rem)}
+                        >
+                          {busy ? '取消中…' : '取消提醒'}
+                        </button>
+                        <button
+                          type="button"
+                          className="kn-btn kn-btn-small"
+                          disabled={busy}
+                          onClick={() => setConfirmCancelReminderId(null)}
+                        >
+                          不了
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
                     <div className="kn-row-actions">
                       <button
                         type="button"
-                        className="kn-btn kn-btn-small kn-btn-danger"
+                        className="kn-btn kn-btn-small kn-btn-danger-text"
                         disabled={busy}
-                        onClick={() => void handleCancelReminder(rem)}
+                        onClick={() => {
+                          setReminderErrors((prev) => {
+                            if (!(rem.id in prev)) return prev;
+                            const next = { ...prev };
+                            delete next[rem.id];
+                            return next;
+                          });
+                          setConfirmCancelReminderId(rem.id);
+                        }}
                       >
-                        {busy ? '取消中…' : '取消提醒'}
-                      </button>
-                      <button
-                        type="button"
-                        className="kn-btn kn-btn-small"
-                        disabled={busy}
-                        onClick={() => setConfirmCancelReminderId(null)}
-                      >
-                        不了
+                        取消
                       </button>
                     </div>
-                  </div>
-                ) : (
-                  <div className="kn-row-actions">
-                    <button
-                      type="button"
-                      className="kn-btn kn-btn-small kn-btn-danger-text"
-                      disabled={busy}
-                      onClick={() => {
-                        setReminderErrors((prev) => {
-                          if (!(rem.id in prev)) return prev;
-                          const next = { ...prev };
-                          delete next[rem.id];
-                          return next;
-                        });
-                        setConfirmCancelReminderId(rem.id);
-                      }}
-                    >
-                      取消
-                    </button>
-                  </div>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </section>
   ) : null;
 

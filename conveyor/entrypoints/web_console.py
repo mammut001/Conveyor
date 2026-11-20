@@ -1426,6 +1426,66 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(status, item)
                 return
 
+            if parts == ["api", "reminders"]:
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from conveyor.core.config import load_runtime_settings
+                    settings = load_runtime_settings()
+                owner_id = getattr(settings, "telegram_allowed_user_id", None)
+                if not owner_id:
+                    self._json(HTTPStatus.CONFLICT, {"error": "还没有配置 Telegram 用户 ID，暂时无法添加提醒"})
+                    return
+                raw_text = body.get("text")
+                text = raw_text.strip() if isinstance(raw_text, str) else ""
+                if not text:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "请写下提醒内容和时间"})
+                    return
+                if len(text) > 500:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "提醒内容不能超过 500 个字"})
+                    return
+                from personal_tools import reminders as reminders_mod
+                from personal_tools.store import PersonalToolsStore
+
+                result = self._await(
+                    reminders_mod.reminders_create(
+                        settings,
+                        text,
+                        operator_id=str(owner_id),
+                        channel="telegram",
+                        chat_id=str(owner_id),
+                    ),
+                )
+                if not result.ok:
+                    lines = [line.strip() for line in (result.text or "").splitlines() if line.strip()]
+                    first_line = lines[0] if lines else ""
+                    if not first_line or first_line.startswith("用法"):
+                        # The parser found no time; the /remind usage text means little here.
+                        first_line = "看不懂这个时间，试试「明天早上8点 开会」或「下周一上午10点 交报告」"
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": first_line})
+                    return
+                rows = PersonalToolsStore(settings).list_reminders(
+                    str(owner_id), limit=200, status="pending",
+                )
+                created_row = None
+                match = re.search(r"#(\d+)", result.text or "")
+                if match:
+                    target_id = int(match.group(1))
+                    created_row = next((r for r in rows if r.id == target_id), None)
+                if created_row is None and rows:
+                    created_row = max(rows, key=lambda r: r.id)
+                if created_row is None:
+                    self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "提醒已创建但读取失败，请刷新重试"})
+                    return
+                self._json(HTTPStatus.CREATED, {
+                    "reminder": {
+                        "id": created_row.id,
+                        "text": created_row.text,
+                        "due_at": created_row.due_at,
+                        "channel": created_row.channel,
+                    },
+                })
+                return
+
             if len(parts) == 4 and parts[:2] == ["api", "reminders"] and parts[3] == "cancel":
                 reminder_id_str = parts[2]
                 if not reminder_id_str.isascii() or not reminder_id_str.isdigit():

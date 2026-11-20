@@ -1,4 +1,4 @@
-"""Tests for GET /api/reminders and POST /api/reminders/<id>/cancel."""
+"""Tests for GET/POST /api/reminders and POST /api/reminders/<id>/cancel."""
 from __future__ import annotations
 
 import asyncio
@@ -190,8 +190,69 @@ class WebRemindersApiTests(unittest.TestCase):
     def test_unauthenticated_requests_return_401(self) -> None:
         status_get, _ = self.call("GET", "/api/reminders", authorized=False)
         self.assertEqual(status_get, 401)
+        status_create, _ = self.call("POST", "/api/reminders", {"text": "2027年1月1日上午9点 测试"}, authorized=False)
+        self.assertEqual(status_create, 401)
         status_post, _ = self.call("POST", "/api/reminders/1/cancel", {}, authorized=False)
         self.assertEqual(status_post, 401)
+
+    def test_create_reminder_success_and_persists_for_owner(self) -> None:
+        owner = str(self.settings.telegram_allowed_user_id)
+        earlier = self.store.create_reminder(
+            owner,
+            "更早的提醒",
+            datetime(2026, 12, 1, 9, 0, tzinfo=timezone.utc),
+            channel="telegram",
+            chat_id=owner,
+        )
+
+        status, data = self.call("POST", "/api/reminders", {"text": "2027年1月1日上午9点 测试"})
+        self.assertEqual(status, 201, data)
+        reminder = data["reminder"]
+        self.assertNotEqual(reminder["id"], earlier.id)
+        self.assertEqual(reminder["text"], "测试")
+        self.assertEqual(reminder["due_at"], "2027-01-01T09:00:00+00:00")
+        self.assertEqual(reminder["channel"], "telegram")
+
+        rows = self.store.list_reminders(owner, limit=10, status="pending")
+        created_row = next((r for r in rows if r.id == reminder["id"]), None)
+        self.assertIsNotNone(created_row)
+        self.assertEqual(created_row.operator_id, owner)
+        self.assertEqual(created_row.chat_id, owner)
+        self.assertEqual(created_row.channel, "telegram")
+        self.assertEqual(created_row.due_at, "2027-01-01T09:00:00+00:00")
+
+    def test_create_reminder_validation_and_parse_errors(self) -> None:
+        for bad_body in ({}, {"text": ""}, {"text": "   "}, {"text": 123}, {"text": "a" * 501}):
+            with self.subTest(bad_body=bad_body):
+                status, data = self.call("POST", "/api/reminders", bad_body)
+                self.assertEqual(status, 400, data)
+                self.assertIsInstance(data.get("error"), str)
+                self.assertTrue(data["error"])
+
+        status, data = self.call("POST", "/api/reminders", {"text": "随便写写"})
+        self.assertEqual(status, 400, data)
+        self.assertIsInstance(data.get("error"), str)
+        self.assertTrue(data["error"])
+        self.assertNotIn("\n", data["error"])
+        self.assertLess(len(data["error"]), 80)
+        self.assertNotIn("用法", data["error"])
+
+        # A Chinese date with a past year is rejected by the parser itself (friendly hint);
+        # a past ISO time parses and reaches the "already passed" check.
+        status, data = self.call("POST", "/api/reminders", {"text": "2020年1月1日上午9点 过去"})
+        self.assertEqual(status, 400, data)
+        self.assertIn("看不懂这个时间", data["error"])
+        past_status, past_data = self.call("POST", "/api/reminders", {"text": "2020-01-01T09:00:00 过去"})
+        self.assertEqual(past_status, 400, past_data)
+        self.assertIn("已经过去", past_data.get("error", ""))
+        self.assertNotIn("\n", past_data["error"])
+        self.assertNotIn("+00:00", past_data["error"])
+
+    def test_create_reminder_missing_owner_returns_409(self) -> None:
+        self.server.control.settings = _settings(self.root, telegram_allowed_user_id=0)
+        status, data = self.call("POST", "/api/reminders", {"text": "2027年1月1日上午9点 测试"})
+        self.assertEqual(status, 409, data)
+        self.assertTrue(data.get("error"))
 
     def test_not_gated_behind_routines_enabled(self) -> None:
         self.server.control.settings = _settings(self.root, routines_enabled=False)
