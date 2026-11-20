@@ -375,7 +375,7 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
             nonlocal active_count, max_seen
             active_count += 1
             max_seen = max(max_seen, active_count)
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(0.25)
             active_count -= 1
             return {"role": "assistant", "content": "done"}
 
@@ -395,8 +395,10 @@ class TestSubagentsSuite(unittest.IsolatedAsyncioTestCase):
         elapsed = time.monotonic() - t0
 
         self.assertEqual(max_seen, 3)
-        # Since they ran in parallel, elapsed should be close to 0.08s, well under 3 * 0.08 = 0.24s
-        self.assertLess(elapsed, 0.20)
+        # max_seen already proves they overlapped. Timing is a second check with room for a
+        # loaded CI runner (0.24 s against a 0.20 s bound failed in run 44545514747):
+        # parallel takes ~0.25 s, serial would take 0.75 s.
+        self.assertLess(elapsed, 0.6)
         self.assertIn("Task 1 — ok", res)
         self.assertIn("Task 2 — ok", res)
         self.assertIn("Task 3 — ok", res)
