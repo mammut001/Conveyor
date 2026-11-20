@@ -156,6 +156,7 @@ class TestSentryEngine(unittest.TestCase):
         with patch("os.getloadavg", return_value=(17.63, 12.0, 8.0)), \
              patch("os.cpu_count", return_value=4), \
              patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._sample_cpu_percent", return_value=None), \
              patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)) as mock_run:
             alerts = check_cpu_and_load(self.settings)
 
@@ -183,6 +184,7 @@ class TestSentryEngine(unittest.TestCase):
         with patch("os.getloadavg", return_value=(13.15, 10.0, 8.0)), \
              patch("os.cpu_count", return_value=4), \
              patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._sample_cpu_percent", return_value=None), \
              patch("personal_tools.sentry._program_name", side_effect=fake_program), \
              patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)):
             alerts = check_cpu_and_load(self.settings)
@@ -201,6 +203,7 @@ class TestSentryEngine(unittest.TestCase):
         with patch("os.getloadavg", return_value=(9.0, 8.0, 8.0)), \
              patch("os.cpu_count", return_value=4), \
              patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._sample_cpu_percent", return_value=None), \
              patch("personal_tools.sentry._program_name", side_effect=lambda pid: names.get(pid, "")), \
              patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)):
             alerts = check_cpu_and_load(self.settings)
@@ -209,6 +212,7 @@ class TestSentryEngine(unittest.TestCase):
             alerts[0].summary,
         )
         with patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._sample_cpu_percent", return_value=None), \
              patch("personal_tools.sentry._program_name", side_effect=lambda pid: names.get(pid, "")), \
              patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)):
             from personal_tools.sentry import _top_cpu_processes
@@ -234,6 +238,48 @@ class TestSentryEngine(unittest.TestCase):
                 self.assertEqual(sentry_mod._program_name("41"), "firefox")
                 self.assertEqual(sentry_mod._program_name("42"), "firefox")
                 self.assertEqual(sentry_mod._program_name("43"), "node")
+
+    def test_linux_ranking_uses_sampled_cpu_not_lifetime_average(self):
+        # ps %CPU is a lifetime average: the long-idle browser ranks high, the busy
+        # node process barely shows. The /proc sample decides the order.
+        ps_stdout = (
+            "ubuntu           60.0   501 firefox\n"
+            "ghrunner          2.0   777 node\n"
+            "root              0.5   901 sshd\n"
+        )
+        sample = {"501": 0.4, "777": 95.0, "901": 0.0}
+        with patch("os.getloadavg", return_value=(9.0, 8.0, 8.0)), \
+             patch("os.cpu_count", return_value=4), \
+             patch("sys.platform", "linux"), \
+             patch("personal_tools.sentry._sample_cpu_percent", return_value=sample) as sampler, \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout=ps_stdout)):
+            alerts = check_cpu_and_load(self.settings)
+        self.assertIn("占用最多：node（ghrunner，95%）、firefox（ubuntu，0%）。", alerts[0].summary)
+        self.assertEqual(sorted(sampler.call_args.args[0]), ["501", "777", "901"])
+
+    def test_sample_cpu_percent_reads_proc_stat_deltas(self):
+        import tempfile
+        from personal_tools import sentry as sentry_mod
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "self").mkdir()
+            (root / "self" / "stat").write_text("1 (x) S 0 0 0 0 0 0 0 0 0 0 0 0\n")
+            for pid in ("10", "11"):
+                (root / pid).mkdir()
+            def write(pid, utime, stime):
+                fields = ["S"] + ["0"] * 10 + [str(utime), str(stime)] + ["0"] * 5
+                (root / pid / "stat").write_text(f"{pid} (my (odd) name) " + " ".join(fields) + "\n")
+            write("10", 100, 50)
+            write("11", 7, 3)
+            def advance(_seconds):
+                write("10", 150, 100)  # +100 ticks
+                write("11", 7, 3)      # idle
+            real_path = sentry_mod.Path
+            with patch.object(sentry_mod, "Path", side_effect=lambda p: (root / str(p)[len("/proc/"):]) if str(p).startswith("/proc/") else (root if str(p) == "/proc" else real_path(p))), \
+                 patch("os.sysconf", return_value=100), \
+                 patch("time.sleep", side_effect=advance):
+                result = sentry_mod._sample_cpu_percent(["10", "11", "99"], interval=1.0)
+        self.assertEqual(result, {"10": 100.0, "11": 0.0})
 
     def test_program_name_reads_proc_cmdline_and_tolerates_missing_pids(self):
         from personal_tools.sentry import _program_name
