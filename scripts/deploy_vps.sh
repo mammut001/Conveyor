@@ -192,7 +192,19 @@ CANDIDATE="$(mktemp -d /tmp/conveyor-deploy-candidate.XXXXXX)"
 rmdir "${CANDIDATE}"
 git worktree add --detach "${CANDIDATE}" "${TARGET_COMMIT_FULL}" --quiet
 log "Validating detached candidate ${TARGET_COMMIT}..."
-python3 -m venv "${CANDIDATE}/.venv"
+# Build the candidate with the live venv's Python (major.minor), not whatever
+# `python3` is on the host: validation must run on the interpreter production
+# runs. CONVEYOR_PYTHON overrides it (e.g. python3.11 when moving to a new one).
+if [[ -n "${CONVEYOR_PYTHON:-}" ]]; then
+  CANDIDATE_PYTHON="${CONVEYOR_PYTHON}"
+else
+  LIVE_PY_VERSION="$(.venv/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+  CANDIDATE_PYTHON="python${LIVE_PY_VERSION}"
+fi
+command -v "${CANDIDATE_PYTHON}" >/dev/null 2>&1 \
+  || die "Python interpreter ${CANDIDATE_PYTHON} not found (live venv uses it; set CONVEYOR_PYTHON to override)"
+log "Candidate interpreter: ${CANDIDATE_PYTHON} ($("${CANDIDATE_PYTHON}" -V 2>&1))"
+"${CANDIDATE_PYTHON}" -m venv "${CANDIDATE}/.venv"
 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_INPUT=1 \
   "${CANDIDATE}/.venv/bin/python" -m pip install -q -r "${CANDIDATE}/requirements.txt"
 
