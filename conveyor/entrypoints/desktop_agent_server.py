@@ -61,7 +61,22 @@ if settings.conveyor_desktop_node_enabled:
 MAX_BODY_BYTES = 16 * 1024
 
 
+# Desktop nodes poll for work every few seconds and send heartbeats; logging
+# each successful one filled most of this service's journal.
+_QUIET_POLLS = (
+    ("GET", "/desktop/computer/task/pending"),
+    ("POST", "/desktop/heartbeat"),
+)
+
+
 class DesktopAgentHTTPHandler(BaseHTTPRequestHandler):
+    def log_request(self, code="-", size="-"):
+        status = str(getattr(code, "value", code))
+        path = getattr(self, "path", "").split("?", 1)[0]
+        if status.startswith("2") and (getattr(self, "command", ""), path) in _QUIET_POLLS:
+            return
+        super().log_request(code, size)
+
     def send_json(self, status: int, data: dict):
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
