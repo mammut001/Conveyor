@@ -6,6 +6,10 @@ directory is on ``sys.path`` and each module is imported by its bare name.
 Workers take whole modules from a shared queue, largest file first, so one
 module's tests always run together and in their usual order.
 
+After each module the worker restores os.environ and the working directory,
+so a module that leaks an environment variable cannot change the result of a
+module that happens to run after it on the same worker (the log names it).
+
 Each worker gets its own CODEX_WORKSPACE_ROOT / CODEX_TASK_ROOT /
 CODEX_MEMORY_ROOT (a ``worker-N`` subdirectory), so modules running at the same
 time never share a database or a task directory.
@@ -37,6 +41,21 @@ def _modules() -> list[str]:
     return [p.stem for p in files]
 
 
+def _restore(module: str, env_before: dict[str, str], cwd_before: str) -> None:
+    """Undo a module's leftover os.environ / cwd changes so the next module
+    on this worker starts clean, and name them (variable names only)."""
+    added = sorted(set(os.environ) - set(env_before))
+    removed = sorted(set(env_before) - set(os.environ))
+    changed = sorted(k for k in env_before if k in os.environ and os.environ[k] != env_before[k])
+    if added or removed or changed:
+        print(f"===== {module} left env changes (restored): added={added} removed={removed} changed={changed}")
+        os.environ.clear()
+        os.environ.update(env_before)
+    if os.getcwd() != cwd_before:
+        print(f"===== {module} left cwd {os.getcwd()} (restored)")
+        os.chdir(cwd_before)
+
+
 def _worker(index: int, todo: "mp.Queue[str | None]", results: "mp.Queue[dict]", log_dir: str) -> None:
     for name in ROOT_ENV:
         base = os.environ.get(name)
@@ -63,8 +82,11 @@ def _worker(index: int, todo: "mp.Queue[str | None]", results: "mp.Queue[dict]",
             break
         started = time.monotonic()
         print(f"\n===== {module} =====", flush=True)
+        env_before = dict(os.environ)
+        cwd_before = os.getcwd()
         suite = loader.loadTestsFromName(module)
         result = unittest.TextTestRunner(stream=log, verbosity=2).run(suite)
+        _restore(module, env_before, cwd_before)
         summary["run"] += result.testsRun
         summary["failures"] += len(result.failures)
         summary["errors"] += len(result.errors)
