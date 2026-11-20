@@ -194,10 +194,12 @@ class WebControl:
                     latest_by_session[key] = job
             # Resolving each session's refinement chain costs several queries per
             # session; callers that never read active_refinement (list_agents) skip it.
-            ref_keys = (
-                {id(session): self._refinement_key(session) for session in transcript_sessions}
-                if with_refinements else {}
-            )
+            if with_refinements:
+                from conveyor.agents.agents import lookup_cache
+                with lookup_cache():
+                    ref_keys = {id(session): self._refinement_key(session) for session in transcript_sessions}
+            else:
+                ref_keys = {}
             chain_by_session = RefinementStore(self.settings).active_summaries([
                 key for key in ref_keys.values() if key
             ]) if with_refinements else {}

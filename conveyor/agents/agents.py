@@ -11,6 +11,9 @@ operator sets some, so enabling agents changes nothing until one is created.
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import copy
 import re
 import sqlite3
 import time
@@ -142,6 +145,25 @@ def _clean(value: Any, limit: int) -> str:
 _initialised: set[str] = set()
 
 
+# Listing sessions resolves each session's agent (refinement keys), which looked
+# the same few agents up dozens of times per request, one SQLite connection
+# each. Inside lookup_cache() a request reuses AgentStore.get results by
+# (database, id). Outside it nothing is cached; writes are never cached.
+_GET_CACHE: contextvars.ContextVar[dict | None] = contextvars.ContextVar("agent_get_cache", default=None)
+
+
+@contextlib.contextmanager
+def lookup_cache():
+    if _GET_CACHE.get() is not None:
+        yield
+        return
+    token = _GET_CACHE.set({})
+    try:
+        yield
+    finally:
+        _GET_CACHE.reset(token)
+
+
 class AgentStore:
     def __init__(self, settings: Any) -> None:
         root = Path(settings.codex_memory_root) / "state"
@@ -216,11 +238,19 @@ class AgentStore:
     def get(self, agent_id: str) -> dict[str, Any] | None:
         if not _ID_RE.match(str(agent_id or "")):
             return None
+        cache = _GET_CACHE.get()
+        key = (str(self.path), str(agent_id))
+        if cache is not None and key in cache:
+            hit = cache[key]
+            return copy.deepcopy(hit) if hit is not None else None
         conn = self._connect()
         try:
-            return self._row(conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone())
+            row = self._row(conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone())
         finally:
             conn.close()
+        if cache is not None:
+            cache[key] = copy.deepcopy(row) if row is not None else None
+        return row
 
     @staticmethod
     def _validated(payload: dict[str, Any], *, partial: bool) -> dict[str, Any]:
