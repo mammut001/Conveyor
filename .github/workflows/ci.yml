@@ -35,8 +35,8 @@ jobs:
       options: --init
       volumes:
         - /home/ci/.cache/conveyor-pip-py311:/pip-cache
-    # Two full unit-test passes plus smokes take ~16 min on greencloud.
-    timeout-minutes: 30
+    # One unit-test pass plus smokes (~9 min); the all-flags pass is the backend-flags job.
+    timeout-minutes: 25
     env:
       TELEGRAM_BOT_TOKEN: test-token
       TELEGRAM_ALLOWED_USER_ID: "12345"
@@ -74,6 +74,72 @@ jobs:
 
       - name: Run unit tests
         run: .venv/bin/python -m unittest discover -s tests -v
+
+
+      - name: Run smoke suite
+        run: make smoke
+
+      - name: Feishu voice smoke
+        run: .venv/bin/python scripts/feishu_audio_smoke.py
+
+      - name: G4 authenticated browser smoke
+        run: .venv/bin/python scripts/browser_auth_smoke.py
+
+      - name: Browser autofill login smoke
+        run: .venv/bin/python scripts/browser_login_smoke.py
+
+      - name: PWA security smoke
+        run: .venv/bin/python scripts/pwa_smoke.py
+
+  backend-flags:
+    name: Backend (all feature flags)
+    # Self-hosted on greencloud (GitHub-hosted minutes ran out). The repo is public:
+    # never run fork PRs on our own machine.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, greencloud]
+    container:
+      image: python:3.11-bookworm
+      # --init reaps killed children; without it zombies look "alive" to the
+      # process-group lifecycle tests.
+      options: --init
+      volumes:
+        - /home/ci/.cache/conveyor-pip-py311:/pip-cache
+    # The all-flags unit-test pass runs in parallel with Backend (~8 min each).
+    timeout-minutes: 25
+    env:
+      TELEGRAM_BOT_TOKEN: test-token
+      TELEGRAM_ALLOWED_USER_ID: "12345"
+      CODEX_WORKSPACE_ROOT: /tmp/conveyor-ci/workspace
+      CODEX_TASK_ROOT: /tmp/conveyor-ci/tasks
+      CODEX_MEMORY_ROOT: /tmp/conveyor-ci/memory
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      # The runner (uid ci) owns the checkout but the container runs as root;
+      # without this git refuses the repo ("dubious ownership").
+      - name: Trust the checkout for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Create isolated test directories
+        run: mkdir -p "$CODEX_WORKSPACE_ROOT" "$CODEX_TASK_ROOT" "$CODEX_MEMORY_ROOT"
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: .venv/bin/python -m pip install -r requirements.txt
+
+      - name: Set up Node.js for bundled Pi
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install bundled Pi (vendor/pi)
+        run: bash scripts/install_pi.sh
+
+      - name: Compile Python
+        run: .venv/bin/python -m compileall -q .
 
       - name: Run unit tests with all CONVEYOR feature flags on
         # Only boolean feature switches: never set numeric limits, API keys,
@@ -138,21 +204,6 @@ jobs:
           CONVEYOR_STT_ENABLED: "1"
           CONVEYOR_FEISHU_AUDIO: "1"
         run: .venv/bin/python -m unittest discover -s tests -v
-
-      - name: Run smoke suite
-        run: make smoke
-
-      - name: Feishu voice smoke
-        run: .venv/bin/python scripts/feishu_audio_smoke.py
-
-      - name: G4 authenticated browser smoke
-        run: .venv/bin/python scripts/browser_auth_smoke.py
-
-      - name: Browser autofill login smoke
-        run: .venv/bin/python scripts/browser_login_smoke.py
-
-      - name: PWA security smoke
-        run: .venv/bin/python scripts/pwa_smoke.py
 
   web:
     name: Web
