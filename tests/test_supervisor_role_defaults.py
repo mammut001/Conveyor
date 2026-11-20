@@ -191,6 +191,14 @@ class CapabilityAutoSelectionTests(unittest.TestCase):
             self.assertTrue(entry["auto_selected"], name)
             self.assertEqual(entry["executor"], "pi")
             # Binary is present but no provider/key is configured in this fixture.
+            if entry["available"]:  # TEMP diagnostic for parallel-runner leak
+                import re as _re
+                from runner.pi_agent import describe_pi_provider
+                with _NoExecutors(self.root), patch.dict(os.environ, {"CONVEYOR_PI_BIN": str(fake_pi)}):
+                    st = describe_pi_provider(self.settings, model_fallback="", chat_model=False)
+                    keys = sorted(k for k in os.environ if _re.search(r"KEY|CHAT|PI_|MINIMAX|PROVIDER|BASE_URL|MODEL", k))
+                safe = {k: v for k, v in st.items() if "key" not in k.lower() or k == "api_key_env"}
+                self.fail(f"{name} available; status={safe} env={keys} cwd={os.getcwd()}")
             self.assertFalse(entry["available"], name)
             self.assertTrue(entry.get("reason"), name)
 
