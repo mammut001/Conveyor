@@ -113,5 +113,172 @@ class ChineseExplicitDateParseTests(unittest.TestCase):
         self.assertIn("2027年1月1日上午9点 / 12月25号晚上8点", REMIND_USAGE)
 
 
+FRIDAY_NOW = datetime(2026, 11, 20, 10, 0, tzinfo=TORONTO)
+
+
+class ChineseWeekdayParseTests(unittest.TestCase):
+    def test_next_monday_morning(self) -> None:
+        got = parse_reminder_text(
+            "下周一上午10点 开会",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("开会", datetime(2026, 11, 23, 15, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_unprefixed_wednesday_evening(self) -> None:
+        got = parse_reminder_text(
+            "星期三晚上8点 打电话",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("打电话", datetime(2026, 11, 26, 1, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_unprefixed_sunday_noon(self) -> None:
+        got = parse_reminder_text(
+            "礼拜天中午12点 吃饭",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("吃饭", datetime(2026, 11, 22, 17, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_unprefixed_today_future_time_stays_today(self) -> None:
+        got = parse_reminder_text(
+            "周五下午3点 交报告",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("交报告", datetime(2026, 11, 20, 20, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_unprefixed_today_past_time_rolls_to_next_week(self) -> None:
+        got = parse_reminder_text(
+            "周五上午9点 晨会",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("晨会", datetime(2026, 11, 27, 14, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_this_week_saturday_morning(self) -> None:
+        got = parse_reminder_text(
+            "这周六上午9点 健身",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("健身", datetime(2026, 11, 21, 14, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_ben_prefix_saturday_morning(self) -> None:
+        got = parse_reminder_text(
+            "本周六上午9点 健身",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("健身", datetime(2026, 11, 21, 14, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_this_week_past_day_returns_none(self) -> None:
+        got = parse_reminder_text(
+            "这周三 复盘",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertIsNone(got)
+
+    def test_next_next_tuesday_defaults_to_9am(self) -> None:
+        got = parse_reminder_text(
+            "下下周二 体检",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("体检", datetime(2026, 12, 1, 14, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_next_friday_same_weekday_is_next_week(self) -> None:
+        got = parse_reminder_text(
+            "下周五下午3点 周报",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("周报", datetime(2026, 11, 27, 20, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_ambiguous_weekday_plus_relative_day_returns_none(self) -> None:
+        got = parse_reminder_text(
+            "下周一明天9点",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertIsNone(got)
+
+    def test_numeric_sunday_seven(self) -> None:
+        got = parse_reminder_text(
+            "周7上午10点 x",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("x", datetime(2026, 11, 22, 15, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_non_adjacent_weekday_and_time_strips_both(self) -> None:
+        got = parse_reminder_text(
+            "提醒我 周五 交报告 下午3点",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("提醒我 交报告", datetime(2026, 11, 20, 20, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_explicit_date_wins_over_weekday(self) -> None:
+        got = parse_reminder_text(
+            "11月23日 下周一 上午10点 开会",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("下周一 开会", datetime(2026, 11, 23, 15, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_regression_tomorrow_morning(self) -> None:
+        got = parse_reminder_text(
+            "明天早上8点 开会",
+            tz_name="America/Toronto",
+            now=FRIDAY_NOW,
+        )
+        self.assertEqual(
+            got,
+            ("开会", datetime(2026, 11, 21, 13, 0, tzinfo=timezone.utc)),
+        )
+
+    def test_usage_mentions_weekday_examples(self) -> None:
+        self.assertIn("下周一上午10点 / 周五下午3点", REMIND_USAGE)
+
+
 if __name__ == "__main__":
     unittest.main()

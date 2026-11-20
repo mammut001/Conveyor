@@ -20,6 +20,17 @@ _CN_IN = re.compile(rf"({_CN_NUM})\s*(分钟|个?小时)(?:之|以)?后")
 _CN_DATE = re.compile(
     rf"(?:(\d{{4}})\s*年\s*)?({_CN_NUM})\s*月\s*({_CN_NUM})\s*[日号號]"
 )
+_CN_WEEKDAY = re.compile(r"(这|本|下下|下)?(周|星期|礼拜)([一二三四五六日天1-7])")
+_CN_WEEKDAY_MAP = {
+    "一": 0, "1": 0,
+    "二": 1, "2": 1,
+    "三": 2, "3": 2,
+    "四": 3, "4": 3,
+    "五": 4, "5": 4,
+    "六": 5, "6": 5,
+    "日": 6, "天": 6, "7": 6,
+}
+_WEEKDAY_WEEK_OFFSETS = {"这": 0, "本": 0, "下": 7, "下下": 14}
 _CN_AT = re.compile(
     rf"(今天|明天|后天)?\s*(早上|早晨|上午|中午|下午|傍晚|晚上|今晚)?\s*({_CN_NUM})\s*[点點时:：]"
     rf"\s*(?:(半)|({_CN_NUM})\s*分?)?"
@@ -59,6 +70,46 @@ def _parse_cn_time(match: re.Match[str]) -> tuple[int, int] | None:
     return hour, minute
 
 
+def _extract_following_cn_time(
+    text: str, pos: int
+) -> tuple[re.Match[str] | None, int, int] | None:
+    """Parse an optional _CN_AT time after pos; return None if invalid or ambiguous."""
+    time_m = _CN_AT.search(text, pos)
+    if time_m:
+        if time_m.group(1):
+            return None
+        if not (
+            time_m.group(2)
+            or text[time_m.end(3) : time_m.end(3) + 1] in "点點时"
+            or time_m.group(5)
+        ):
+            time_m = None
+
+    if not time_m:
+        return None, 9, 0
+    parsed_time = _parse_cn_time(time_m)
+    if parsed_time is None:
+        return None
+    hour, minute = parsed_time
+    return time_m, hour, minute
+
+
+def _strip_anchor_and_time(
+    text: str, anchor_m: re.Match[str], time_m: re.Match[str] | None
+) -> str:
+    """Strip an anchor match and optional following time match from text."""
+    if time_m is None:
+        return _strip_match(text, anchor_m)
+    if not text[anchor_m.end() : time_m.start()].strip():
+        return _strip_span(text, anchor_m.start(), time_m.end())
+    parts = (
+        text[: anchor_m.start()].strip(),
+        text[anchor_m.end() : time_m.start()].strip(),
+        text[time_m.end() :].strip(),
+    )
+    return " ".join(p for p in parts if p)
+
+
 def _parse_cn_date(
     text: str, date_m: re.Match[str], now_local: datetime
 ) -> tuple[str, datetime] | None:
@@ -74,24 +125,10 @@ def _parse_cn_date(
     except ValueError:
         return None
 
-    time_m = _CN_AT.search(text, date_m.end())
-    if time_m:
-        if time_m.group(1):
-            return None
-        if not (
-            time_m.group(2)
-            or text[time_m.end(3) : time_m.end(3) + 1] in "点點时"
-            or time_m.group(5)
-        ):
-            time_m = None
-
-    if time_m:
-        parsed_time = _parse_cn_time(time_m)
-        if parsed_time is None:
-            return None
-        hour, minute = parsed_time
-    else:
-        hour, minute = 9, 0
+    extracted = _extract_following_cn_time(text, date_m.end())
+    if extracted is None:
+        return None
+    time_m, hour, minute = extracted
 
     try:
         due = datetime(year, month, day, hour, minute, tzinfo=now_local.tzinfo)
@@ -106,18 +143,46 @@ def _parse_cn_date(
     elif due <= now_local:
         return None
 
-    if time_m is None:
-        body = _strip_match(text, date_m)
-    elif not text[date_m.end() : time_m.start()].strip():
-        body = _strip_span(text, date_m.start(), time_m.end())
-    else:
-        parts = (
-            text[: date_m.start()].strip(),
-            text[date_m.end() : time_m.start()].strip(),
-            text[time_m.end() :].strip(),
+    return _strip_anchor_and_time(text, date_m, time_m), due
+
+
+def _parse_cn_weekday(
+    text: str, weekday_m: re.Match[str], now_local: datetime
+) -> tuple[str, datetime] | None:
+    """Parse a Chinese weekday phrase with an optional following time."""
+    target_wd = _CN_WEEKDAY_MAP[weekday_m.group(3)]
+    extracted = _extract_following_cn_time(text, weekday_m.end())
+    if extracted is None:
+        return None
+    time_m, hour, minute = extracted
+
+    today = now_local.date()
+    today_wd = today.weekday()
+    week_monday = today - timedelta(days=today_wd)
+    prefix = weekday_m.group(1) or ""
+
+    if prefix in _WEEKDAY_WEEK_OFFSETS:
+        target_date = week_monday + timedelta(
+            days=_WEEKDAY_WEEK_OFFSETS[prefix] + target_wd
         )
-        body = " ".join(p for p in parts if p)
-    return body, due
+    else:
+        target_date = today + timedelta(days=(target_wd - today_wd) % 7)
+
+    due = datetime(
+        target_date.year, target_date.month, target_date.day, hour, minute,
+        tzinfo=now_local.tzinfo,
+    )
+    if due <= now_local:
+        if prefix in ("这", "本"):
+            return None
+        if not prefix:
+            target_date += timedelta(days=7)
+            due = datetime(
+                target_date.year, target_date.month, target_date.day, hour, minute,
+                tzinfo=now_local.tzinfo,
+            )
+
+    return _strip_anchor_and_time(text, weekday_m, time_m), due
 
 
 def _parse_chinese(text: str, now_local: datetime) -> tuple[str, datetime] | None:
@@ -132,6 +197,9 @@ def _parse_chinese(text: str, now_local: datetime) -> tuple[str, datetime] | Non
     date_m = _CN_DATE.search(text)
     if date_m:
         return _parse_cn_date(text, date_m, now_local)
+    weekday_m = _CN_WEEKDAY.search(text)
+    if weekday_m:
+        return _parse_cn_weekday(text, weekday_m, now_local)
     m = _CN_AT.search(text)
     if not m or not (m.group(1) or m.group(2) or text[m.end(3):m.end(3) + 1] in "点點时"):
         return None
@@ -153,7 +221,7 @@ REMIND_USAGE = (
     "  in 10m / in 2h\n"
     "  tomorrow HH:MM\n"
     "  ISO 时间 (2026-06-16T09:00:00)\n"
-    "  中文: 10分钟后 / 2小时后 / 明天早上8点 / 下午3点半 / 今晚九点 / 2027年1月1日上午9点 / 12月25号晚上8点\n"
+    "  中文: 10分钟后 / 2小时后 / 明天早上8点 / 下午3点半 / 今晚九点 / 2027年1月1日上午9点 / 12月25号晚上8点 / 下周一上午10点 / 周五下午3点\n"
     "示例:\n"
     "  /remind in 10m 取快递\n"
     "  /remind 站会 tomorrow 09:00\n"
