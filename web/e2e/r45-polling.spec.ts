@@ -17,10 +17,11 @@ const CONVEYOR_AGENT = {
 
 type Trackers = {
   jobsRequests: number
+  sessionDetailRequests: number
 }
 
 async function install(page: Page): Promise<Trackers> {
-  const trackers: Trackers = { jobsRequests: 0 }
+  const trackers: Trackers = { jobsRequests: 0, sessionDetailRequests: 0 }
 
   await page.addInitScript((tokenValue: string) => {
     localStorage.setItem('conveyor-token', tokenValue)
@@ -34,6 +35,7 @@ async function install(page: Page): Promise<Trackers> {
     const json = (value: unknown, status = 200) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
 
+    if (/^\/api\/sessions\/[^/]+$/.test(path)) trackers.sessionDetailRequests += 1
     if (path === '/api/events/stream') {
       return route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: '' })
     }
@@ -151,3 +153,18 @@ test('startup does not burst /api/jobs, pauses while hidden, and refreshes on vi
   })
   await expect.poll(() => trackers.jobsRequests, { timeout: 1500 }).toBeGreaterThan(0)
 })
+
+test('对话 refreshes the session transcript every 15 s, not every 3 s (R79)', async ({ page }) => {
+  test.setTimeout(40_000)
+  const trackers = await install(page)
+  await page.goto('/')
+  await expect(page.locator('main.app-shell')).toBeVisible()
+  await page.waitForTimeout(2000)
+  trackers.sessionDetailRequests = 0
+  trackers.jobsRequests = 0
+  await page.waitForTimeout(9500)
+  // ~3 ticks: jobs keeps its 3 s poll, the transcript waits for the 5th tick.
+  expect(trackers.jobsRequests).toBeGreaterThanOrEqual(2)
+  expect(trackers.sessionDetailRequests).toBeLessThanOrEqual(1)
+})
+
