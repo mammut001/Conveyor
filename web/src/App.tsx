@@ -955,12 +955,18 @@ export default function App() {
   refreshTranscriptRef.current = refreshTranscript
 
   useEffect(() => { void refreshRef.current() }, [token])
+  // Entering 任务 shows the transcript: fetch it now rather than on the next slow tick.
+  useEffect(() => { if (view === 'tasks') void refreshTranscriptRef.current() }, [view])
   useEffect(() => {
     if (!authenticated || isLockedRef.current) return
+    // The selected session's transcript (~24 KB gzip) is only on screen in 任务: other
+    // views refresh it every 5th tick (15 s) so 对话 does not re-download it every 3 s.
+    let ticks = 0
     const tick = () => {
       if (document.visibilityState !== 'visible' || isLockedRef.current) return
+      ticks += 1
       void refreshRef.current()
-      void refreshTranscriptRef.current()
+      if (viewRef.current === 'tasks' || ticks % 5 === 0) void refreshTranscriptRef.current()
     }
     const timer = window.setInterval(tick, 3_000)
     pollTimerRef.current = timer
