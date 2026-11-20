@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import faulthandler
 import os
 import stat
 import subprocess
@@ -241,7 +242,16 @@ class ClaudeCodeBackendTests(unittest.TestCase):
                 self.assertEqual((root / "README.md").read_text(encoding="utf-8"), "unchanged\n")
                 await backend.discard_job(job.id, job.worktree_path)
 
-            asyncio.run(scenario())
+            # CI hung here twice on 2026-11-19 (runs 44553097269, 44639787020) until
+            # the 30-minute job timeout; it does not reproduce locally. A hang
+            # inside the loop now fails this test after 60 s; one that freezes
+            # the loop itself (a blocking lock, teardown) dumps every thread's
+            # stack and exits after 120 s, so the next occurrence says where.
+            faulthandler.dump_traceback_later(120, exit=True)
+            try:
+                asyncio.run(asyncio.wait_for(scenario(), timeout=60))
+            finally:
+                faulthandler.cancel_dump_traceback_later()
 
 
 if __name__ == "__main__":
