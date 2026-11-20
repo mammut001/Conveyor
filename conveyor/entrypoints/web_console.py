@@ -337,6 +337,21 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
     server: WebConsoleServer
     protocol_version = "HTTP/1.1"
 
+    def log_request(self, code: Any = "-", size: Any = "-") -> None:
+        # Every open page polls the API every few seconds; logging each successful
+        # read at INFO filled about 95% of this service's journal lines. Keep
+        # writes, errors and page loads at INFO, push successful API reads to DEBUG.
+        status = getattr(code, "value", code)
+        path = getattr(self, "path", "")
+        if (getattr(self, "command", "") in ("GET", "HEAD")
+                and path.startswith("/api/")
+                and str(status) in ("200", "204", "304")):
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("%s \"%s\" %s %s", self.client_address[0],
+                             self.requestline, status, size)
+            return
+        super().log_request(code, size)
+
     def log_message(self, fmt: str, *args: Any) -> None:
         # A live screen viewer polls several times a second; keep the journal usable.
         if getattr(self, "path", "").startswith(("/api/screen/frame", "/api/screen/input")):
