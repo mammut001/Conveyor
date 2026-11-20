@@ -1,0 +1,7 @@
+# GTK bindings for the VPS desktop chat window (conveyor-desktop-chat).
+# Installed by scripts/deploy_vps.sh only on hosts that have that service.
+# The system python3-gi in /usr/lib/python3/dist-packages is built for the
+# distro Python (3.10 on Ubuntu 22.04) and does not load in a 3.11 venv.
+# Build dependencies (apt): python3.11-dev libgirepository1.0-dev libcairo2-dev pkg-config gcc
+pycairo==1.29.2
+PyGObject==3.50.2

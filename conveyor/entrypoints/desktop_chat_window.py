@@ -46,7 +46,10 @@ def local_screenshot_file(settings: Any, screenshot_id: str) -> Path | None:
 def enable_system_gtk() -> None:
     """Let the app venv import Ubuntu's PyGObject.
 
-    python3-gi lives in dist-packages, which a normal venv does not see.
+    python3-gi lives in dist-packages, which a normal venv does not see. It is
+    compiled for the distro Python only, so a venv on another version (3.11 on
+    Ubuntu 22.04) installs PyGObject from requirements-desktop.txt instead; the
+    venv copy comes first on sys.path, this fallback only serves a same-version venv.
     Append that directory so packages already installed in the venv stay first.
     """
     extra = "/usr/lib/python3/dist-packages"
