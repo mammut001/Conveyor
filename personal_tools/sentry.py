@@ -833,14 +833,32 @@ def send_owner_telegram(settings: Settings, text: str, *, label: str = "") -> bo
     chat_id = getattr(settings, "telegram_allowed_user_id", None)
     if not chat_id or not getattr(settings, "telegram_bot_token", None):
         return False
-    try:
-        from scripts.telegram_api import send_message
-        send_message(settings, text, chat_id=int(chat_id))
-        logger.info("Delivered message to Telegram user %s%s", chat_id, _label_suffix(label))
-        return True
-    except Exception as exc:
-        logger.error("Failed to send message to Telegram: %s", exc)
-        return False
+    from scripts.telegram_api import send_message
+    for attempt in range(2):
+        try:
+            send_message(settings, text, chat_id=int(chat_id))
+            logger.info("Delivered message to Telegram user %s%s", chat_id, _label_suffix(label))
+            return True
+        except Exception as exc:
+            if attempt == 0 and _is_transient_send_error(exc):
+                logger.warning("Telegram send failed (%s); retrying once", exc)
+                time.sleep(_TELEGRAM_RETRY_SECONDS)
+                continue
+            logger.error("Failed to send message to Telegram: %s", exc)
+            return False
+    return False
+
+
+_TELEGRAM_RETRY_SECONDS = 3.0
+
+
+def _is_transient_send_error(exc: BaseException) -> bool:
+    """A 5xx/429 answer or a network failure: worth one more try."""
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code >= 500 or exc.code == 429
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
 
 
 def send_owner_feishu(settings: Settings, text: str, *, label: str = "") -> bool:

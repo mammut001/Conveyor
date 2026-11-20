@@ -664,6 +664,23 @@ class TestSentryEngine(unittest.TestCase):
             deliver_sentry_alerts(settings, [alert])
         self.assertFalse(SentryState.load(self.settings).can_alert(alert.fingerprint, 7200))
 
+    def test_telegram_send_retries_once_on_transient_error(self):
+        import urllib.error
+        from personal_tools.sentry import send_owner_telegram
+        bad_gateway = urllib.error.HTTPError("u", 502, "Bad Gateway", None, None)
+        cases = [
+            ([bad_gateway, None], True, 2),
+            ([urllib.error.URLError("reset"), None], True, 2),
+            ([bad_gateway, bad_gateway], False, 2),
+            ([urllib.error.HTTPError("u", 400, "Bad Request", None, None)], False, 1),
+        ]
+        for effects, ok, calls in cases:
+            with patch("scripts.telegram_api.send_message", side_effect=effects) as send, \
+                 patch("personal_tools.sentry.time.sleep") as sleep:
+                self.assertEqual(send_owner_telegram(self.settings, "hi"), ok)
+            self.assertEqual(send.call_count, calls)
+            self.assertEqual(sleep.call_count, calls - 1)
+
     def test_teammate_commands(self):
         status = run_teammate_command(self.settings, "")
         self.assertIn("全天候智能体队友", status)
