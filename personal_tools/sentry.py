@@ -422,7 +422,9 @@ def check_cpu_and_load(settings: Settings) -> list[SentryAlert]:
     load_ratio = load1 / cpus
     threshold_ratio = getattr(settings, "sentry_load_threshold_ratio", 2.0)
 
-    if load_ratio >= threshold_ratio:
+    # A CI job or a build pushes the 1-minute load over the line for a minute or
+    # two and then it is gone. Only alert when the 5-minute load is high too.
+    if load_ratio >= threshold_ratio and load5 / cpus >= threshold_ratio:
         summary = f"1分钟负载达到 {load1:.2f} ({cpus} 核 CPU，负载比例 {load_ratio:.1f}x)。"
         top_procs = _top_cpu_processes()
         if top_procs:
@@ -445,6 +447,31 @@ def check_cpu_and_load(settings: Settings) -> list[SentryAlert]:
             )
         )
     return alerts
+
+
+_TRANSIENT_STATES = ("activating", "deactivating", "reloading")
+_RESTART_SETTLE_SECONDS = 5.0
+
+
+def _is_passing_restart(unit: str, state: str, show_output: str) -> bool:
+    """True when a unit was caught mid-restart (a deploy) and is running again.
+
+    A unit waiting to be restarted after it crashed (SubState=auto-restart) is
+    not passing: that is a crash loop and should alert.
+    """
+    if state not in _TRANSIENT_STATES or "SubState=auto-restart" in show_output:
+        return False
+    time.sleep(_RESTART_SETTLE_SECONDS)
+    try:
+        again = subprocess.run(
+            ["systemctl", "is-active", unit],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return False
+    return again.stdout.strip() == "active"
 
 
 def check_services(settings: Settings) -> list[SentryAlert]:
@@ -486,6 +513,8 @@ def check_services(settings: Settings) -> list[SentryAlert]:
                     text=True,
                     timeout=5,
                 )
+                if _is_passing_restart(unit, state, fail_res.stdout if fail_res.returncode == 0 else ""):
+                    continue
                 details = _describe_unit_state(state, fail_res.stdout if fail_res.returncode == 0 else "")
                 alias = "telegram" if "telegram" in unit else ("feishu" if "feishu" in unit else unit)
                 alerts.append(

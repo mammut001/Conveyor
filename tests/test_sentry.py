@@ -344,6 +344,52 @@ class TestSentryEngine(unittest.TestCase):
         self.assertNotIn("Result", alerts[0].summary)
         self.assertNotIn("exit-code", alerts[0].summary)
 
+    def test_short_cpu_spike_does_not_alert(self):
+        # 1-minute load over the line, 5-minute load well under it (a CI job).
+        with patch("os.getloadavg", return_value=(9.0, 4.0, 3.0)), \
+             patch("os.cpu_count", return_value=4), \
+             patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="")):
+            self.assertEqual(check_cpu_and_load(self.settings), [])
+
+    def _services_with_states(self, first_state, show, later_state):
+        calls = {"is_active": 0}
+
+        def systemctl(cmd, **_kwargs):
+            if cmd[1] == "show":
+                return MagicMock(returncode=0, stdout=show)
+            if cmd[2].endswith(".timer"):
+                return MagicMock(returncode=3, stdout="inactive\n")
+            if cmd[2] != "conveyor-test-bot":
+                return MagicMock(returncode=0, stdout="active\n")
+            calls["is_active"] += 1
+            state = first_state if calls["is_active"] == 1 else later_state
+            return MagicMock(returncode=0 if state == "active" else 3, stdout=state + "\n")
+
+        with patch("shutil.which", return_value="/bin/systemctl"), \
+             patch("subprocess.run", side_effect=systemctl), \
+             patch("personal_tools.sentry.time.sleep") as sleep:
+            alerts = check_services(self.settings)
+        return alerts, sleep
+
+    def test_service_caught_mid_restart_does_not_alert(self):
+        for state in ("deactivating", "activating"):
+            alerts, sleep = self._services_with_states(
+                state, f"ActiveState={state}\nSubState=stop-sigterm\nResult=success\n", "active")
+            self.assertEqual(alerts, [], state)
+            sleep.assert_called_once()
+
+    def test_service_still_restarting_after_wait_alerts(self):
+        alerts, _ = self._services_with_states(
+            "deactivating", "ActiveState=deactivating\nSubState=stop-sigterm\nResult=success\n", "deactivating")
+        self.assertEqual([a.fingerprint for a in alerts], ["host.service.conveyor-test-bot"])
+
+    def test_crash_loop_alerts_without_waiting(self):
+        alerts, sleep = self._services_with_states(
+            "activating", "ActiveState=activating\nSubState=auto-restart\nResult=exit-code\n", "active")
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("等待自动重启", alerts[0].summary)
+        sleep.assert_not_called()
+
     def test_unit_state_wording(self):
         from personal_tools.sentry import _describe_unit_state
 
