@@ -302,6 +302,45 @@ def _program_name(pid: str) -> str:
     return os.path.basename(argv0)
 
 
+def _sample_cpu_percent(pids: list[str], interval: float = 1.0) -> dict[str, float] | None:
+    """CPU % per pid over the next `interval` seconds, from /proc/<pid>/stat (Linux).
+
+    ps %CPU is the average over a process's whole lifetime, so a process that was
+    busy days ago ranks high and a fresh spike barely shows. Returns None when
+    /proc cannot be read, so the caller keeps ps's numbers.
+    """
+    def ticks() -> dict[str, int]:
+        out: dict[str, int] = {}
+        for pid in pids:
+            try:
+                raw = (Path("/proc") / pid / "stat").read_text()
+            except OSError:
+                continue
+            fields = raw.rsplit(")", 1)[-1].split()
+            try:
+                out[pid] = int(fields[11]) + int(fields[12])  # utime + stime
+            except (IndexError, ValueError):
+                continue
+        return out
+
+    if not pids or not Path("/proc/self/stat").exists():
+        return None
+    try:
+        hz = os.sysconf("SC_CLK_TCK")
+    except (ValueError, OSError, AttributeError):
+        return None
+    before = ticks()
+    if not before:
+        return None
+    time.sleep(interval)
+    after = ticks()
+    return {
+        pid: max(0.0, (after[pid] - before[pid]) / hz / interval * 100.0)
+        for pid in before
+        if pid in after
+    }
+
+
 def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
     """Return top (command, user, total_pcpu) groups using platform ps flags."""
     if limit <= 0:
@@ -328,16 +367,18 @@ def _top_cpu_processes(limit: int = 3) -> list[tuple[str, str, float]]:
     if is_darwin:
         lines = lines[1:]
 
+    rows = [parts for parts in (line.strip().split(None, 3) for line in lines) if len(parts) == 4]
+    # Linux: rank by what each process uses now, not its lifetime average.
+    sampled = None if is_darwin else _sample_cpu_percent([parts[2] for parts in rows])
+
     totals: dict[tuple[str, str], float] = {}
-    for line in lines:
-        parts = line.strip().split(None, 3)
-        if len(parts) < 4:
-            continue
-        user, pcpu_str, pid, comm = parts
+    for user, pcpu_str, pid, comm in rows:
         try:
             pcpu = float(pcpu_str)
         except ValueError:
             continue
+        if sampled is not None:
+            pcpu = sampled.get(pid, 0.0)
         if not math.isfinite(pcpu):
             continue
         # macOS prints a full path; a Linux comm is a bare name and may contain "/" (kworker/…).
