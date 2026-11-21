@@ -1299,6 +1299,12 @@
   line-height: 1;
 }
 
+/* Wider than phone the turn already wears the big avatar on its left, so the
+   small one in the bubble head would show the same robot twice (QA R85). */
+@media (min-width: 601px) {
+  .primary-interface .chat-panel-container .chat-bubble-avatar { display: none; }
+}
+
 .primary-interface .chat-panel-container .chat-bubble-author {
   min-width: 0;
   overflow: hidden;
