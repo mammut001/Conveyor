@@ -1222,7 +1222,15 @@ class WebConsoleApiTests(unittest.TestCase):
             headers["Authorization"] = f"Bearer {TOKEN}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
         connection.request(method, path, body=data, headers=headers)
-        response = connection.getresponse()
+        try:
+            response = connection.getresponse()
+        except TimeoutError:
+            # Seen once in CI (GET /api/workers/claude-code/models, a fixed list):
+            # print where the server's handler threads are stuck before failing.
+            import faulthandler
+            import sys
+            faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+            raise
         raw = response.read()
         payload = json.loads(raw or b"{}")
         connection.close()
