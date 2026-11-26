@@ -241,7 +241,9 @@ class TestEditPendingAndAudit(unittest.TestCase):
         time.sleep(0.01)
         updated = approval_inbox.edit_pending(self.settings, token, {"text": "updated note"})
 
-        self.assertEqual(updated.token, token)
+        # The edit moves the approval to a new token; the old one is gone.
+        self.assertNotEqual(updated.token, token)
+        self.assertIsNone(get_pending(token))
         self.assertEqual(updated.tool_name, "notes.add")
         self.assertEqual(updated.arg, "updated note")
         self.assertEqual(updated.operator_id, "op1")
@@ -249,7 +251,7 @@ class TestEditPendingAndAudit(unittest.TestCase):
         self.assertEqual(updated.channel, "web")
         self.assertEqual(updated.created_at, created_at)
         self.assertEqual(updated.ttl_seconds, ttl)
-        self.assertEqual(get_pending(token).arg, "updated note")
+        self.assertEqual(get_pending(updated.token).arg, "updated note")
 
         # Check audit event
         tail = read_audit_tail(self.settings, n=5)
@@ -287,13 +289,15 @@ class TestEditPendingAndAudit(unittest.TestCase):
             conn.close()
 
         # Edit draft
-        approval_inbox.edit_pending(self.settings, action.token, {"text": "edited note"})
+        updated = approval_inbox.edit_pending(self.settings, action.token, {"text": "edited note"})
 
-        # Confirm DB row was updated with edited arg
+        # Confirm DB row moved to the new token with the edited arg
         conn = routines._connect(self.settings)
         try:
-            row = conn.execute("SELECT arg FROM routine_approvals WHERE token = ?", (action.token,)).fetchone()
+            row = conn.execute("SELECT arg FROM routine_approvals WHERE token = ?", (updated.token,)).fetchone()
             self.assertEqual(row["arg"], "edited note")
+            self.assertIsNone(
+                conn.execute("SELECT 1 FROM routine_approvals WHERE token = ?", (action.token,)).fetchone())
         finally:
             conn.close()
 

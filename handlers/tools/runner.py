@@ -689,6 +689,7 @@ async def _relay_gate(
         "done": "已执行",
         "failed": "执行失败",
         "cancelled": "已取消",
+        "superseded": "已失效，参数已修改",
     }.get(verdict, verdict)
     await port.reply(msg, f"该审批已在其他端处理（{label}），本次操作未执行。")
     return False

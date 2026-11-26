@@ -643,6 +643,8 @@ def _notify_outcome(
             text = f"❌ 已拒绝（{via_label}）"
         elif status == "expired":
             text = "⌛ 已过期"
+        elif status == "superseded":
+            text = "⛔ 已失效：参数已修改，请在新的审批消息中处理"
         elif status == "failed":
             text = f"⚠️ 执行失败（{via_label}）"
             if result_preview:
@@ -749,6 +751,66 @@ def update_arg(settings: Any, token: str, new_arg: str) -> bool:
         return False
 
 
+def supersede(settings: Any, token: str) -> tuple[str, dict[str, Any] | None]:
+    """Retire a pending row because its argument is being changed.
+
+    Compare-and-set ``pending -> superseded``: after this, a Telegram/Feishu/
+    web decision on ``token`` is refused (``decide`` returns "superseded").
+    Returns ``("ok", row)`` when the edit may go ahead (``row`` is the retired
+    row, or None when relay is off or never saw the token), otherwise the
+    row's current status ("approved", "rejected", "expired", ...) and the
+    edit must not proceed: someone already decided what they were shown.
+    """
+    if not is_relay_enabled(settings):
+        return "ok", None
+    now = time.time()
+    conn = _connect(settings)
+    try:
+        with conn:
+            cur = conn.execute(
+                """
+                UPDATE relay_approvals
+                SET status = 'superseded', decided_via = 'edit', decided_at = ?
+                WHERE token = ? AND status = 'pending' AND expires_at > ?
+                """,
+                (now, token, now),
+            )
+            won = cur.rowcount == 1
+            row = conn.execute("SELECT * FROM relay_approvals WHERE token = ?", (token,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return "ok", None
+    if won:
+        return "ok", dict(row)
+    status = str(row["status"])
+    if status == "pending":
+        status = "expired"
+    return status, dict(row)
+
+
+def announce_superseded(
+    settings: Any,
+    old_token: str,
+    new_action: PendingToolAction,
+    old_row: dict[str, Any] | None,
+) -> bool:
+    """Publish the replacement approval and mark the old messages invalid."""
+    if not is_relay_enabled(settings):
+        return False
+    row = old_row or {}
+    published = publish(
+        settings,
+        new_action,
+        summary=str(row.get("summary") or new_action.tool_name),
+        danger=str(row.get("danger") or "write"),
+        source=str(row.get("source") or "chat"),
+    )
+    if old_row is not None:
+        _dispatch_notification(_notify_outcome, settings, old_token, "superseded", via="web")
+    return published
+
+
 def decide(
     settings: Any,
     token: str,
@@ -759,7 +821,7 @@ def decide(
 ) -> str:
     """Atomic compare-and-set decision across all surfaces.
 
-    Returns: 'won' | 'already_decided' | 'expired' | 'unknown'
+    Returns: 'won' | 'already_decided' | 'expired' | 'superseded' | 'unknown'
     """
     if not is_relay_enabled(settings):
         return "unknown"
@@ -777,6 +839,10 @@ def decide(
                 ).fetchone()
                 if row is None:
                     return "unknown"
+                if row["status"] == "superseded":
+                    # The argument was edited after this was sent: this
+                    # button approves something its presser has not seen.
+                    return "superseded"
                 if row["status"] != "pending":
                     return "already_decided"
                 if float(row["expires_at"]) <= now:

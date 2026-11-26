@@ -100,6 +100,37 @@ def replace_pending_arg(token: str, new_arg: str) -> PendingToolAction | None:
         return action
 
 
+def supersede_pending(token: str, new_arg: str) -> PendingToolAction | None:
+    """Replace a pending action with a copy under a new token and ``new_arg``.
+
+    The old token stops existing, so a button or link bound to it can no
+    longer approve the changed argument. Everything else (tool, channel,
+    chat, operator, created_at, ttl) is kept. Returns None if not found or
+    expired.
+    """
+    with _lock:
+        old = get_pending(token)
+        if old is None:
+            return None
+        new = PendingToolAction(
+            token=uuid.uuid4().hex[:12],
+            tool_name=old.tool_name,
+            arg=new_arg,
+            operator_id=old.operator_id,
+            chat_id=old.chat_id,
+            channel=old.channel,
+            created_at=old.created_at,
+            ttl_seconds=old.ttl_seconds,
+        )
+        key = _context_key(old.operator_id, old.chat_id, old.channel)
+        held_context = _by_context.get(key) == token
+        pop_pending(token)
+        _pending[new.token] = new
+        if held_context:
+            _by_context[key] = new.token
+        return new
+
+
 def set_pending_ttl(token: str, ttl_seconds: float) -> PendingToolAction | None:
     """Extend/shorten the lifetime of a live pending action (e.g. routine approvals)."""
     with _lock:
