@@ -21,6 +21,7 @@ from conveyor.agents.agent_events import emit_event
 from conveyor.core.redaction import redact_text, truncate
 from runner.attachments import attachments_root, prompt_images
 from runner.core import CodexRunner
+from runner.process_group import StreamActivity
 from runner.types import Job, JobMode, ProgressCallback
 
 
@@ -113,6 +114,8 @@ class ClaudeCodeBackend(CodexRunner):
             stderr=asyncio.subprocess.PIPE,
             env=env,
             limit=MAX_CLAUDE_STREAM_LINE,
+            # Own process group, so a timeout or cancel can stop what it started.
+            start_new_session=True,
         )
         job.process = process
         assert process.stdin is not None
@@ -128,6 +131,8 @@ class ClaudeCodeBackend(CodexRunner):
         final_text = ""
         stderr_chunks: list[str] = []
         stderr_bytes = 0
+        activity = StreamActivity()
+        on_progress = activity.progress(on_progress)
 
         async def read_stdout() -> None:
             nonlocal final_text
@@ -141,6 +146,7 @@ class ClaudeCodeBackend(CodexRunner):
                         if process.returncode is None:
                             process.terminate()
                         return
+                    activity.touch()
                     if not line:
                         return
                     text = line.decode("utf-8", errors="replace").strip()
@@ -189,6 +195,7 @@ class ClaudeCodeBackend(CodexRunner):
             nonlocal stderr_bytes
             while True:
                 line = await process.stderr.readline()
+                activity.touch()
                 if not line:
                     return
                 if stderr_bytes < MAX_CLAUDE_STDERR_BYTES:
@@ -200,15 +207,13 @@ class ClaudeCodeBackend(CodexRunner):
 
         stdout_task = asyncio.create_task(read_stdout())
         stderr_task = asyncio.create_task(read_stderr())
+        from runner.process_group import finish_readers, stop_group, wait_exit
         try:
-            job.return_code = await asyncio.wait_for(
-                process.wait(), timeout=self.settings.codex_timeout_seconds
-            )
+            job.return_code = await wait_exit(process, timeout=self.settings.codex_timeout_seconds)
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
-            process.kill()
-            job.return_code = await process.wait()
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            job.return_code = await stop_group(process)
+        await finish_readers(process, (stdout_task, stderr_task), activity=activity)
         job.process = None
 
         if final_text:

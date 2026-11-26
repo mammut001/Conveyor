@@ -255,10 +255,16 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
             if not tracked_files and not untracked_files:
                 return f"Job {job_id} has no changes to apply."
 
-            patch = await self._git(
+            # Bytes from diff to apply: decoding would corrupt files that are
+            # not UTF-8. Only stdout is the patch; git warnings go to stderr.
+            from runner.worktree import _git_bytes
+            patch = await _git_bytes(
+                self,
                 ["diff", "--binary", "HEAD", "--", ".", memory_pathspec],
                 cwd=worktree_path, check=False,
             )
+            if not patch.strip() and not untracked_files:
+                return f"Job {job_id} has no changes to apply."
 
             # Preflight all destinations before modifying the target checkout.
             # Target collisions and symlinked parents must be rejected up front.
@@ -287,7 +293,7 @@ async def _apply_job_locked(self, job_id: str | None, worktree_path: Path | None
                     env=__import__("conveyor.core.subprocess_env", fromlist=["*"]).utility_env(self.settings),
                 )
                 try:
-                    stdout, stderr = await proc.communicate(patch.encode("utf-8"))
+                    stdout, stderr = await proc.communicate(patch)
                 except asyncio.CancelledError:
                     # Do not leave the git child mutating files after this task
                     # has been cancelled and started compensating.

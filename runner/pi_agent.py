@@ -24,6 +24,7 @@ from conveyor.core.redaction import redact_text, truncate
 from runner.core import CodexRunner
 from runner.delete_guard import make_guard_dir, prepend_guard_to_path
 from runner.operators import run as _run_ops
+from runner.process_group import StreamActivity
 from runner.types import DESTRUCTIVE_CONFIRM_TAG, Job, JobMode, ProgressCallback  # tag re-exported
 
 
@@ -1130,6 +1131,8 @@ class PiBackend(CodexRunner):
         on_progress: ProgressCallback,
     ) -> None:
         """Spawn the prepared pi command in ``env`` and read its event stream."""
+        activity = StreamActivity()
+        on_progress = activity.progress(on_progress)
         try:
             Path("/srv/conveyor/downloads").mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -1143,6 +1146,8 @@ class PiBackend(CodexRunner):
             stderr=asyncio.subprocess.PIPE,
             env=env,
             limit=MAX_PI_STREAM_LINE,
+            # Own process group, so a timeout or cancel can stop what it started.
+            start_new_session=True,
         )
         job.process = process
         assert process.stdin is not None
@@ -1255,6 +1260,7 @@ class PiBackend(CodexRunner):
                                 process.terminate()
                             return
                         read_task = None
+                        activity.touch()
                         if not line:
                             return
                         text = line.decode("utf-8", errors="replace").strip()
@@ -1382,6 +1388,7 @@ class PiBackend(CodexRunner):
         async def read_stderr() -> None:
             while True:
                 chunk_bytes = await process.stderr.read(65_536)
+                activity.touch()
                 if not chunk_bytes:
                     return
                 if len(stderr_buffer) < MAX_PI_STDERR_BYTES:
@@ -1389,14 +1396,13 @@ class PiBackend(CodexRunner):
 
         stdout_task = asyncio.create_task(read_stdout())
         stderr_task = asyncio.create_task(read_stderr())
+        from runner.process_group import finish_readers, wait_exit
         try:
-            job.return_code = await asyncio.wait_for(
-                process.wait(), timeout=self.settings.codex_timeout_seconds
-            )
+            job.return_code = await wait_exit(process, timeout=self.settings.codex_timeout_seconds)
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
             job.return_code = await self._stop_pi(process)
-        stream_results = await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        stream_results = await finish_readers(process, (stdout_task, stderr_task), activity=activity)
         job.process = None
 
         if not job.error:
@@ -1450,21 +1456,11 @@ class PiBackend(CodexRunner):
         pi runs each bash tool call in its own detached process group and kills
         those groups on SIGTERM. SIGKILL cannot be handled, so killing pi
         outright left a hung build or test running on the server forever.
+        pi's own group (it is started in a new session) is signalled, so
+        anything else it started is stopped too.
         """
-        if process.returncode is None:
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                return await asyncio.wait_for(process.wait(), PI_TERMINATE_GRACE_SECONDS)
-            except asyncio.TimeoutError:
-                pass
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-        return await process.wait()
+        from runner.process_group import stop_group
+        return await stop_group(process, grace=PI_TERMINATE_GRACE_SECONDS)
 
     @staticmethod
     def _usage_from_event(event: dict[str, Any]) -> dict[str, int] | None:

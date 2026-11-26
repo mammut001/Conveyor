@@ -449,7 +449,22 @@ async def _copy_untracked_files(self, worktree_path: Path) -> int:
     return await self._copy_validated_untracked_files(worktree_path, collected.paths)
 
 
-async def _git(self, args: list[str], cwd: Path, check: bool = True) -> str:
+# A git that hangs (index.lock, a hook, the network) would hold the job, and
+# often run.lock / apply.lock with it. Pass a larger timeout for clone/fetch.
+GIT_TIMEOUT_SECONDS = 120.0
+
+
+class GitTimeoutError(RuntimeError):
+    """A git subcommand did not finish within its timeout and was killed."""
+
+
+async def _git_bytes(
+    self, args: list[str], cwd: Path, check: bool = True,
+    *, timeout: float | None = GIT_TIMEOUT_SECONDS,
+) -> bytes:
+    """Run git and return its raw stdout. Use for patches: no decoding."""
+    from runner.process_group import stop_group
+
     process = await asyncio.create_subprocess_exec(
         "git",
         *args,
@@ -457,13 +472,31 @@ async def _git(self, args: list[str], cwd: Path, check: bool = True) -> str:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=__import__("conveyor.core.subprocess_env", fromlist=["*"]).utility_env(self.settings),
+        # Own group, so a timeout also stops hooks and helpers git started.
+        start_new_session=True,
     )
-    stdout, stderr = await process.communicate()
-    out = stdout.decode("utf-8", errors="replace")
-    err = stderr.decode("utf-8", errors="replace")
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError:
+        await stop_group(process, grace=1.0)
+        raise GitTimeoutError(f"git {' '.join(args[:2])} timed out after {timeout:g}s and was killed") from None
+    except asyncio.CancelledError:
+        await asyncio.shield(stop_group(process, grace=1.0))
+        raise
     if check and process.returncode != 0:
+        err = stderr.decode("utf-8", errors="replace")
+        out = stdout.decode("utf-8", errors="replace")
         raise RuntimeError(f"git {' '.join(args)} failed: {err.strip() or out.strip()}")
-    return out if out else err
+    return stdout
+
+
+async def _git(
+    self, args: list[str], cwd: Path, check: bool = True,
+    *, timeout: float | None = GIT_TIMEOUT_SECONDS,
+) -> str:
+    """Run git and return its stdout as text (never its stderr)."""
+    stdout = await _git_bytes(self, args, cwd, check, timeout=timeout)
+    return stdout.decode("utf-8", errors="replace")
 
 
 async def cleanup_job_worktree(self, job: Job) -> None:
