@@ -910,8 +910,8 @@ async def exec_pi_destructive_task(
     result_text = job.summary or (f"执行失败：{job.error}" if job.error else (job.last_event or "已确认并执行完成。"))
     if msg_obj is not None:
         try:
-            from handlers.session import append_turn
-            append_turn(settings, msg_obj, prompt, result_text, kind="codex")
+            from handlers.session import append_turn_async
+            await append_turn_async(settings, msg_obj, prompt, result_text, kind="codex")
         except Exception:
             pass
     return result_text

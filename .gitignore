@@ -74,3 +74,7 @@ web/playwright-report/
 
 # macOS Finder metadata
 .DS_Store
+
+# Claude Code local settings and its scratch worktrees
+.claude/settings.local.json
+.claude/worktrees/

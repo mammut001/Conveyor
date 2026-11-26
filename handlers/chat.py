@@ -905,9 +905,9 @@ async def ask_chat(
                 memory_note = f"{loop_res.text.strip()}\n{memory_note}"
             remember(key, user_turn, memory_note, settings.chat_history_turns, settings=settings)
             try:
-                from handlers.session import append_turn
+                from handlers.session import append_turn_async
                 skip_transcript = getattr(port, "handles_transcript_directly", False)
-                append_turn(
+                await append_turn_async(
                     settings,
                     msg,
                     user_turn,
@@ -1019,9 +1019,9 @@ async def ask_chat(
         user_turn += f"\n[{len(images)} image(s) attached]"
     remember(key, user_turn, checked.body, settings.chat_history_turns, settings=settings)
     try:
-        from handlers.session import append_turn
+        from handlers.session import append_turn_async
         skip_transcript = getattr(port, "handles_transcript_directly", False)
-        append_turn(
+        await append_turn_async(
             settings,
             msg,
             user_turn,

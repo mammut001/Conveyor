@@ -273,7 +273,7 @@ async def _execute_codex_job(
     # continuity when the user says "继续" / "continue". Only for LLM
     # jobs (handle_codex_job is only called for /run, /fix, and free
     # text fallback — never for deterministic commands).
-    from handlers.session import build_context_prompt, append_turn
+    from handlers.session import build_context_prompt, append_turn_async
     from conveyor.agents.agents import instructions_for_chat, profile_block
     ctx_prompt = (
         profile_block(*instructions_for_chat(runner.settings, msg.channel, msg.chat_id))
@@ -526,7 +526,7 @@ async def _execute_codex_job(
 
     # Record turn for session continuity.
     skip_transcript = getattr(port, "handles_transcript_directly", False)
-    append_turn(
+    await append_turn_async(
         runner.settings,
         msg,
         user_text_for_session,

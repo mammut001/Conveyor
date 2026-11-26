@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from conveyor.core.redaction import redact_text, truncate
+from conveyor.core.sqlite_wal import enable_wal
 from security.secrets import is_sensitive_key
 
 logger = logging.getLogger("transcript_store")
@@ -171,6 +172,8 @@ class TranscriptStore:
     def _init_db(self) -> None:
         conn = self._connect()
         try:
+            # Shared by bot, feishu_bot and web: readers must not wait on a writer.
+            enable_wal(conn)
             with conn:
                 conn.executescript(
                     """
