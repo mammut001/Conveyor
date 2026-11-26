@@ -1,0 +1,4 @@
+# Taste
+
+- Prefer a generic, executor-pluggable supervisor where Antigravity is only one adapter; reuse existing Conveyor capabilities, bind coordinator/analyst/implementer/reviewer model and executor names through configuration, advance state only from real execution results, and report unavailable adapters explicitly rather than silently substituting or fabricating success. Confidence: 0.95
+- Prefer concise Chinese user-facing UI that follows the existing Conveyor design system; show goal, current role, progress, result, and blocking reason by default while keeping files/code in optional technical details; start development only after an explicit user request; avoid repeated confirmation prompts beyond existing authorization; complete the real execution loop before full visualization; and in final reports distinguish real-execution-validated, state-tracking-only, and not-yet-implemented work. Confidence: 0.95

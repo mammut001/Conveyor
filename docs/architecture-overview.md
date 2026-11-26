@@ -28,17 +28,18 @@ flowchart LR
     API[Web Supervisor API] --> STATE[创建 / 查询任务与状态]
     STATE --> DB[(Supervisor SQLite)]
     DB --> RECORD[工作树锁、交接、验收与部署阶段记录]
-    FLOW[run_supervisor_flow 函数] --> ANALYST[分析执行器]
+    API --> FLOW[后台 Supervisor 执行循环]
+    FLOW --> ANALYST[分析执行器]
     ANALYST --> IMPLEMENTER[实现执行器]
     IMPLEMENTER --> REVIEWER[审阅执行器]
     REVIEWER -->|未通过且未达上限| IMPLEMENTER
     FLOW --> DB
 ```
 
-- `run_supervisor_flow` 实现了分析、实现、审阅及有限修复循环；仓库中的 smoke 使用假执行器验证该流程。当前搜索到的调用位于测试脚本，不能把它描述为已接入 Web 的生产闭环。
-- Web 的 `/api/supervisor/tasks` 等接口管理任务、状态与部署记录；`dispatch` 更新状态及锁，本身不启动上述执行循环。部署阶段接口记录状态，不等于自动完成部署。
-- 当前代码实现了 Claude CLI 执行器；Antigravity 适配器明确返回未实现，Supervisor 内的 Codex 适配器也尚未完成。实际可用性仍取决于环境和配置。不能从角色示例推断线上使用哪家模型。
-- 验收记录按 `current_sha` 匹配，不能仅凭同一个 commit SHA 证明未提交工作区内容没有变化；取消、恢复与审阅隔离也不应当描述成已经完整闭环。
+- Web 的“自动任务”和 `dispatch` API 会启动后台分析、实现、命令验证、审阅和有限修复循环。需要启用 Supervisor；可自动识别部分项目的基础测试或手动提供验证命令。可指定独立且干净的现成 Git worktree，否则自动从仓库当前提交创建。任务详情包含交接和有效验收；部署阶段接口仍只记录状态，不代表自动部署。
+- 这个旧分支中实现了 Claude CLI 执行器，实际可用性取决于二进制、认证和配置。Codex 和 Antigravity 适配器尚未实现。审阅执行器配置为只读，Claude 仅允许只读工具。
+- 验收绑定 HEAD、索引、工作树差异及非忽略的未跟踪文件的快照，变动后失效。含子模块的工作区目前拒绝执行，Git 忽略文件不在快照范围内。旧的仅 SHA 验收不再视为有效。
+- 取消会终止由运行时启动的进程组后释放锁；异常或重启后的进程状态不明时应保留锁，当前尚无自动重连和人工解锁界面，也不会自动恢复任务。
 
 ## 现存 Web 与历史任务路径
 

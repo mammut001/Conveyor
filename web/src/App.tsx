@@ -7,11 +7,13 @@ import { SkillsPanel } from './components/SkillsPanel'
 import { ConnectorsPanel } from './components/ConnectorsPanel'
 import { ApprovalInboxPanel } from './components/ApprovalInboxPanel'
 import { TeammatePanel } from './components/TeammatePanel'
+import { SupervisorPanel } from './components/SupervisorPanel'
 import { LiveScreenPanel } from './components/LiveScreenPanel'
 import { AgentLibrary } from './components/AgentLibrary'
 import { AgentAvatar, AgentDialog, AgentList, agentTag, type Agent, type AgentDraft } from './components/AgentList'
 import { RuntimeOwnerCard } from './components/RuntimeOwnerCard'
 import { TranscriptPanel } from './components/TranscriptPanel'
+import { WorkspaceBindingPicker, type WorkspaceBinding } from './components/WorkspaceBindingPicker'
 import { runtimeOwnerFromJob, terminalJobState, type TranscriptMessage } from './runtime'
 import { dropApproval, isStale, shouldRefreshForEvent } from './approvalFreshness'
 
@@ -27,6 +29,7 @@ type Job = {
 type Session = {
   id: string; channel?: string; title?: string; created_at: string; updated_at?: string; last_activity: string
   operator_id?: string; source_chat_id?: string; job_count: number; message_count?: number; latest_job?: Job
+  workspace_path?: string; workspace_status?: '' | 'ok' | 'missing' | 'not_git'; github_repo?: string; workspace_source?: string
 }
 type SessionDetail = Session & { messages?: TranscriptMessage[]; jobs?: Job[] }
 // Chat-only sessions stay in Chat; promoted conversations with jobs also appear in Tasks.
@@ -67,6 +70,7 @@ type SystemStatus = {
     mcp?: boolean
     teammate?: boolean
     agents?: boolean
+    agent_supervisor?: boolean
   }
 }
 type ComputerStatus = {
@@ -152,6 +156,12 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState(() => sessionStorage.getItem('conveyor-selected-session') || '')
   const [selectedJobId, setSelectedJobId] = useState('')
   const [creatingSession, setCreatingSession] = useState(false)
+  const [taskWorkspaceBinding, setTaskWorkspaceBinding] = useState<WorkspaceBinding>({
+    workspace_path: '',
+    workspace_status: '',
+    github_repo: '',
+    workspace_source: '',
+  })
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([])
   const [transcriptError, setTranscriptError] = useState(false)
   const [events, setEvents] = useState<EventItem[]>([])
@@ -169,7 +179,7 @@ export default function App() {
   const [screenBusy, setScreenBusy] = useState(false)
   const [screenError, setScreenError] = useState('')
   const [providerConfig, setProviderConfig] = useState<ProviderConfig | null>(null)
-  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'connectors' | 'teammate'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
+  const [view, setView] = useState<'tasks' | 'chat' | 'inbox' | 'memory' | 'approvals' | 'skills' | 'connectors' | 'teammate' | 'supervisor'>(() => (window.location.hash === '#memory' || window.location.pathname === '/memory' ? 'memory' : window.location.hash === '#skills' || window.location.pathname === '/skills' ? 'skills' : window.location.hash === '#connectors' || window.location.pathname === '/connectors' ? 'connectors' : window.location.hash === '#teammate' || window.location.pathname === '/teammate' ? 'teammate' : 'tasks'))
   const [inboxUnread, setInboxUnread] = useState(0)
   const [approvalInboxCount, setApprovalInboxCount] = useState(0)
   const [chatDraft, setChatDraft] = useState('')
@@ -304,6 +314,14 @@ export default function App() {
     else sessionStorage.removeItem('conveyor-selected-session')
     setSelectedJobId(jobId || '')
     setTranscript([])
+    if (!sessionId) {
+      setTaskWorkspaceBinding({
+        workspace_path: '',
+        workspace_status: '',
+        github_repo: '',
+        workspace_source: '',
+      })
+    }
   }, [])
 
   const api = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -408,6 +426,12 @@ export default function App() {
       const session = await api<SessionDetail>(`/api/sessions/${encodeURIComponent(selectedSessionId)}`, { signal: controller.signal })
       if (request.generation === transcriptGen.current && selectedSessionId === transcriptSessionRef.current) {
         setTranscript(session.messages || []); setTranscriptError(false)
+        setTaskWorkspaceBinding({
+          workspace_path: String(session.workspace_path || ''),
+          workspace_status: (session.workspace_status || '') as WorkspaceBinding['workspace_status'],
+          github_repo: String(session.github_repo || ''),
+          workspace_source: String(session.workspace_source || ''),
+        })
       }
     } catch {
       if (request.generation === transcriptGen.current && selectedSessionId === transcriptSessionRef.current) {
@@ -670,6 +694,13 @@ export default function App() {
                 <span className={`status-rail ${session.latest_job?.state || ''}`} />
                 <span>
                   <strong>{session.title || 'Untitled session'}</strong>
+                  {(session.github_repo || session.workspace_path) && (
+                    <span className="session-workspace-tag">
+                      {session.github_repo
+                        ? `🐙 ${session.github_repo}`
+                        : `📁 ${(session.workspace_path || '').replace(/\/+$/, '').split('/').pop()}`}
+                    </span>
+                  )}
                   <small>{session.message_count ?? 0} messages · {session.job_count} job{session.job_count === 1 ? '' : 's'} · {formatTime(session.last_activity)}</small>
                 </span>
               </button>
@@ -694,16 +725,19 @@ export default function App() {
         <div className="stream-header">
           <div>
             <p className="eyebrow">
-              {view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
+              {view === 'supervisor' ? 'AUTONOMOUS CODE TASKS' : view === 'chat' ? (selectedAgent ? 'AGENT' : 'DIRECT CHAT TIER') : view === 'inbox' ? 'ROUTINES · INBOX' : view === 'memory' ? 'LONG-TERM MEMORY' : view === 'approvals' ? 'UNIFIED APPROVAL INBOX' : view === 'skills' ? 'SKILLS LIBRARY' : view === 'connectors' ? 'MCP CONNECTORS' : view === 'teammate' ? 'ALWAYS-ON TEAMMATE · 24/7 SENTRY' : 'TASKS · CODEX EXECUTION'}
             </p>
             <h2>
-              {view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (executionOnly ? '继续聊天任务' : creatingSession ? 'New session' : sessionLabel(selectedSession))}
+              {view === 'supervisor' ? '自动任务' : view === 'chat' ? (selectedAgent?.name || 'Chat') : view === 'inbox' ? 'Inbox & Routines' : view === 'memory' ? 'Memory' : view === 'approvals' ? 'Approvals' : view === 'skills' ? 'Skills' : view === 'connectors' ? 'Connectors' : view === 'teammate' ? 'Teammate' : (executionOnly ? '继续聊天任务' : creatingSession ? 'New session' : sessionLabel(selectedSession))}
             </h2>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="mode-switch">
               <button type="button" className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>Tasks</button>
               <button type="button" className={view === 'chat' ? 'active' : ''} onClick={() => setView('chat')}>Chat</button>
+              {(Boolean(system?.features?.agent_supervisor) || view === 'supervisor') && (
+                <button type="button" className={view === 'supervisor' ? 'active' : ''} onClick={() => setView('supervisor')}>自动任务</button>
+              )}
               <button type="button" className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>
                 Inbox{inboxUnread > 0 ? ` (${inboxUnread})` : ''}
               </button>
@@ -752,7 +786,9 @@ export default function App() {
             onInitialInputConsumed={() => setChatDraft('')}
           />
         </div>
-        {view === 'approvals' ? (
+        {view === 'supervisor' ? (
+          <SupervisorPanel token={token} />
+        ) : view === 'approvals' ? (
           <ApprovalInboxPanel
             token={token}
             onApprovalDecided={() => {
@@ -796,6 +832,28 @@ export default function App() {
         ) : (
           <>
             <div className="event-stream" ref={streamRef}>
+              {(transcript.length > 0 || Boolean(selectedJob)) && (
+                <WorkspaceBindingPicker
+                  token={token}
+                  sessionId={selectedSessionId}
+                  chatMode={false}
+                  binding={{
+                    workspace_path: selectedSession?.workspace_path || taskWorkspaceBinding.workspace_path,
+                    workspace_status: selectedSession?.workspace_status || taskWorkspaceBinding.workspace_status,
+                    github_repo: selectedSession?.github_repo || taskWorkspaceBinding.github_repo,
+                    workspace_source: selectedSession?.workspace_source || taskWorkspaceBinding.workspace_source,
+                  }}
+                  welcomeMode={false}
+                  onBound={next => {
+                    setTaskWorkspaceBinding(next)
+                    if (next.session_id && next.session_id !== selectedSessionId) {
+                      setSelectedSessionId(next.session_id)
+                      sessionStorage.setItem('conveyor-selected-session', next.session_id)
+                    }
+                    void refresh()
+                  }}
+                />
+              )}
               {activeRefinement && <div className="job-notice"><strong>Active changes</strong><span>{refinementTurn || 1} refinement turn{(refinementTurn || 1) === 1 ? '' : 's'} · {activeChangedFiles} file{activeChangedFiles === 1 ? '' : 's'} changed · Fix feedback continues the same worktree.</span></div>}
               {selectedJob?.state === 'failed' && <div className="job-notice failed" role="alert"><strong>任务执行失败</strong><span>{selectedJob.error || '请查看执行记录中的错误信息，再补充说明继续处理。'}</span></div>}
               {selectedJob?.state === 'cancelled' && <div className="job-notice" role="status"><strong>任务已取消</strong><span>已有记录已保留，可以在下方输入下一步。</span></div>}
@@ -873,6 +931,26 @@ export default function App() {
                   <div className="brand-mark">C</div>
                   <h2>Conveyor Control Console</h2>
                   <p>你的个人常驻 Agent 控制台。在下方输入任务，或通过 Telegram、飞书随时交流。</p>
+                  <WorkspaceBindingPicker
+                    token={token}
+                    sessionId={selectedSessionId}
+                    chatMode={false}
+                    binding={{
+                      workspace_path: selectedSession?.workspace_path || taskWorkspaceBinding.workspace_path,
+                      workspace_status: selectedSession?.workspace_status || taskWorkspaceBinding.workspace_status,
+                      github_repo: selectedSession?.github_repo || taskWorkspaceBinding.github_repo,
+                      workspace_source: selectedSession?.workspace_source || taskWorkspaceBinding.workspace_source,
+                    }}
+                    welcomeMode={true}
+                    onBound={next => {
+                      setTaskWorkspaceBinding(next)
+                      if (next.session_id && next.session_id !== selectedSessionId) {
+                        setSelectedSessionId(next.session_id)
+                        sessionStorage.setItem('conveyor-selected-session', next.session_id)
+                      }
+                      void refresh()
+                    }}
+                  />
                   <div className="suggested-prompts">
                     <button type="button" className="prompt-chip" onClick={() => setPrompt('检查当前系统状态和任务队列')}>
                       🔍 检查系统与任务队列
@@ -916,10 +994,11 @@ export default function App() {
         </div>}
         {selectedAgent && agentTab === 'details' && <ContextSection title="Agent">
           <p className="agent-instructions">{selectedAgent.instructions || 'No standing instructions yet.'}</p>
+          {selectedAgent.github_repo && <KeyValue label="GitHub Repo" value={selectedAgent.github_repo} mono />}
           {selectedAgent.workspace_path && <KeyValue label="Project" value={selectedAgent.workspace_path} mono />}
           {selectedAgent.workspace_status === 'missing' && <p className="screen-request-status failed" role="alert">This folder does not exist on the host. Tasks for this agent will fail until it does.</p>}
           {selectedAgent.workspace_status === 'not_git' && <p className="screen-request-status failed" role="alert">This folder is not the root of a git repository. Tasks for this agent will fail until it is.</p>}
-          {!selectedAgent.workspace_path && !selectedAgent.is_default && <p className="screen-privacy-note">No project folder: tasks run in the shared workspace.</p>}
+          {!selectedAgent.workspace_path && !selectedAgent.github_repo && !selectedAgent.is_default && <p className="screen-privacy-note">No project folder: tasks run in the shared workspace.</p>}
           <div className="action-row"><button type="button" onClick={() => setAgentDialog({ agent: selectedAgent })}>Edit agent</button></div>
         </ContextSection>}
         {selectedAgent && agentTab === 'library' && <ContextSection title="Library">
@@ -1024,6 +1103,12 @@ export default function App() {
             <button type="button" className="drawer-close-btn" aria-label="Close more menu" onClick={() => setMoreSheetOpen(false)}>×</button>
           </div>
           <div className="mobile-sheet-items">
+            {(Boolean(system?.features?.agent_supervisor) || view === 'supervisor') && (
+              <button type="button" className={`mobile-sheet-item ${view === 'supervisor' ? 'active' : ''}`}
+                onClick={() => { setView('supervisor'); setMoreSheetOpen(false) }}>
+                <span>自动任务</span>
+              </button>
+            )}
             {(Boolean(system?.features?.routines) || view === 'inbox') && (
               <button
                 type="button"
@@ -1135,6 +1220,7 @@ export default function App() {
     )}
     {agentDialog && <AgentDialog
       agent={agentDialog.agent}
+      token={token}
       onClose={() => setAgentDialog(null)}
       onSave={draft => saveAgent(draft, agentDialog.agent)}
       onArchive={agentDialog.agent ? () => archiveAgent(agentDialog.agent as Agent) : undefined}

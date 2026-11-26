@@ -162,6 +162,8 @@ class WebConsoleServer(ThreadingHTTPServer):
         self._active_routine_runs: set[int] = set()
         self._hook_last_accepted: dict[str, float] = {}
         self._rate_limit_lock = threading.Lock()
+        from supervisor_runtime import SupervisorRuntime
+        self.supervisor_runtime = SupervisorRuntime(getattr(control, "settings", None))
 
     def screen_for(self, agent_id: str) -> LiveScreen | None:
         """The screen an agent's Computer tab shows; None for an unknown agent.
@@ -537,13 +539,60 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, {
                     "session_id": session_id,
                     "messages": build_history(session),
+                    "workspace_path": (session or {}).get("workspace_path") or "",
+                    "workspace_status": (session or {}).get("workspace_status") or "",
+                    "github_repo": (session or {}).get("github_repo") or "",
+                    "workspace_source": (session or {}).get("workspace_source") or "",
                 })
+            elif path == "/api/github/repos":
+                q = str((query.get("q") or [""])[0]).strip()
+                try:
+                    limit = int((query.get("limit") or ["100"])[0])
+                except ValueError:
+                    limit = 100
+                refresh = str((query.get("refresh") or [""])[0]).strip().lower() in ("1", "true", "yes")
+                self._json(HTTPStatus.OK, self.server.control.github_repos(query=q, limit=limit, refresh=refresh))
+            elif path == "/api/workspaces/local":
+                self._json(HTTPStatus.OK, self.server.control.local_workspaces())
             elif path == "/api/nodes":
                 self._json(HTTPStatus.OK, {"nodes": self.server.control.nodes()})
             elif path == "/api/computer/status":
                 self._json(HTTPStatus.OK, self.server.control.computer_status())
             elif path == "/api/teammate/status":
                 self._json(HTTPStatus.OK, self.server.control.teammate_status())
+            elif path == "/api/supervisor/tasks":
+                import agent_supervisor as ags
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                state = (query.get("state") or [""])[0].strip() or None
+                items = ags.list_tasks(settings, state=state)
+                self._json(HTTPStatus.OK, {"tasks": items, "count": len(items)})
+            elif len(parts) == 4 and parts[:2] == ["api", "supervisor"] and parts[2] == "tasks":
+                import agent_supervisor as ags
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                item = ags.get_task(settings, parts[3])
+                if item is None:
+                    self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                else:
+                    item = dict(item)
+                    item["handoffs"] = ags.list_handoffs(settings, parts[3])
+                    item["acceptance"] = ags.effective_acceptance(settings, parts[3])
+                    item["summary"] = ags.summary(settings, parts[3])
+                    self._json(HTTPStatus.OK, item)
+            elif path == "/api/supervisor/deployments":
+                import agent_supervisor as ags
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                task_id = (query.get("task_id") or [""])[0].strip() or None
+                items = ags.list_deployments(settings, task_id=task_id)
+                self._json(HTTPStatus.OK, {"deployments": items, "count": len(items)})
             elif path == "/api/agents":
                 self._json(HTTPStatus.OK, self.server.control.list_agents())
             elif len(parts) == 4 and parts[:2] == ["api", "agents"] and parts[3] == "library":
@@ -975,6 +1024,14 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.OK, {"ok": ok})
                     return
 
+            if parsed.path == "/api/sessions/bind":
+                try:
+                    result = self.server.control.bind_session_workspace(body)
+                    self._json(HTTPStatus.OK, result)
+                except ValueError as exc:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": redact_text(str(exc))})
+                return
+
             if parsed.path == "/api/chat":
                 raw_message = body.get("message")
                 message = str(raw_message or "").strip() if isinstance(raw_message, str) else ""
@@ -995,6 +1052,19 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     # web-channel sessions; don't act as a Telegram/Feishu chat.
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "web chat only supports web sessions"})
                     return
+
+                if body.get("workspace_path") or body.get("github_repo"):
+                    try:
+                        self.server.control.bind_session_workspace({
+                            "session_id": durable_session_id,
+                            "chat_mode": True,
+                            "source": body.get("workspace_source") or ("github" if body.get("github_repo") else "folder"),
+                            "github_repo": body.get("github_repo") or "",
+                            "workspace_path": body.get("workspace_path") or "",
+                        })
+                    except ValueError as exc:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": redact_text(str(exc))})
+                        return
 
                 settings = getattr(self.server.control, "settings", None)
                 if settings is None:
@@ -1024,6 +1094,18 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                     self._json(HTTPStatus.BAD_REQUEST, {"error": "invalid session_id"})
                     return
                 channel, operator_id, source_chat_id, durable_session_id = session_info
+                if body.get("workspace_path") or body.get("github_repo"):
+                    try:
+                        self.server.control.bind_session_workspace({
+                            "session_id": durable_session_id,
+                            "chat_mode": False,
+                            "source": body.get("workspace_source") or ("github" if body.get("github_repo") else "folder"),
+                            "github_repo": body.get("github_repo") or "",
+                            "workspace_path": body.get("workspace_path") or "",
+                        })
+                    except ValueError as exc:
+                        self._json(HTTPStatus.BAD_REQUEST, {"error": redact_text(str(exc))})
+                        return
                 mode = JobMode.FIX if body.get("mode") == "fix" else JobMode.RUN
                 msg = InboundMessage(
                     channel=channel, operator_id=operator_id, chat_id=source_chat_id,
@@ -1246,6 +1328,76 @@ class WebConsoleHandler(BaseHTTPRequestHandler):
                 val = body.get("value")
                 result = self.server.control.teammate_action(action, val)
                 self._json(HTTPStatus.OK if result.get("ok") else HTTPStatus.BAD_REQUEST, result)
+            elif parsed.path == "/api/supervisor/tasks":
+                import agent_supervisor as ags
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                goal = str(body.get("goal") or "").strip()
+                repo_path = str(body.get("repo_path") or "").strip()
+                if not goal or not repo_path:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "goal and repo_path required"})
+                    return
+                task = ags.create_task(settings, goal=goal, repo_path=repo_path,
+                                     worktree_path=str(body.get("worktree_path") or ""),
+                                     branch=str(body.get("branch") or ""),
+                                     base_sha=str(body.get("base_sha") or ""),
+                                     metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None)
+                self._json(HTTPStatus.CREATED, task)
+            elif len(parts) == 5 and parts[:3] == ["api", "supervisor", "tasks"] and parts[4] in ("transition", "cancel", "dispatch"):
+                import agent_supervisor as ags
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                task_id = parts[3]
+                action = parts[4]
+                if action == "cancel":
+                    task = self._await(self.server.supervisor_runtime.cancel(task_id))
+                    self._json(HTTPStatus.OK, task)
+                    return
+                if action == "dispatch":
+                    try:
+                        task = self._await(self.server.supervisor_runtime.dispatch(
+                            task_id, worktree_path=str(body.get("worktree_path") or ""),
+                            acceptance_criteria=str(body.get("acceptance_criteria") or ""),
+                            validation_commands=body.get("validation_commands")))
+                    except ags.SupervisorLockError as exc:
+                        self._json(HTTPStatus.CONFLICT, {"error": str(exc)})
+                        return
+                    self._json(HTTPStatus.ACCEPTED, task)
+                    return
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "task states are controlled by the supervisor runtime"})
+            elif parsed.path == "/api/supervisor/deployments":
+                import agent_supervisor as ags
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                run = ags.create_deployment(settings,
+                                           task_id=body.get("task_id"),
+                                           source_machine=str(body.get("source_machine") or ""),
+                                           target_machine=str(body.get("target_machine") or ""),
+                                           build_version=str(body.get("build_version") or ""),
+                                           live_version=str(body.get("live_version") or ""),
+                                           metadata=body.get("metadata") if isinstance(body.get("metadata"), dict) else None)
+                self._json(HTTPStatus.CREATED, run)
+            elif len(parts) == 5 and parts[:3] == ["api", "supervisor", "deployments"] and parts[4] == "stage":
+                import agent_supervisor as ags
+                settings = getattr(self.server.control, "settings", None)
+                if settings is None:
+                    from config import load_runtime_settings
+                    settings = load_runtime_settings()
+                run_id = parts[3]
+                stage = str(body.get("stage") or "").strip()
+                status = str(body.get("status") or "").strip()
+                if not stage or not status:
+                    self._json(HTTPStatus.BAD_REQUEST, {"error": "stage and status required"})
+                    return
+                run = ags.update_deployment_stage(settings, run_id, stage, status,
+                                                 detail=str(body.get("detail") or ""))
+                self._json(HTTPStatus.OK, run)
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except KeyError:
@@ -1730,6 +1882,7 @@ def main() -> None:
             relay_consumer.stop()
         server.shutdown()
         server.server_close()
+        loop.run_until_complete(server.supervisor_runtime.shutdown())
         loop.stop()
         loop.close()
 

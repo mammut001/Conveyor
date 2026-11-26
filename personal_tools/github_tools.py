@@ -496,34 +496,63 @@ def github_summary(settings: Settings) -> dict[str, Any]:
 
 # --- Adapters for personal_tools/registry.py ---
 
+def _effective_github_settings(settings: Settings, kw: dict[str, Any]) -> Settings:
+    """If the conversation has a bound GitHub repo (or gh CLI token when repo is bound),
+    return a Settings copy scoped to that repo and token."""
+    from dataclasses import replace as _replace
+    channel = str(kw.get("channel") or "").strip()
+    chat_id = str(kw.get("chat_id") or "").strip()
+    bound_repo = ""
+    if channel and chat_id:
+        try:
+            from agents import github_repo_for_chat
+            bound_repo = github_repo_for_chat(settings, channel, chat_id)
+        except Exception:
+            bound_repo = ""
+    target_repo = bound_repo or getattr(settings, "github_default_repo", None)
+    token = getattr(settings, "github_token", None)
+    if not token and bound_repo:
+        try:
+            from github_workspace import gh_auth_token
+            token = gh_auth_token()
+        except Exception:
+            token = None
+    if target_repo != getattr(settings, "github_default_repo", None) or token != getattr(settings, "github_token", None):
+        try:
+            return _replace(settings, github_default_repo=target_repo, github_token=token)
+        except Exception:
+            return settings
+    return settings
+
+
 async def github_status_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
-    return github_status(settings)
+    return github_status(_effective_github_settings(settings, _kw))
 
 
 async def github_issues_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
     query = arg.strip() if arg.strip() else "open"
-    return github_issues(settings, query)
+    return github_issues(_effective_github_settings(settings, _kw), query)
 
 
 async def github_issue_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
     if not arg.strip():
         return ToolResult(ok=False, text="⚠️ 用法: github.issue <number>")
-    return github_issue(settings, arg.strip())
+    return github_issue(_effective_github_settings(settings, _kw), arg.strip())
 
 
 async def github_prs_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
     state = arg.strip() if arg.strip() else "open"
-    return github_prs(settings, state)
+    return github_prs(_effective_github_settings(settings, _kw), state)
 
 
 async def github_pr_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
     if not arg.strip():
         return ToolResult(ok=False, text="⚠️ 用法: github.pr <number>")
-    return github_pr(settings, arg.strip())
+    return github_pr(_effective_github_settings(settings, _kw), arg.strip())
 
 
 async def github_ci_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
-    return github_ci(settings, arg.strip())
+    return github_ci(_effective_github_settings(settings, _kw), arg.strip())
 
 
 async def github_create_issue_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
@@ -531,7 +560,7 @@ async def github_create_issue_adapter(settings: Settings, arg: str, **_kw) -> To
     parts = arg.split("|", 1)
     title = parts[0].strip()
     body = parts[1].strip() if len(parts) > 1 else ""
-    return github_create_issue(settings, title, body)
+    return github_create_issue(_effective_github_settings(settings, _kw), title, body)
 
 
 async def github_comment_adapter(settings: Settings, arg: str, **_kw) -> ToolResult:
@@ -541,4 +570,4 @@ async def github_comment_adapter(settings: Settings, arg: str, **_kw) -> ToolRes
         return ToolResult(ok=False, text="⚠️ 用法: github.comment <number> | <body>")
     number = parts[0].strip()
     body = parts[1].strip()
-    return github_comment(settings, number, body)
+    return github_comment(_effective_github_settings(settings, _kw), number, body)

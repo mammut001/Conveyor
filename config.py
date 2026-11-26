@@ -245,6 +245,23 @@ class Settings:
     subagents_timeout_seconds: int = 90
     subagents_max_steps: int = 3
     subagents_max_output_chars: int = 2500
+    # Generic agent supervisor (multi-role, pluggable executors). Off by default.
+    agent_supervisor_enabled: bool = False
+    agent_supervisor_chat_model: str | None = None
+    agent_supervisor_analysis_model: str | None = None
+    agent_supervisor_implementation_executor: str = "claude"
+    agent_supervisor_max_repair_rounds: int = 3
+    agent_supervisor_task_timeout_seconds: int = 3600
+    # Per-role executor/model overrides.
+    agent_supervisor_coordinator_executor: str = "chat"
+    agent_supervisor_coordinator_model: str | None = None
+    agent_supervisor_analyst_executor: str | None = None
+    agent_supervisor_analyst_model: str | None = None
+    agent_supervisor_implementer_executor: str | None = None
+    agent_supervisor_implementer_model: str | None = None
+    agent_supervisor_reviewer_executor: str | None = None
+    agent_supervisor_reviewer_model: str | None = None
+
     # Always-On Teammate & Proactive Sentry
     teammate_enabled: bool = True
     sentry_interval_seconds: int = 300
@@ -259,6 +276,19 @@ class Settings:
         "conveyor-vps-computer",
         "conveyor-scheduler",
     )
+
+    def __getattr__(self, name: str) -> Any:
+        _aliases = {
+            "antigravity_supervisor_enabled": "agent_supervisor_enabled",
+            "supervisor_chat_model": "agent_supervisor_chat_model",
+            "supervisor_analysis_model": "agent_supervisor_analysis_model",
+            "supervisor_implementation_executor": "agent_supervisor_implementation_executor",
+            "supervisor_max_repair_rounds": "agent_supervisor_max_repair_rounds",
+            "supervisor_task_timeout_seconds": "agent_supervisor_task_timeout_seconds",
+        }
+        if name in _aliases:
+            return getattr(self, _aliases[name])
+        raise AttributeError(name)
 
     def __repr__(self) -> str:
         """Redact sensitive fields in repr."""
@@ -698,6 +728,26 @@ def _load_codex_fields(env_file: str | Path = ".env") -> dict:
         "subagents_timeout_seconds": max(10, min(300, _int_env("CONVEYOR_SUBAGENTS_TIMEOUT_SECONDS", 90))),
         "subagents_max_steps": max(0, min(6, _int_env("CONVEYOR_SUBAGENTS_MAX_STEPS", 3))),
         "subagents_max_output_chars": max(500, min(8000, _int_env("CONVEYOR_SUBAGENTS_MAX_OUTPUT_CHARS", 2500))),
+        "agent_supervisor_enabled": (
+            os.getenv("CONVEYOR_AGENT_SUPERVISOR_ENABLED", os.getenv("CONVEYOR_ANTIGRAVITY_SUPERVISOR_ENABLED", "false"))
+        ).strip().lower() in ("true", "1", "yes", "on"),
+        "agent_supervisor_chat_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_CHAT_MODEL") or os.getenv("CONVEYOR_SUPERVISOR_CHAT_MODEL") or None),
+        "agent_supervisor_analysis_model": (os.getenv("CONVEYOR_AGENT_SUPERVISOR_ANALYSIS_MODEL") or os.getenv("CONVEYOR_SUPERVISOR_ANALYSIS_MODEL") or None),
+        "agent_supervisor_implementation_executor": (
+            os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
+            or os.getenv("CONVEYOR_SUPERVISOR_IMPLEMENTATION_EXECUTOR")
+            or "claude"
+        ).strip() or "claude",
+        "agent_supervisor_max_repair_rounds": max(1, min(10, _int_env("CONVEYOR_AGENT_SUPERVISOR_MAX_REPAIR_ROUNDS", 3))),
+        "agent_supervisor_task_timeout_seconds": max(60, min(86400, _int_env("CONVEYOR_AGENT_SUPERVISOR_TASK_TIMEOUT_SECONDS", 3600))),
+        "agent_supervisor_coordinator_executor": os.getenv("CONVEYOR_AGENT_SUPERVISOR_COORDINATOR_EXECUTOR", "chat").strip() or "chat",
+        "agent_supervisor_coordinator_model": os.getenv("CONVEYOR_AGENT_SUPERVISOR_COORDINATOR_MODEL") or None,
+        "agent_supervisor_analyst_executor": os.getenv("CONVEYOR_AGENT_SUPERVISOR_ANALYST_EXECUTOR", "").strip() or None,
+        "agent_supervisor_analyst_model": os.getenv("CONVEYOR_AGENT_SUPERVISOR_ANALYST_MODEL") or None,
+        "agent_supervisor_implementer_executor": os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_EXECUTOR", "").strip() or None,
+        "agent_supervisor_implementer_model": os.getenv("CONVEYOR_AGENT_SUPERVISOR_IMPLEMENTER_MODEL") or None,
+        "agent_supervisor_reviewer_executor": os.getenv("CONVEYOR_AGENT_SUPERVISOR_REVIEWER_EXECUTOR", "").strip() or None,
+        "agent_supervisor_reviewer_model": os.getenv("CONVEYOR_AGENT_SUPERVISOR_REVIEWER_MODEL") or None,
         "teammate_enabled": os.getenv(
             "CONVEYOR_TEAMMATE_ENABLED", "true"
         ).strip().lower() in ("true", "1", "yes", "on"),

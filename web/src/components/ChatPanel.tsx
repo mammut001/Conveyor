@@ -1,5 +1,6 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { FormattedText } from './FormattedText';
+import { WorkspaceBindingPicker, type WorkspaceBinding } from './WorkspaceBindingPicker';
 
 export type SubagentProgress = {
   call_id: string;
@@ -130,6 +131,12 @@ function SubagentCardGroup({ tasks, live }: { tasks: SubagentProgress[]; live?: 
 export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecided, onSessionChange, initialInput, onInitialInputConsumed, agentSessionId, agentName }: ChatPanelProps) {
   const [sessionId, setSessionId] = useState<string>(() => agentSessionId || localStorage.getItem('conveyor-chat-session') || '');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [workspaceBinding, setWorkspaceBinding] = useState<WorkspaceBinding>({
+    workspace_path: '',
+    workspace_status: '',
+    github_repo: '',
+    workspace_source: '',
+  });
   const draftKey = `conveyor-chat-draft:v1:${agentSessionId || 'free-chat'}`;
   const [input, setInput] = useState(() => {
     try { return (sessionStorage.getItem(draftKey) || '').slice(0, 8000); }
@@ -189,6 +196,12 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
       }
       const data = await res.json();
       if (version !== historyVersionRef.current) return;
+      setWorkspaceBinding({
+        workspace_path: String(data.workspace_path || ''),
+        workspace_status: (data.workspace_status || '') as WorkspaceBinding['workspace_status'],
+        github_repo: String(data.github_repo || ''),
+        workspace_source: String(data.workspace_source || ''),
+      });
       if (Array.isArray(data.messages)) {
         setMessages(
           (data.messages as HistoryMessage[]).map((m, idx) => {
@@ -263,6 +276,12 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
     setInput('');
     localStorage.removeItem('conveyor-chat-session');
     setMessages([]);
+    setWorkspaceBinding({
+      workspace_path: '',
+      workspace_status: '',
+      github_repo: '',
+      workspace_source: '',
+    });
     setStreamingDelta('');
     setStatusText('');
     setSubagents([]);
@@ -514,6 +533,30 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
           setShowLatest(!followStreamRef.current);
         }}>
         <div ref={contentRef} className="chat-stream-content">
+        {(messages.length > 0 || Boolean(streamingDelta)) && (
+          <WorkspaceBindingPicker
+            token={token}
+            sessionId={sessionId}
+            chatMode={!agentSessionId}
+            binding={workspaceBinding}
+            welcomeMode={false}
+            onBound={next => {
+              setWorkspaceBinding({
+                workspace_path: next.workspace_path,
+                workspace_status: next.workspace_status,
+                github_repo: next.github_repo,
+                workspace_source: next.workspace_source,
+              });
+              if (next.session_id && next.session_id !== sessionId) {
+                setSessionId(next.session_id);
+                if (!agentSessionId) localStorage.setItem('conveyor-chat-session', next.session_id);
+                onSessionChange?.(next.session_id);
+              } else {
+                onSessionChange?.(sessionId);
+              }
+            }}
+          />
+        )}
         {messages.length === 0 && !streamingDelta && (
           <div className="welcome-state">
             <div className="brand-mark">C</div>
@@ -521,6 +564,28 @@ export function ChatPanel({ token, active = true, onPrepareTask, onApprovalDecid
             <p>{agentName
               ? 'This is the one conversation with this agent. Ask it something, or give it a task.'
               : 'Direct chat tier answering in seconds without Codex. READ tools run automatically; WRITE tools require approval.'}</p>
+            <WorkspaceBindingPicker
+              token={token}
+              sessionId={sessionId}
+              chatMode={!agentSessionId}
+              binding={workspaceBinding}
+              welcomeMode={true}
+              onBound={next => {
+                setWorkspaceBinding({
+                  workspace_path: next.workspace_path,
+                  workspace_status: next.workspace_status,
+                  github_repo: next.github_repo,
+                  workspace_source: next.workspace_source,
+                });
+                if (next.session_id && next.session_id !== sessionId) {
+                  setSessionId(next.session_id);
+                  if (!agentSessionId) localStorage.setItem('conveyor-chat-session', next.session_id);
+                  onSessionChange?.(next.session_id);
+                } else {
+                  onSessionChange?.(sessionId);
+                }
+              }}
+            />
           </div>
         )}
 

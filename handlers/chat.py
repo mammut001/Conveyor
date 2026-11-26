@@ -314,7 +314,7 @@ def reset(
 def system_prompt(
     settings: "Settings", *, has_evidence: bool, can_search: bool = False, worktree_info: str = "", tools_enabled: bool = False,
     operator_id: str = "", memory_query: str = "", memory_allowed: bool = True, active_skill: str = "",
-    agent_name: str = "", agent_instructions: str = "",
+    agent_name: str = "", agent_instructions: str = "", workspace_context: str = "",
 ) -> str:
     from config import load_operator_profile
 
@@ -408,10 +408,12 @@ def system_prompt(
             f'In this conversation you are the agent "{agent_name}". The operator gave it these '
             f"standing instructions:\n{agent_instructions}\n"
         )
+    workspace_section = f"{workspace_context}\n" if workspace_context else ""
     return (
         f"You are Conveyor's chat layer for {name}, its single operator. Today is {today}.\n"
         f"Reply in the operator's language ({language}), style: {style}. Keep answers chat-sized.\n"
         f"{agent_section}"
+        f"{workspace_section}"
         f"{grounding}"
         f"{tool_section}"
         f"{memory_section}"
@@ -678,6 +680,8 @@ async def ask_chat(
 
     from agents import instructions_for_chat
     agent_name, agent_instructions = instructions_for_chat(settings, msg.channel, msg.chat_id)
+    from github_workspace import workspace_prompt_block
+    workspace_context = workspace_prompt_block(settings, msg.channel, msg.chat_id).strip()
     from personal_tools.long_term_memory import owner_for_chat as _owner_for_chat
     _memory_owner = _owner_for_chat(settings, msg.operator_id, msg.channel, msg.chat_id)
 
@@ -695,6 +699,7 @@ async def ask_chat(
                 active_skill=active_skill_block,
                 agent_name=agent_name,
                 agent_instructions=agent_instructions,
+                workspace_context=workspace_context,
             )}]
             + past
             + [{"role": "user", "content": content}]

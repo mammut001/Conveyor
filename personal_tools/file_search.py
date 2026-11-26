@@ -67,7 +67,16 @@ def _get_allowed_roots(settings: Settings) -> list[Path]:
             root_str = root_str.strip()
             if root_str:
                 roots.append(Path(root_str).expanduser().resolve())
-    
+
+    # Include bound session / agent workspaces
+    try:
+        import agents
+        for ws in agents.workspace_roots(settings):
+            if ws not in roots:
+                roots.append(ws)
+    except Exception:
+        pass
+
     return roots
 
 

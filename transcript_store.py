@@ -89,6 +89,9 @@ class TranscriptStore:
                         operator_id TEXT,
                         source_chat_id TEXT,
                         title TEXT NOT NULL,
+                        workspace_path TEXT NOT NULL DEFAULT '',
+                        github_repo TEXT NOT NULL DEFAULT '',
+                        workspace_source TEXT NOT NULL DEFAULT '',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
                         archived INTEGER NOT NULL DEFAULT 0
@@ -113,6 +116,15 @@ class TranscriptStore:
                         ON session_messages(job_id, created_at);
                     """
                 )
+                existing_cols = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+                }
+                for col_name in ("workspace_path", "github_repo", "workspace_source"):
+                    if col_name not in existing_cols:
+                        conn.execute(
+                            f"ALTER TABLE sessions ADD COLUMN {col_name} TEXT NOT NULL DEFAULT ''"
+                        )
         finally:
             conn.close()
 
@@ -124,30 +136,129 @@ class TranscriptStore:
         operator_id: str | None = None,
         source_chat_id: str | None = None,
         title: str | None = None,
+        workspace_path: str | None = None,
+        github_repo: str | None = None,
+        workspace_source: str | None = None,
     ) -> dict[str, Any]:
         if not session_id:
             raise ValueError("session_id is required")
         now = _utc_now()
         safe_title = truncate(redact_text(title or "New session"), 120)
+        ws_val = str(workspace_path or "").strip() if workspace_path is not None else ""
+        gh_val = str(github_repo or "").strip() if github_repo is not None else ""
+        src_val = str(workspace_source or "").strip() if workspace_source is not None else ""
         conn = self._connect()
         try:
             with conn:
                 conn.execute(
                     """INSERT INTO sessions
-                       (id, channel, operator_id, source_chat_id, title, created_at, updated_at, archived)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                       (id, channel, operator_id, source_chat_id, title,
+                        workspace_path, github_repo, workspace_source,
+                        created_at, updated_at, archived)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
                        ON CONFLICT(id) DO UPDATE SET
                          channel = COALESCE(excluded.channel, sessions.channel),
                          operator_id = COALESCE(excluded.operator_id, sessions.operator_id),
                          source_chat_id = COALESCE(excluded.source_chat_id, sessions.source_chat_id),
+                         title = CASE
+                           WHEN sessions.title = 'New session' AND excluded.title != 'New session'
+                           THEN excluded.title
+                           ELSE sessions.title
+                         END,
+                         workspace_path = CASE
+                           WHEN ? = 1 THEN excluded.workspace_path
+                           ELSE sessions.workspace_path
+                         END,
+                         github_repo = CASE
+                           WHEN ? = 1 THEN excluded.github_repo
+                           ELSE sessions.github_repo
+                         END,
+                         workspace_source = CASE
+                           WHEN ? = 1 THEN excluded.workspace_source
+                           ELSE sessions.workspace_source
+                         END,
                          archived = 0,
                          updated_at = excluded.updated_at""",
-                    (session_id, channel, operator_id, source_chat_id, safe_title, now, now),
+                    (
+                        session_id,
+                        channel,
+                        operator_id,
+                        source_chat_id,
+                        safe_title,
+                        ws_val,
+                        gh_val,
+                        src_val,
+                        now,
+                        now,
+                        1 if workspace_path is not None else 0,
+                        1 if github_repo is not None else 0,
+                        1 if workspace_source is not None else 0,
+                    ),
                 )
             row = conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone()
             return dict(row)
         finally:
             conn.close()
+
+    def bind_workspace(
+        self,
+        session_id: str,
+        *,
+        workspace_path: str = "",
+        github_repo: str = "",
+        workspace_source: str = "",
+        channel: str | None = None,
+        operator_id: str | None = None,
+        source_chat_id: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        """Bind or clear a workspace folder / GitHub repository on a session."""
+        return self.ensure_session(
+            session_id,
+            channel=channel,
+            operator_id=operator_id,
+            source_chat_id=source_chat_id,
+            title=title,
+            workspace_path=workspace_path,
+            github_repo=github_repo,
+            workspace_source=workspace_source,
+        )
+
+    def session_for_chat(self, channel: str, chat_id: str) -> dict[str, Any] | None:
+        """Look up the active session row for `(channel, chat_id)`."""
+        if not channel or not chat_id:
+            return None
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                """SELECT * FROM sessions
+                   WHERE archived = 0
+                     AND (id = ? OR (channel = ? AND source_chat_id = ?))
+                   ORDER BY updated_at DESC LIMIT 1""",
+                (chat_id, channel, chat_id),
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+    def workspace_roots(self) -> set[Path]:
+        """All bound workspace_path directories across active sessions."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT DISTINCT workspace_path FROM sessions WHERE archived = 0 AND workspace_path != ''"
+            ).fetchall()
+        finally:
+            conn.close()
+        roots: set[Path] = set()
+        for row in rows:
+            raw = str(row["workspace_path"] or "").strip()
+            if raw:
+                try:
+                    roots.add(Path(raw).expanduser().resolve())
+                except OSError:
+                    continue
+        return roots
 
     def append(
         self,

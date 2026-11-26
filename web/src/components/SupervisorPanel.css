@@ -1,0 +1,22 @@
+.supervisor-panel { overflow-y: auto; min-height: 0; padding: 24px max(22px, calc((100% - 780px) / 2)); display: grid; gap: 20px; align-content: start; }
+.supervisor-panel h3 { margin: 0 0 10px; font-size: 16px; }
+.supervisor-panel p { margin: 5px 0; line-height: 1.5; overflow-wrap: anywhere; }
+.supervisor-form { display: grid; gap: 12px; }
+.supervisor-form label { display: grid; gap: 5px; color: var(--ink, #172033); font-size: 13px; font-weight: 600; }
+.supervisor-form input, .supervisor-form textarea { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid var(--line, #d5d9e0); border-radius: 9px; background: #fff; color: var(--ink, #172033); font: inherit; font-weight: 400; }
+.supervisor-form textarea { resize: vertical; }
+.supervisor-form details { display: grid; gap: 10px; }
+.supervisor-form details label { margin-top: 10px; }
+.supervisor-form details small { display: block; margin-top: 8px; color: var(--muted, #667085); line-height: 1.5; }
+.supervisor-form button { justify-self: start; padding: 9px 15px; border: 1px solid; border-radius: 8px; cursor: pointer; }
+.supervisor-form button:disabled { opacity: .5; cursor: default; }
+.supervisor-task-list { display: grid; gap: 6px; }
+.supervisor-task-list button { display: flex; justify-content: space-between; gap: 12px; text-align: left; padding: 10px 12px; border: 1px solid var(--line, #d5d9e0); border-radius: 8px; background: #fff; color: inherit; cursor: pointer; }
+.supervisor-task-list button.selected { background: #f1f5f9; border-color: #b8c6d9; }
+.supervisor-task-list strong { overflow-wrap: anywhere; }
+.supervisor-task-list span { flex-shrink: 0; color: var(--muted, #667085); }
+.supervisor-detail { padding-top: 16px; border-top: 1px solid var(--line, #d5d9e0); }
+.supervisor-detail details { margin-top: 10px; }
+.supervisor-detail summary, .supervisor-form summary { cursor: pointer; }
+.supervisor-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow-y: auto; padding: 10px; background: #f8fafc; border-radius: 8px; font-size: 12px; }
+@media (max-width: 760px) { .supervisor-panel { padding: 18px 13px; } }

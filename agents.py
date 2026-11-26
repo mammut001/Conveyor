@@ -95,7 +95,15 @@ def computer_target_for_chat(settings: Any, channel: str, chat_id: str) -> dict[
 
 
 def workspace_for_chat(settings: Any, channel: str, chat_id: str) -> Path | None:
-    """The git repository an agent's jobs run in, or None for the default one."""
+    """The git repository a conversation's jobs run in, or None for the default one."""
+    if settings is not None and getattr(settings, "codex_memory_root", None):
+        try:
+            from transcript_store import get_transcript_store
+            session = get_transcript_store(settings).session_for_chat(channel, chat_id)
+            if session and session.get("workspace_path"):
+                return Path(str(session["workspace_path"]))
+        except Exception:
+            pass
     try:
         agent = agent_for_chat(settings, channel, chat_id)
     except (OSError, sqlite3.Error):
@@ -105,12 +113,37 @@ def workspace_for_chat(settings: Any, channel: str, chat_id: str) -> Path | None
     return Path(agent["workspace_path"])
 
 
+def github_repo_for_chat(settings: Any, channel: str, chat_id: str) -> str:
+    """The GitHub repository (`owner/repo`) bound to a conversation, or empty string."""
+    if settings is not None and getattr(settings, "codex_memory_root", None):
+        try:
+            from transcript_store import get_transcript_store
+            session = get_transcript_store(settings).session_for_chat(channel, chat_id)
+            if session and session.get("github_repo"):
+                return str(session["github_repo"])
+        except Exception:
+            pass
+    try:
+        agent = agent_for_chat(settings, channel, chat_id)
+    except (OSError, sqlite3.Error):
+        return ""
+    if not agent or not agent.get("github_repo"):
+        return ""
+    return str(agent["github_repo"])
+
+
 def workspace_roots(settings: Any) -> set[Path]:
-    """Every agent's project folder (resolved). The runner only ever applies
-    changes into the configured workspace or one of these."""
-    if not enabled(settings):
-        return set()
+    """Every bound session or agent project folder (resolved). The runner only
+    ever applies changes into the configured workspace or one of these."""
     roots: set[Path] = set()
+    if settings is not None and getattr(settings, "codex_memory_root", None):
+        try:
+            from transcript_store import get_transcript_store
+            roots |= get_transcript_store(settings).workspace_roots()
+        except Exception:
+            pass
+    if not enabled(settings):
+        return roots
     try:
         for agent in AgentStore(settings).list():
             if agent.get("workspace_path"):
@@ -119,7 +152,7 @@ def workspace_roots(settings: Any) -> set[Path]:
                 except OSError:
                     continue
     except (OSError, sqlite3.Error):
-        return set()
+        return roots
     return roots
 
 
@@ -170,12 +203,23 @@ class AgentStore:
                            color TEXT NOT NULL,
                            instructions TEXT NOT NULL DEFAULT '',
                            workspace_path TEXT NOT NULL DEFAULT '',
+                           github_repo TEXT NOT NULL DEFAULT '',
+                           workspace_source TEXT NOT NULL DEFAULT '',
                            display INTEGER,
                            created_at REAL NOT NULL,
                            updated_at REAL NOT NULL,
                            archived INTEGER NOT NULL DEFAULT 0
                        )"""
                 )
+                existing_cols = {
+                    row["name"]
+                    for row in conn.execute("PRAGMA table_info(agents)").fetchall()
+                }
+                for col_name in ("github_repo", "workspace_source"):
+                    if col_name not in existing_cols:
+                        conn.execute(
+                            f"ALTER TABLE agents ADD COLUMN {col_name} TEXT NOT NULL DEFAULT ''"
+                        )
                 now = time.time()
                 conn.execute(
                     """INSERT OR IGNORE INTO agents (id, name, color, created_at, updated_at)
@@ -190,6 +234,8 @@ class AgentStore:
         if row is None:
             return None
         agent = dict(row)
+        agent.setdefault("github_repo", "")
+        agent.setdefault("workspace_source", "")
         agent["archived"] = bool(agent["archived"])
         agent["is_default"] = agent["id"] == DEFAULT_AGENT_ID
         agent["session_id"] = session_id_for(agent["id"])
@@ -233,6 +279,18 @@ class AgentStore:
                     raise AgentError("workspace_path must be an absolute path")
                 workspace = str(Path(workspace))
             fields["workspace_path"] = workspace
+        if "github_repo" in payload:
+            github_repo = str(payload.get("github_repo") or "").strip()
+            if github_repo:
+                from github_workspace import is_valid_repo_full_name
+                if not is_valid_repo_full_name(github_repo):
+                    raise AgentError("github_repo must look like owner/repo")
+            fields["github_repo"] = github_repo
+        if "workspace_source" in payload:
+            ws_source = str(payload.get("workspace_source") or "").strip()
+            if ws_source not in ("", "folder", "github"):
+                raise AgentError("workspace_source must be '', 'folder', or 'github'")
+            fields["workspace_source"] = ws_source
         if "color" in payload:
             color = str(payload.get("color") or "").strip()
             if not _COLOR_RE.match(color):
@@ -252,10 +310,21 @@ class AgentStore:
                     raise AgentError(f"at most {MAX_AGENTS} agents")
                 color = fields.get("color") or COLORS[count % len(COLORS)]
                 conn.execute(
-                    """INSERT INTO agents (id, name, color, instructions, workspace_path, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (agent_id, fields["name"], color, fields.get("instructions", ""),
-                     fields.get("workspace_path", ""), now, now),
+                    """INSERT INTO agents (
+                           id, name, color, instructions, workspace_path,
+                           github_repo, workspace_source, created_at, updated_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        agent_id,
+                        fields["name"],
+                        color,
+                        fields.get("instructions", ""),
+                        fields.get("workspace_path", ""),
+                        fields.get("github_repo", ""),
+                        fields.get("workspace_source", ""),
+                        now,
+                        now,
+                    ),
                 )
         finally:
             conn.close()

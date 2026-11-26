@@ -86,6 +86,30 @@ class WebControl:
             item["runtime"] = runtime
         return item
 
+    def _enrich_session_workspace(self, session: dict[str, Any]) -> dict[str, Any]:
+        from github_workspace import workspace_status_for_path
+        ws = str(session.get("workspace_path") or "").strip()
+        gh = str(session.get("github_repo") or "").strip()
+        src = str(session.get("workspace_source") or "").strip()
+        if not ws and not gh:
+            import agents
+            source_chat_id = str(session.get("source_chat_id") or "")
+            channel = str(session.get("channel") or "")
+            if channel and source_chat_id and agents.enabled(self.settings):
+                try:
+                    agent = agents.agent_for_chat(self.settings, channel, source_chat_id)
+                    if agent:
+                        ws = str(agent.get("workspace_path") or "").strip()
+                        gh = str(agent.get("github_repo") or "").strip()
+                        src = str(agent.get("workspace_source") or "").strip()
+                except Exception:
+                    pass
+        session["workspace_path"] = ws
+        session["github_repo"] = gh
+        session["workspace_source"] = src or ("github" if gh else ("folder" if ws else ""))
+        session["workspace_status"] = workspace_status_for_path(ws) if ws else ""
+        return session
+
     def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
         transcript_sessions = get_transcript_store(self.settings).list_sessions(limit)
         jobs = self.queue.list_jobs(500)
@@ -107,6 +131,7 @@ class WebControl:
                     str(session.get("source_chat_id") or ""),
                 )
                 session["latest_job"] = latest_by_session.get(key)
+                self._enrich_session_workspace(session)
             return transcript_sessions
 
         # Backward-compatible projection for installations that have not yet
@@ -125,6 +150,10 @@ class WebControl:
                 "message_count": 0,
                 "latest_job": None,
                 "title": job.get("prompt_preview") or "Session",
+                "workspace_path": "",
+                "workspace_status": "",
+                "github_repo": "",
+                "workspace_source": "",
             })
             session["job_count"] += 1
             if session["latest_job"] is None:
@@ -143,11 +172,12 @@ class WebControl:
             transcript["last_activity"] = transcript.get("updated_at") or transcript.get("created_at")
             transcript["jobs"] = jobs
             transcript["job_count"] = len(jobs)
+            self._enrich_session_workspace(transcript)
             return transcript
         jobs = self.list_jobs(200, session_id=session_id)
         if not jobs:
             return self._empty_agent_session(session_id)
-        return {
+        return self._enrich_session_workspace({
             "id": session_id,
             "channel": jobs[0].get("channel"),
             "created_at": jobs[-1].get("created_at"),
@@ -155,7 +185,7 @@ class WebControl:
             "jobs": jobs,
             "messages": [],
             "job_count": len(jobs),
-        }
+        })
 
     def _empty_agent_session(self, session_id: str) -> dict[str, Any] | None:
         """An agent's conversation exists from the moment the agent does."""
@@ -165,12 +195,15 @@ class WebControl:
             return None
         for agent in agents.AgentStore(self.settings).list():
             if agent["session_id"] == session_id:
-                return {
+                return self._enrich_session_workspace({
                     "id": session_id, "channel": agents.WEB_CHANNEL, "operator_id": agents.WEB_OPERATOR,
                     "source_chat_id": agents.chat_id_for(agent["id"]), "title": agent["name"],
+                    "workspace_path": agent.get("workspace_path") or "",
+                    "github_repo": agent.get("github_repo") or "",
+                    "workspace_source": agent.get("workspace_source") or "",
                     "created_at": None, "last_activity": None,
                     "jobs": [], "messages": [], "job_count": 0, "message_count": 0,
-                }
+                })
         return None
 
     def resolve_session_identity(self, session_id: str) -> tuple[str, str, str] | None:
@@ -645,6 +678,8 @@ class WebControl:
                 "teammate": bool(getattr(self.settings, "teammate_enabled", True)),
                 "live_screen": bool(getattr(self.settings, "live_screen_enabled", False)),
                 "agents": getattr(self.settings, "agents_enabled", False) is True,
+                "agent_supervisor": bool(getattr(self.settings, "agent_supervisor_enabled", False)
+                                         or getattr(self.settings, "antigravity_supervisor_enabled", False)),
             },
         }
 
@@ -695,10 +730,137 @@ class WebControl:
     def save_agent(self, agent_id: str | None, payload: dict[str, Any]) -> dict[str, Any] | None:
         """Create (agent_id None) or update an agent; None when it does not exist."""
         import agents
+        from github_workspace import detect_git_remote_repo, ensure_github_repo_workspace
+
+        body = dict(payload or {})
+        gh_repo = str(body.get("github_repo") or "").strip()
+        ws_path = str(body.get("workspace_path") or "").strip()
+        ws_source = str(body.get("workspace_source") or "").strip()
+        if gh_repo and (ws_source == "github" or not ws_path):
+            resolved = ensure_github_repo_workspace(self.settings, gh_repo, preferred_path=ws_path)
+            body["workspace_path"] = resolved["workspace_path"]
+            body["github_repo"] = resolved["full_name"]
+            body["workspace_source"] = "github"
+        elif ws_path:
+            detected_gh = detect_git_remote_repo(Path(ws_path))
+            if detected_gh and not gh_repo:
+                body["github_repo"] = detected_gh
+            if not ws_source:
+                body["workspace_source"] = "folder"
 
         store = agents.AgentStore(self.settings)
-        agent = store.create(payload) if agent_id is None else store.update(agent_id, payload)
+        agent = store.create(body) if agent_id is None else store.update(agent_id, body)
         return self._agent_view(agent, {}, set()) if agent else None
+
+    def github_repos(self, *, query: str = "", limit: int = 100, refresh: bool = False) -> dict[str, Any]:
+        """List repositories from the operator's `gh`-connected GitHub account."""
+        from github_workspace import list_gh_repos
+        return list_gh_repos(self.settings, limit=limit, query=query, refresh=refresh)
+
+    def local_workspaces(self) -> dict[str, Any]:
+        """List local git repositories and default workspace on the host."""
+        from github_workspace import discover_local_git_repos
+        default_ws = str(getattr(self.settings, "codex_workspace_root", "") or "")
+        items = discover_local_git_repos(self.settings)
+        return {
+            "ok": True,
+            "default_workspace": default_ws,
+            "repos": items,
+            "workspaces": items,
+        }
+
+    def bind_session_workspace(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Bind a conversation session (and its agent, if any) to a local folder or GitHub repo."""
+        from github_workspace import (
+            ensure_github_repo_workspace,
+            validate_local_folder,
+            workspace_status_for_path,
+        )
+        from web_chat import WEB_CHAT_PREFIX, resolve_or_create_session
+
+        requested_session_id = str(payload.get("session_id") or "").strip()
+        chat_mode = bool(payload.get("chat_mode", True))
+        prefix = WEB_CHAT_PREFIX if chat_mode else "web-"
+        session_info = resolve_or_create_session(self, requested_session_id, new_prefix=prefix)
+        if not session_info:
+            raise ValueError("invalid session_id")
+        channel, operator_id, source_chat_id, durable_session_id = session_info
+
+        source = str(payload.get("source") or "").strip().lower()
+        if source == "local":
+            source = "folder"
+        if source not in ("github", "folder", "clear"):
+            raise ValueError("source must be 'github', 'folder'/'local', or 'clear'")
+
+        cloned_now = False
+        if source == "github":
+            github_repo = str(payload.get("github_repo") or "").strip()
+            preferred_path = str(payload.get("workspace_path") or "").strip()
+            resolved = ensure_github_repo_workspace(
+                self.settings,
+                github_repo,
+                preferred_path=preferred_path,
+            )
+            bound_path = resolved["workspace_path"]
+            bound_repo = resolved["full_name"]
+            bound_source = "github"
+            cloned_now = bool(resolved.get("cloned_now"))
+            title_hint = f"{bound_repo}"
+        elif source == "folder":
+            raw_path = str(payload.get("workspace_path") or "").strip()
+            resolved = validate_local_folder(raw_path)
+            bound_path = resolved["workspace_path"]
+            bound_repo = resolved.get("github_repo") or ""
+            bound_source = "folder"
+            title_hint = resolved.get("name") or Path(bound_path).name
+        else:
+            bound_path = ""
+            bound_repo = ""
+            bound_source = ""
+            title_hint = None
+
+        session_row = get_transcript_store(self.settings).bind_workspace(
+            durable_session_id,
+            workspace_path=bound_path,
+            github_repo=bound_repo,
+            workspace_source=bound_source,
+            channel=channel,
+            operator_id=operator_id,
+            source_chat_id=source_chat_id,
+            title=title_hint,
+        )
+        self._enrich_session_workspace(session_row)
+
+        # If this session belongs to a named agent, keep the agent's workspace in sync too.
+        import agents
+        if (
+            channel == agents.WEB_CHANNEL
+            and source_chat_id.startswith(agents.AGENT_CHAT_PREFIX)
+            and agents.enabled(self.settings)
+        ):
+            agent_id = source_chat_id[len(agents.AGENT_CHAT_PREFIX):]
+            try:
+                agents.AgentStore(self.settings).update(
+                    agent_id,
+                    {
+                        "workspace_path": bound_path,
+                        "github_repo": bound_repo,
+                        "workspace_source": bound_source,
+                    },
+                )
+            except Exception:
+                pass
+
+        return {
+            "ok": True,
+            "session_id": durable_session_id,
+            "workspace_path": bound_path,
+            "workspace_status": workspace_status_for_path(bound_path) if bound_path else "",
+            "github_repo": bound_repo,
+            "workspace_source": bound_source,
+            "cloned_now": cloned_now,
+            "session": session_row,
+        }
 
     def archive_agent(self, agent_id: str) -> bool:
         import agents
