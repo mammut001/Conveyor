@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from conveyor.core.sqlite_wal import enable_wal
 from conveyor.core.transcript_store import session_identity
 
 ACTIVE = "active"
@@ -109,6 +110,8 @@ class RefinementStore:
     def _init_db(self) -> None:
         conn = self._connect()
         try:
+            # Shared by bot, feishu_bot and web: readers must not wait on a writer.
+            enable_wal(conn)
             with conn:
                 conn.executescript(
                     """

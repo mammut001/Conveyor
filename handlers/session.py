@@ -9,6 +9,7 @@ transcript is mirrored best-effort for the Web Console and future clients.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -173,6 +174,26 @@ def append_turn(
         logger.debug("session append_turn failed", exc_info=True)
     if mirror_transcript:
         _mirror_transcript(settings, msg, user_text, assistant_text, kind=kind)
+
+
+async def append_turn_async(
+    settings: Settings,
+    msg: InboundMessage,
+    user_text: str,
+    assistant_text: str,
+    *,
+    kind: str = "codex",
+    mirror_transcript: bool = True,
+) -> None:
+    """``append_turn`` for async handlers, run in a worker thread.
+
+    It takes a file lock (up to 10 s) and writes the shared SQLite
+    transcript; on the event loop either would stall every other chat.
+    """
+    await asyncio.to_thread(
+        append_turn, settings, msg, user_text, assistant_text,
+        kind=kind, mirror_transcript=mirror_transcript,
+    )
 
 
 def get_recent_turns(

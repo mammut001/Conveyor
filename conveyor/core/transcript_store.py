@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import sqlite3
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from conveyor.core.redaction import redact_text, truncate
+from conveyor.core.sqlite_wal import enable_wal
 from security.secrets import is_sensitive_key
 
 logger = logging.getLogger("transcript_store")
@@ -171,6 +173,8 @@ class TranscriptStore:
     def _init_db(self) -> None:
         conn = self._connect()
         try:
+            # Shared by bot, feishu_bot and web: readers must not wait on a writer.
+            enable_wal(conn)
             with conn:
                 conn.executescript(
                     """
@@ -528,9 +532,37 @@ class TranscriptStore:
                     except sqlite3.OperationalError:
                         pass
                 cursor = conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
-                return cursor.rowcount > 0
+                deleted = cursor.rowcount > 0
         finally:
             conn.close()
+        # WAL keeps the deleted text in the -wal file until a checkpoint runs.
+        self._checkpoint_after_delete()
+        return deleted
+
+    def _checkpoint_after_delete(self) -> None:
+        """Best-effort TRUNCATE checkpoint, run only after the delete has committed."""
+        attempts = 3
+        for attempt in range(attempts):
+            conn = None
+            try:
+                conn = self._connect()
+                # Short busy wait per try; the retries below supply the backoff.
+                conn.execute("PRAGMA busy_timeout = 150")
+                busy, _, _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            except sqlite3.Error as exc:
+                logger.warning("WAL checkpoint after session delete failed: %s", exc)
+                return
+            finally:
+                if conn is not None:
+                    conn.close()
+            if not busy:
+                return
+            if attempt + 1 < attempts:
+                time.sleep(0.05)
+        logger.warning(
+            "WAL checkpoint after session delete stayed busy; deleted text may remain in %s-wal",
+            self.db_path,
+        )
 
     @staticmethod
     def _session_matches_filters(

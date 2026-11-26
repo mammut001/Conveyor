@@ -219,9 +219,9 @@ class FeishuOutbound:
                 "falling back to image message dict"
             )
             try:
-                import aiofiles
-                async with aiofiles.open(image_path, "rb") as f:
-                    image_bytes = await f.read()
+                import asyncio
+                from pathlib import Path
+                image_bytes = await asyncio.to_thread(Path(image_path).read_bytes)
                 img_msg = {"image": image_bytes, "caption": caption}
                 await self._channel.send(chat_id, img_msg)
             except Exception as fallback_exc:
