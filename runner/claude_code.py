@@ -113,6 +113,8 @@ class ClaudeCodeBackend(CodexRunner):
             stderr=asyncio.subprocess.PIPE,
             env=env,
             limit=MAX_CLAUDE_STREAM_LINE,
+            # Own process group, so a timeout or cancel can stop what it started.
+            start_new_session=True,
         )
         job.process = process
         assert process.stdin is not None
@@ -200,15 +202,13 @@ class ClaudeCodeBackend(CodexRunner):
 
         stdout_task = asyncio.create_task(read_stdout())
         stderr_task = asyncio.create_task(read_stderr())
+        from runner.process_group import finish_readers, stop_group, wait_exit
         try:
-            job.return_code = await asyncio.wait_for(
-                process.wait(), timeout=self.settings.codex_timeout_seconds
-            )
+            job.return_code = await wait_exit(process, timeout=self.settings.codex_timeout_seconds)
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
-            process.kill()
-            job.return_code = await process.wait()
-        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+            job.return_code = await stop_group(process)
+        await finish_readers(process, (stdout_task, stderr_task))
         job.process = None
 
         if final_text:

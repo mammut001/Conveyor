@@ -147,6 +147,8 @@ class CliBackend(CodexRunner):
             stderr=asyncio.subprocess.STDOUT,
             env=env,
             limit=MAX_STREAM_LINE,
+            # Own process group, so a timeout or cancel can stop what it started.
+            start_new_session=True,
         )
         job.process = process
         assert process.stdout is not None
@@ -190,14 +192,13 @@ class CliBackend(CodexRunner):
                             await on_progress(job.last_event)
 
         reader = asyncio.create_task(read_output())
+        from runner.process_group import finish_readers, stop_group, wait_exit
         try:
-            job.return_code = await asyncio.wait_for(
-                process.wait(), timeout=self.settings.codex_timeout_seconds)
+            job.return_code = await wait_exit(process, timeout=self.settings.codex_timeout_seconds)
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
-            process.kill()
-            job.return_code = await process.wait()
-        await asyncio.gather(reader, return_exceptions=True)
+            job.return_code = await stop_group(process)
+        await finish_readers(process, (reader,))
         job.process = None
 
         output = "\n".join(lines).strip()

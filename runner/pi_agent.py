@@ -1143,6 +1143,8 @@ class PiBackend(CodexRunner):
             stderr=asyncio.subprocess.PIPE,
             env=env,
             limit=MAX_PI_STREAM_LINE,
+            # Own process group, so a timeout or cancel can stop what it started.
+            start_new_session=True,
         )
         job.process = process
         assert process.stdin is not None
@@ -1389,14 +1391,13 @@ class PiBackend(CodexRunner):
 
         stdout_task = asyncio.create_task(read_stdout())
         stderr_task = asyncio.create_task(read_stderr())
+        from runner.process_group import finish_readers, wait_exit
         try:
-            job.return_code = await asyncio.wait_for(
-                process.wait(), timeout=self.settings.codex_timeout_seconds
-            )
+            job.return_code = await wait_exit(process, timeout=self.settings.codex_timeout_seconds)
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
             job.return_code = await self._stop_pi(process)
-        stream_results = await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        stream_results = await finish_readers(process, (stdout_task, stderr_task))
         job.process = None
 
         if not job.error:
@@ -1450,21 +1451,11 @@ class PiBackend(CodexRunner):
         pi runs each bash tool call in its own detached process group and kills
         those groups on SIGTERM. SIGKILL cannot be handled, so killing pi
         outright left a hung build or test running on the server forever.
+        pi's own group (it is started in a new session) is signalled, so
+        anything else it started is stopped too.
         """
-        if process.returncode is None:
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                return await asyncio.wait_for(process.wait(), PI_TERMINATE_GRACE_SECONDS)
-            except asyncio.TimeoutError:
-                pass
-            try:
-                process.kill()
-            except ProcessLookupError:
-                pass
-        return await process.wait()
+        from runner.process_group import stop_group
+        return await stop_group(process, grace=PI_TERMINATE_GRACE_SECONDS)
 
     @staticmethod
     def _usage_from_event(event: dict[str, Any]) -> dict[str, int] | None:

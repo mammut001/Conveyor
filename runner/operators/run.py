@@ -26,6 +26,7 @@ from uuid import uuid4
 from runner._paths import RUNNER_HOME
 from runner.attachments import prompt_images
 from runner.file_lock import file_lock, async_gate
+from runner.process_group import finish_readers, stop_group, wait_exit
 from runner.types import Job, JobMode, JobState, ProgressCallback
 from conveyor.core.redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
@@ -153,30 +154,34 @@ async def start(
             raise RuntimeError(f"Job {self.current_job.id} is already running.")
         
         lock_path = self.settings.codex_task_root / "locks" / "run.lock"
-        with file_lock(lock_path):
-            # Check other running jobs across processes
-            # Another process may be running a job in this lane; other lanes
-            # work in other repositories and do not block this one.
-            for record in self.job_records(100, lane=getattr(self, "lane", "default")):
-                if record.state == "running":
-                    raise RuntimeError(f"Job {record.id} is already running.")
+        # The gate first, as in _run_job: another lane may hold run.lock
+        # across an await, and a blocking flock here would stall the event
+        # loop it needs to release it. Order: self._lock, gate, file lock.
+        async with async_gate("run"):
+            with file_lock(lock_path):
+                # Check other running jobs across processes
+                # Another process may be running a job in this lane; other lanes
+                # work in other repositories and do not block this one.
+                for record in self.job_records(100, lane=getattr(self, "lane", "default")):
+                    if record.state == "running":
+                        raise RuntimeError(f"Job {record.id} is already running.")
 
-            sandbox = mode.sandbox
-            job = Job(id=self._new_job_id(), mode=mode, prompt=prompt, sandbox=sandbox)
-            job.workspace_root = workspace_root
-            job.destructive_confirmed = bool(destructive_confirmed)
-            job.lane = getattr(self, "lane", "default")
-            job.max_attempts = 1 + len(self.settings.codex_retry_429_delays_seconds)
-            
-            # Write initial metadata synchronously so other processes see it immediately
-            logs_dir = self.settings.codex_task_root / "logs" / job.id
-            logs_dir.mkdir(parents=True, exist_ok=True)
-            job.metadata_path = logs_dir / "job.json"
-            self._write_job_metadata(job)
-            
-            self.current_job = job
-            self.last_job = job
-            
+                sandbox = mode.sandbox
+                job = Job(id=self._new_job_id(), mode=mode, prompt=prompt, sandbox=sandbox)
+                job.workspace_root = workspace_root
+                job.destructive_confirmed = bool(destructive_confirmed)
+                job.lane = getattr(self, "lane", "default")
+                job.max_attempts = 1 + len(self.settings.codex_retry_429_delays_seconds)
+
+                # Write initial metadata synchronously so other processes see it immediately
+                logs_dir = self.settings.codex_task_root / "logs" / job.id
+                logs_dir.mkdir(parents=True, exist_ok=True)
+                job.metadata_path = logs_dir / "job.json"
+                self._write_job_metadata(job)
+
+                self.current_job = job
+                self.last_job = job
+
         spawn_background(self._run_job(job, on_progress))
         return job
 
@@ -189,11 +194,8 @@ async def cancel(self) -> str:
     job.last_event = "cancelling"
     if not job.process:
         return f"Cancellation requested for job {job.id}."
-    job.process.terminate()
-    try:
-        await asyncio.wait_for(job.process.wait(), timeout=10)
-    except asyncio.TimeoutError:
-        job.process.kill()
+    # The agent's whole process group: its children hold the output pipes.
+    await stop_group(job.process, grace=10)
     return f"Cancellation requested for job {job.id}."
 
 
@@ -366,6 +368,8 @@ async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> N
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=env,
+        # Own process group, so a timeout or cancel can stop what it started.
+        start_new_session=True,
     )
     job.process = process
     assert process.stdin is not None
@@ -377,12 +381,11 @@ async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> N
     stdout_task = asyncio.create_task(self._read_jsonl_stdout(job, process, on_progress))
     stderr_task = asyncio.create_task(self._read_stderr(job, process))
     try:
-        job.return_code = await asyncio.wait_for(process.wait(), timeout=self.settings.codex_timeout_seconds)
+        job.return_code = await wait_exit(process, timeout=self.settings.codex_timeout_seconds)
     except asyncio.TimeoutError:
         job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
-        process.kill()
-        job.return_code = await process.wait()
-    await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        job.return_code = await stop_group(process)
+    await finish_readers(process, (stdout_task, stderr_task))
     job.process = None
 
 
