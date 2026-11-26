@@ -44,6 +44,64 @@ class WalModeTest(unittest.TestCase):
             self.assertEqual(_journal_mode(path), "wal")
 
 
+class DeleteSessionScrubsWalTest(unittest.TestCase):
+    """Deleted message text must not stay readable in the .sqlite or -wal files."""
+
+    SECRET = b"canary-zeta-4417-secret"
+
+    def _seed(self, raw: str) -> Path:
+        path = Path(raw) / "state" / "job_queue.sqlite3"
+        store = TranscriptStore(path)
+        for i in range(3):
+            store.append_turn(
+                "s1",
+                f"question {i} {self.SECRET.decode()}",
+                f"answer {i} {self.SECRET.decode()}",
+                channel="web",
+                operator_id="op1",
+            )
+        return path
+
+    def _assert_secret_gone(self, path: Path) -> None:
+        for candidate in (path, Path(f"{path}-wal")):
+            if candidate.exists():
+                # assertFalse keeps the raw bytes out of the failure message.
+                self.assertFalse(self.SECRET in candidate.read_bytes(), f"secret still in {candidate.name}")
+
+    def test_delete_session_leaves_no_secret_in_db_or_wal(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = self._seed(raw)
+            # A second connection (as the web console keeps open) stops SQLite
+            # from checkpointing and removing the -wal file on the store's close.
+            other = sqlite3.connect(str(path))
+            try:
+                other.execute("SELECT COUNT(*) FROM sessions").fetchall()
+                self.assertTrue(TranscriptStore(path).delete_session("s1"))
+                self._assert_secret_gone(path)
+            finally:
+                other.close()
+
+    def test_delete_session_without_other_connections_leaves_no_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = self._seed(raw)
+            self.assertTrue(TranscriptStore(path).delete_session("s1"))
+            self._assert_secret_gone(path)
+
+    def test_delete_session_logs_warning_when_checkpoint_stays_busy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            path = self._seed(raw)
+            # An open read transaction pins the WAL, so TRUNCATE cannot finish.
+            reader = sqlite3.connect(str(path))
+            try:
+                reader.execute("BEGIN")
+                reader.execute("SELECT COUNT(*) FROM session_messages").fetchall()
+                with self.assertLogs("transcript_store", level="WARNING"):
+                    self.assertTrue(TranscriptStore(path).delete_session("s1"))
+                reader.execute("COMMIT")
+            finally:
+                reader.close()
+
+
 class AppendTurnOffLoopTest(unittest.TestCase):
     def test_append_turn_async_writes_in_a_worker_thread(self) -> None:
         from handlers import session
