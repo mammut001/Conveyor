@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 
 from conveyor.core.config import Settings, load_runtime_settings
+from conveyor.core.redaction import redact_text
 from conveyor.desktop.desktop_screenshot import capture_screenshot_once
 from conveyor.desktop.desktop_cua import build_driver
 
@@ -576,19 +577,34 @@ def poll_computer_once(settings: Settings) -> None:
 
     logger.info("Computer step claimed: %s action=%s", step_id, action.get("action"))
 
-    driver = build_driver(settings, node_id=node_id)
-    result = driver.execute(action)
+    try:
+        driver = build_driver(settings, node_id=node_id)
+        result = driver.execute(action)
+        if not isinstance(result, dict):
+            raise TypeError("driver returned a non-dict result")
+    except Exception as exc:
+        # A malformed action must fail this step, not the agent process.
+        # Only the exception type leaves this Mac; its text may quote input.
+        logger.warning(
+            "computer driver raised step_id=%s: %s",
+            step_id, redact_text(f"{type(exc).__name__}: {exc}")[:500],
+        )
+        result = {
+            "result_ok": False,
+            "error": "driver_exception",
+            "error_message": f"Driver raised {type(exc).__name__}.",
+        }
     result_ok = bool(result.get("result_ok"))
 
     if result_ok:
-        try:
-            complete_res = post_json(
-                f"{control_plane_url}/desktop/computer/task/step/complete",
-                token,
-                {"step_id": step_id, "node_id": node_id, "result": result},
-            )
-        except Exception as exc:
-            logger.info("computer complete failed step_id=%s: %s", step_id, exc)
+        complete_res = _post_report(
+            f"{control_plane_url}/desktop/computer/task/step/complete",
+            token,
+            {"step_id": step_id, "node_id": node_id, "result": result},
+            what="complete",
+            step_id=step_id,
+        )
+        if complete_res is None:
             return
         if complete_res.get("ok"):
             logger.info("Computer step completed: %s action=%s", step_id, action.get("action"))
@@ -602,19 +618,56 @@ def poll_computer_once(settings: Settings) -> None:
     error_code = result.get("error") or "computer_action_failed"
     error_message = result.get("error_message") or "Cua action failed."
     logger.info("Computer step failed: %s", error_code)
-    try:
-        post_json(
-            f"{control_plane_url}/desktop/computer/task/step/fail",
-            token,
-            {
-                "step_id": step_id,
-                "node_id": node_id,
-                "error": error_code,
-                "message": error_message,
-            },
+    fail_res = _post_report(
+        f"{control_plane_url}/desktop/computer/task/step/fail",
+        token,
+        {
+            "step_id": step_id,
+            "node_id": node_id,
+            "error": str(error_code),
+            "message": redact_text(str(error_message))[:500],
+        },
+        what="fail",
+        step_id=step_id,
+    )
+    if fail_res is not None and not fail_res.get("ok"):
+        logger.info("computer fail report rejected step_id=%s error=%s", step_id, fail_res.get("error"))
+
+
+# A step result reaches the server or the step is reported as failed. The
+# server treats a repeated complete/fail of the same step as a no-op.
+REPORT_ATTEMPTS = 3
+REPORT_BACKOFF_SECONDS = 1.0
+
+
+def _post_report(url: str, token: str, data: dict, *, what: str, step_id: str) -> dict | None:
+    """POST a step report, retrying network and 5xx failures with backoff.
+
+    Returns the server's JSON answer (also for a 4xx rejection, which is not
+    retried), or None when every attempt failed.
+    """
+    delay = REPORT_BACKOFF_SECONDS
+    for attempt in range(1, REPORT_ATTEMPTS + 1):
+        try:
+            return post_json(url, token, data)
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                try:
+                    body = json.loads(exc.read().decode("utf-8"))
+                except Exception:
+                    body = None
+                return body if isinstance(body, dict) else {"ok": False, "error": f"http_{exc.code}"}
+            reason = f"HTTP {exc.code}"
+        except (OSError, ValueError) as exc:  # URLError, timeouts, bad JSON
+            reason = type(exc).__name__
+        logger.info(
+            "computer %s report failed step_id=%s attempt=%d/%d: %s",
+            what, step_id, attempt, REPORT_ATTEMPTS, reason,
         )
-    except Exception as exc:
-        logger.info("computer fail report failed step_id=%s: %s", step_id, exc)
+        if attempt < REPORT_ATTEMPTS:
+            time.sleep(delay)
+            delay *= 2
+    return None
 
 
 def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_computer: bool = False) -> None:
@@ -665,11 +718,20 @@ def heartbeat_loop(settings: Settings, *, poll_observe: bool = False, poll_compu
             last_heartbeat = now
 
         if (poll_observe or poll_computer) and now - last_poll >= poll_interval:
+            # One failing poll must not stop the others or end the loop.
+            polls = []
             if poll_observe:
-                poll_observe_once(settings)
-                poll_upload_once(settings)
+                polls += [poll_observe_once, poll_upload_once]
             if poll_computer:
-                poll_computer_once(settings)
+                polls.append(poll_computer_once)
+            for poll in polls:
+                try:
+                    poll(settings)
+                except Exception as exc:
+                    logger.error(
+                        "%s failed: %s", poll.__name__,
+                        redact_text(f"{type(exc).__name__}: {exc}")[:500],
+                    )
             last_poll = now
 
         time.sleep(sleep_seconds)
