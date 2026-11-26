@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import logging
 import os
@@ -658,7 +659,7 @@ def _post_report(url: str, token: str, data: dict, *, what: str, step_id: str) -
                     body = None
                 return body if isinstance(body, dict) else {"ok": False, "error": f"http_{exc.code}"}
             reason = f"HTTP {exc.code}"
-        except (OSError, ValueError) as exc:  # URLError, timeouts, bad JSON
+        except (OSError, ValueError, http.client.HTTPException) as exc:  # URLError, timeouts, bad JSON
             reason = type(exc).__name__
         logger.info(
             "computer %s report failed step_id=%s attempt=%d/%d: %s",
