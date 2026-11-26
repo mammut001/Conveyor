@@ -26,7 +26,7 @@ from uuid import uuid4
 from runner._paths import RUNNER_HOME
 from runner.attachments import prompt_images
 from runner.file_lock import file_lock, async_gate
-from runner.process_group import finish_readers, stop_group, wait_exit
+from runner.process_group import StreamActivity, finish_readers, stop_group, wait_exit
 from runner.types import Job, JobMode, JobState, ProgressCallback
 from conveyor.core.redaction import redact_text, safe_json, truncate
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
@@ -378,14 +378,16 @@ async def _run_codex_attempt(self, job: Job, on_progress: ProgressCallback) -> N
     await process.stdin.drain()
     process.stdin.close()
 
-    stdout_task = asyncio.create_task(self._read_jsonl_stdout(job, process, on_progress))
-    stderr_task = asyncio.create_task(self._read_stderr(job, process))
+    activity = StreamActivity()
+    on_progress = activity.progress(on_progress)
+    stdout_task = asyncio.create_task(self._read_jsonl_stdout(job, process, on_progress, activity))
+    stderr_task = asyncio.create_task(self._read_stderr(job, process, activity))
     try:
         job.return_code = await wait_exit(process, timeout=self.settings.codex_timeout_seconds)
     except asyncio.TimeoutError:
         job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
         job.return_code = await stop_group(process)
-    await finish_readers(process, (stdout_task, stderr_task))
+    await finish_readers(process, (stdout_task, stderr_task), activity=activity)
     job.process = None
 
 

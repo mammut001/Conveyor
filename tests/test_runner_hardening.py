@@ -235,6 +235,37 @@ class AgentProcessGroupTest(unittest.TestCase):
             self._assert_clean(pid_file)
 
 
+class SlowProgressDrainTest(unittest.TestCase):
+    """A slow progress callback must not cost the agent's remaining output."""
+
+    def test_slow_progress_does_not_truncate_the_final_output(self) -> None:
+        from runner.pooled import create_worker_backend
+        from tests.test_cli_backend import _fake_cli, _job, _settings
+
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw) / "wt"
+            root.mkdir()
+            bindir = Path(raw) / "bin"
+            bindir.mkdir()
+            _fake_cli(bindir, "agy", "print('working...', flush=True)\nprint('FINAL ANSWER', flush=True)\n")
+            job = _job(root)
+
+            async def scenario():
+                async def slow_progress(_text):
+                    # Longer than the drain window plus the post-kill grace (0.5s + 1.0s).
+                    await asyncio.sleep(2.0)  # e.g. a Telegram edit that is slow to return
+
+                backend = create_worker_backend("agy", _settings(root))
+                await backend._run_codex_attempt(job, slow_progress)
+
+            env = {"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
+            with mock.patch.dict(os.environ, env), \
+                    mock.patch.object(process_group, "STREAM_DRAIN_SECONDS", 0.5):
+                finished, _ = _run_in_thread(scenario, timeout=15)
+            self.assertTrue(finished, "job never finished")
+            self.assertEqual(job.final_message_path.read_text(encoding="utf-8"), "working...\nFINAL ANSWER")
+
+
 class _FakeGitProcess:
     def __init__(self, stdout: bytes, stderr: bytes, returncode: int = 0) -> None:
         self._out, self._err, self.returncode, self.pid = stdout, stderr, returncode, None

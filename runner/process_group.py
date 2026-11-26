@@ -14,12 +14,17 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
-from typing import Any, Iterable
+import time
+from typing import Any, Awaitable, Callable, Iterable
 
 # SIGTERM to SIGKILL on timeout. Cancel keeps its own, longer grace.
 AGENT_TERM_GRACE_SECONDS = 5.0
-# How long stdout/stderr readers may run after the agent itself exited.
+# How long stdout/stderr readers may go without consuming output (after the
+# agent itself exited) before they count as held open by a grandchild.
 STREAM_DRAIN_SECONDS = 5.0
+# Hard cap on the whole drain, however much output keeps arriving.
+STREAM_DRAIN_MAX_SECONDS = 180.0
+_DRAIN_POLL_SECONDS = 0.05
 # How long to wait for the agent to be reaped after SIGKILL.
 KILL_WAIT_SECONDS = 5.0
 # asyncio's process.wait() also waits for the pipes to close; a grandchild
@@ -100,23 +105,69 @@ async def stop_group(process: Any, *, grace: float = AGENT_TERM_GRACE_SECONDS) -
         return getattr(process, "returncode", None)
 
 
+class StreamActivity:
+    """Clock a stream reader updates while it consumes the agent's output.
+
+    ``touch`` is called for every line a reader takes from the pipe.
+    ``progress`` wraps the reader's progress callback: while a callback runs
+    the reader counts as busy, so a slow Telegram/Feishu edit is never mistaken
+    for a pipe that is held open with nothing left to read.
+    """
+
+    def __init__(self) -> None:
+        self.last = time.monotonic()
+        self.busy = 0
+
+    def touch(self) -> None:
+        self.last = time.monotonic()
+
+    def progress(self, callback: Callable[..., Awaitable[Any]]) -> Callable[..., Awaitable[Any]]:
+        async def tracked(*args: Any, **kwargs: Any) -> Any:
+            self.busy += 1
+            try:
+                return await callback(*args, **kwargs)
+            finally:
+                self.busy -= 1
+                self.touch()
+
+        return tracked
+
+
 async def finish_readers(
     process: Any,
     tasks: Iterable[asyncio.Future],
     *,
-    timeout: float = STREAM_DRAIN_SECONDS,
+    timeout: float | None = None,
+    activity: StreamActivity | None = None,
+    max_seconds: float | None = None,
 ) -> list[Any]:
     """Results of the stream readers, after the agent has exited.
 
-    A reader still running after ``timeout`` means something left in the
-    agent's group holds the pipe: the group is killed, and a reader that
-    still does not finish is cancelled. Returns ``gather(...,
-    return_exceptions=True)`` results in the order given.
+    The readers get until ``timeout`` seconds pass with no activity (see
+    ``StreamActivity``) to finish. Going quiet that long means something left
+    in the agent's group holds the pipe: the group is killed, and a reader
+    that still does not finish is cancelled. ``max_seconds`` caps the total
+    wait, so a grandchild that writes forever still cannot hang the job.
+    Returns ``gather(..., return_exceptions=True)`` results in the order given.
     """
     tasks = list(tasks)
     if not tasks:
         return []
-    _done, pending = await asyncio.wait(tasks, timeout=timeout)
+    if timeout is None:
+        timeout = STREAM_DRAIN_SECONDS
+    if max_seconds is None:
+        max_seconds = STREAM_DRAIN_MAX_SECONDS
+    if activity is None:
+        activity = StreamActivity()
+    hard_deadline = time.monotonic() + max_seconds
+    pending: set[asyncio.Future] = set(tasks)
+    while pending:
+        now = time.monotonic()
+        if now >= hard_deadline:
+            break
+        if not activity.busy and now - activity.last >= timeout:
+            break
+        _done, pending = await asyncio.wait(pending, timeout=_DRAIN_POLL_SECONDS)
     if pending:
         signal_group(process, signal.SIGKILL)
         _done, pending = await asyncio.wait(pending, timeout=1.0)

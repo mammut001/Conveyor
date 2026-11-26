@@ -21,6 +21,7 @@ from zoneinfo import ZoneInfo
 
 from conveyor.core.config import Settings, load_settings
 from conveyor.core.redaction import redact_text, safe_json, truncate
+from runner.process_group import StreamActivity
 from scripts.job_metadata import job_sort_time, load_job_metadata, metadata_text
 
 
@@ -82,6 +83,7 @@ async def _read_jsonl_stdout(
     job: Job,
     process: asyncio.subprocess.Process,
     on_progress: ProgressCallback,
+    activity: StreamActivity | None = None,
 ) -> None:
     assert process.stdout is not None
     assert job.log_path is not None
@@ -163,6 +165,8 @@ async def _read_jsonl_stdout(
     with job.log_path.open("ab") as log_file:
         while True:
             line = await process.stdout.readline()
+            if activity is not None:
+                activity.touch()
             if not line:
                 break
             log_file.write(line)
@@ -324,11 +328,18 @@ async def _read_jsonl_stdout(
                 await on_progress(f"\U0001f527 {pending_tool_name} ({elapsed}s)...")
 
 
-async def _read_stderr(self, job: Job, process: asyncio.subprocess.Process) -> None:
+async def _read_stderr(
+    self,
+    job: Job,
+    process: asyncio.subprocess.Process,
+    activity: StreamActivity | None = None,
+) -> None:
     assert process.stderr is not None
     chunks: list[str] = []
     while True:
         line = await process.stderr.readline()
+        if activity is not None:
+            activity.touch()
         if not line:
             break
         chunks.append(line.decode("utf-8", errors="replace"))

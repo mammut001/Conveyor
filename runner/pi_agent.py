@@ -24,6 +24,7 @@ from conveyor.core.redaction import redact_text, truncate
 from runner.core import CodexRunner
 from runner.delete_guard import make_guard_dir, prepend_guard_to_path
 from runner.operators import run as _run_ops
+from runner.process_group import StreamActivity
 from runner.types import DESTRUCTIVE_CONFIRM_TAG, Job, JobMode, ProgressCallback  # tag re-exported
 
 
@@ -1130,6 +1131,8 @@ class PiBackend(CodexRunner):
         on_progress: ProgressCallback,
     ) -> None:
         """Spawn the prepared pi command in ``env`` and read its event stream."""
+        activity = StreamActivity()
+        on_progress = activity.progress(on_progress)
         try:
             Path("/srv/conveyor/downloads").mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -1257,6 +1260,7 @@ class PiBackend(CodexRunner):
                                 process.terminate()
                             return
                         read_task = None
+                        activity.touch()
                         if not line:
                             return
                         text = line.decode("utf-8", errors="replace").strip()
@@ -1384,6 +1388,7 @@ class PiBackend(CodexRunner):
         async def read_stderr() -> None:
             while True:
                 chunk_bytes = await process.stderr.read(65_536)
+                activity.touch()
                 if not chunk_bytes:
                     return
                 if len(stderr_buffer) < MAX_PI_STDERR_BYTES:
@@ -1397,7 +1402,7 @@ class PiBackend(CodexRunner):
         except asyncio.TimeoutError:
             job.error = f"Timed out after {self.settings.codex_timeout_seconds} seconds."
             job.return_code = await self._stop_pi(process)
-        stream_results = await finish_readers(process, (stdout_task, stderr_task))
+        stream_results = await finish_readers(process, (stdout_task, stderr_task), activity=activity)
         job.process = None
 
         if not job.error:
