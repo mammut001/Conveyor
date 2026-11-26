@@ -1152,6 +1152,10 @@ def complete_computer_step(settings: Settings, step_id: str, node_id: str, resul
             step, task_id = _find_step_unlocked(store, step_id)
             if step is None:
                 return {"ok": False, "error": "step_not_found"}
+            # The agent retries a report whose answer it lost. The same
+            # result again is a no-op success; anything else stays refused.
+            if step.get("status") == "completed" and step.get("result") == validated:
+                return {"ok": True, "step": dict(step), "task_id": task_id, "duplicate": True}
             if step.get("status") != "claimed":
                 return {"ok": False, "error": "invalid_status", "status": step.get("status")}
             step["status"] = "completed"
@@ -1177,6 +1181,8 @@ def fail_computer_step(
             step, task_id = _find_step_unlocked(store, step_id)
             if step is None:
                 return {"ok": False, "error": "step_not_found"}
+            if step.get("status") == "failed" and step.get("error") == error:
+                return {"ok": True, "step": dict(step), "task_id": task_id, "duplicate": True}
             if step.get("status") != "claimed":
                 return {"ok": False, "error": "invalid_status", "status": step.get("status")}
             step["status"] = "failed"

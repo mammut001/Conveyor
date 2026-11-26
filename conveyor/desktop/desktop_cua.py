@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import base64
 import hashlib
@@ -1109,6 +1110,9 @@ class LocalCuaTransport(CuaTransport):
                 "action_type": "type",
                 "node_id": node_id,
             }
+        invalid = _invalid_ax_fields(action, "type", node_id)
+        if invalid:
+            return invalid
         args = {"pid": int(pid), "text": str(action.get("text", ""))}
         _copy_optional(action, args, ("window_id", "element_index", "element_token", "x", "y", "delivery_mode"))
         if sys.platform.startswith("linux") and "delivery_mode" not in args:
@@ -1134,6 +1138,9 @@ class LocalCuaTransport(CuaTransport):
         keys = action.get("keys")
         if not isinstance(keys, list) or not keys:
             return {"result_ok": False, "error": "bad_keys", "action_type": "hotkey", "node_id": node_id}
+        invalid = _invalid_ax_fields(action, "hotkey", node_id)
+        if invalid:
+            return invalid
         args = {"pid": int(pid), "keys": [str(k) for k in keys]}
         _copy_optional(action, args, ("window_id", "x", "y", "delivery_mode"))
         if sys.platform.startswith("linux") and "delivery_mode" not in args:
@@ -1153,8 +1160,16 @@ class LocalCuaTransport(CuaTransport):
                 "action_type": "scroll",
                 "node_id": node_id,
             }
-        dx = float(action.get("dx", 0) or 0)
-        dy = float(action.get("dy", 0) or 0)
+        invalid = _invalid_ax_fields(action, "scroll", node_id)
+        if invalid:
+            return invalid
+        try:
+            dx = float(action.get("dx", 0) or 0)
+            dy = float(action.get("dy", 0) or 0)
+        except (TypeError, ValueError):
+            dx = dy = math.nan
+        if not (math.isfinite(dx) and math.isfinite(dy)):
+            return {"result_ok": False, "error": "invalid_scroll_delta", "action_type": "scroll", "node_id": node_id}
         if abs(dx) > abs(dy):
             direction = "right" if dx > 0 else "left"
             amount = max(1, min(50, int(abs(dx) / 120) or 1))
@@ -1175,6 +1190,14 @@ class LocalCuaTransport(CuaTransport):
 
 
 _ELEMENT_TOKEN = re.compile(r"^s[0-9a-f]{8}:[0-9]+$")
+
+
+def _invalid_ax_fields(action: dict, kind: str, node_id: str) -> dict | None:
+    """A failed result for a non-integer pid/window_id/element_index, else None."""
+    ok, _reason = validate_ax_fields(action)
+    if ok:
+        return None
+    return {"result_ok": False, "error": "invalid_ax_fields", "action_type": kind, "node_id": node_id}
 
 
 def _driver_stdout_code(stdout: str) -> str:
