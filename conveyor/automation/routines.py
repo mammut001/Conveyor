@@ -1020,13 +1020,30 @@ def persist_routine_approval(settings: Any, token: str, routine_id: int) -> bool
         conn.close()
 
 
-def update_routine_approval_arg(settings: Any, token: str, new_arg: str) -> bool:
-    """Update the arg of a persisted pending routine approval."""
+def update_routine_approval_arg(
+    settings: Any, token: str, new_arg: str, *, new_token: str | None = None,
+) -> bool:
+    """Update the arg of a persisted pending routine approval.
+
+    With ``new_token`` (the edit replaced the approval token) the row and its
+    run move to the new token, so the decision is recorded against it.
+    """
     try:
         init_db(settings)
         conn = _connect(settings)
         try:
             with conn:
+                if new_token:
+                    cursor = conn.execute(
+                        "UPDATE routine_approvals SET token = ?, arg = ? WHERE token = ? AND status = 'pending'",
+                        (new_token, new_arg, token),
+                    )
+                    if cursor.rowcount > 0:
+                        conn.execute(
+                            "UPDATE routine_runs SET approval_id = ? WHERE approval_id = ?",
+                            (new_token, token),
+                        )
+                    return cursor.rowcount > 0
                 cursor = conn.execute(
                     "UPDATE routine_approvals SET arg = ? WHERE token = ? AND status = 'pending'",
                     (new_arg, token),

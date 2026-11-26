@@ -16,7 +16,7 @@ from handlers.tools.confirm import (
     PendingToolAction,
     get_pending,
     list_pending,
-    replace_pending_arg,
+    supersede_pending,
 )
 from conveyor.core.redaction import redact_text
 
@@ -254,7 +254,10 @@ def build_arg(tool_name: str, draft: dict[str, Any]) -> str:
 
 
 def edit_pending(settings: Any, token: str, draft: dict[str, Any]) -> PendingToolAction:
-    """Atomically replace the argument of a still-pending editable action.
+    """Replace the argument of a still-pending editable action.
+
+    The edited action gets a new token (returned); the old token is invalid
+    on every channel and the approval is re-sent with the new argument.
 
     Raises KeyError if not found or expired.
     Raises PermissionError if not editable or if original arg was redacted.
@@ -277,16 +280,30 @@ def edit_pending(settings: Any, token: str, draft: dict[str, Any]) -> PendingToo
     new_arg = build_arg(action.tool_name, draft)
 
     old_arg = action.arg
-    updated = replace_pending_arg(token, new_arg)
+    # The approval moves to a new token. Telegram/Feishu buttons and links
+    # sent for the old token showed the old argument; they must not approve
+    # the new one. Retire the old token in the shared relay first: if another
+    # surface already decided it, that decision stands and the edit fails.
+    from conveyor.channels import approval_relay
+    verdict, old_row = approval_relay.supersede(settings, token)
+    if verdict != "ok":
+        raise PermissionError(f"Approval {token} was already decided elsewhere ({verdict}); reload")
+    updated = supersede_pending(token, new_arg)
     if updated is None:
         raise KeyError(f"Pending tool action {token} expired during edit")
 
-    # If persisted in routine_approvals, update that row's arg too
+    # If persisted in routine_approvals, move that row to the new token too.
     try:
         from conveyor.automation import routines
-        routines.update_routine_approval_arg(settings, token, new_arg)
+        routines.update_routine_approval_arg(settings, token, new_arg, new_token=updated.token)
     except Exception:
         logger.debug("Failed to update routine_approvals DB row for %s", token, exc_info=True)
+
+    # Re-send the approval with the new argument; old messages say "invalid".
+    try:
+        approval_relay.announce_superseded(settings, token, updated, old_row)
+    except Exception:
+        logger.exception("Failed to re-publish edited approval %s", updated.token)
 
     # Audit event with tool name and redacted previews of old and new arg
     try:
