@@ -43,6 +43,7 @@ from conveyor.core.config import Settings
 from conveyor.desktop.desktop_computer_requests import (
     action_enforces_app_allowlist,
     check_app_allowlist_blocklist,
+    check_target_app_policy,
     redact_computer_action,
     validate_ax_fields,
 )
@@ -301,6 +302,21 @@ class LocalCuaTransport(CuaTransport):
                 "action_type": action.get("action"),
                 "node_id": node_id,
             }
+        # Policy first: preparing target_app launches and foregrounds it, so
+        # a blocked app, or one outside a set allowlist, is refused here for
+        # every action type (observe included) before any side effect.
+        if isinstance(action, dict):
+            policy_error = check_target_app_policy(
+                self.settings, action.get("target_app"),
+                linux=sys.platform.startswith("linux"),
+            )
+            if policy_error:
+                return {
+                    "result_ok": False,
+                    "error": policy_error,
+                    "action_type": action.get("action"),
+                    "node_id": node_id,
+                }
         # A task may name its target app. Resolve and activate it locally so
         # observation and AX hints come from the intended window, even when
         # the agent itself is currently frontmost.

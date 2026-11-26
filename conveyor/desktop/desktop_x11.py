@@ -416,11 +416,17 @@ class X11Desktop:
         is activated the same way. Any other target name is refused and is
         never launched. Allow and block lists are applied before focus.
         """
+        from conveyor.desktop.desktop_computer_requests import check_target_app_policy
         from conveyor.desktop.desktop_linux_browser import LinuxBrowserController, canonical_browser
 
         if self.display < 2:
             return {"result_ok": False, "error": "browser_display_missing", "action_type": str(action.get("action"))}
         target = action.get("target_app")
+        # Refuse a blocked or non-allowlisted target before focus or launch,
+        # for every action type (observe included).
+        policy_error = check_target_app_policy(self.settings, target, linux=True)
+        if policy_error:
+            return {"result_ok": False, "error": policy_error, "action_type": str(action.get("action"))}
         named = canonical_browser(target) if target else None
         if target and named is None:
             return {"result_ok": False, "error": "target_app_not_found", "action_type": str(action.get("action"))}

@@ -276,6 +276,43 @@ def check_app_allowlist_blocklist(
     return True, None
 
 
+def check_target_app_policy(
+    settings: Settings,
+    target: object,
+    *,
+    linux: bool = False,
+) -> str | None:
+    """Policy for an action's ``target_app`` before anything launches or focuses it.
+
+    Returns an error code, or None when the target may be prepared. Naming
+    an app asks the driver to start and foreground it, so the allowlist
+    applies to every action type here, observe included. An action with no
+    ``target_app`` passes; its frontmost app is checked later as before.
+    On Linux, browser names use the same alias rules as the browser
+    launcher (``Browser`` on a list covers every known browser).
+    """
+    if target is None or target == "":
+        return None
+    if not isinstance(target, str):
+        return "invalid_target_app"
+    name = target.strip()
+    if not name:
+        return "invalid_target_app"
+    if linux:
+        from conveyor.desktop.desktop_linux_browser import BROWSERS, browser_permitted, canonical_browser
+
+        named = canonical_browser(name)
+        if named is not None:
+            allowed = tuple(getattr(settings, "conveyor_computer_allowed_apps", ()) or ())
+            blocked = tuple(getattr(settings, "conveyor_computer_blocked_apps", ()) or ())
+            candidates = list(BROWSERS) if named == "Browser" else [named]
+            if any(browser_permitted(item, allowed_apps=allowed, blocked_apps=blocked) for item in candidates):
+                return None
+            return "browser_disallowed"
+    is_ok, reason = check_app_allowlist_blocklist(settings, name, enforce_allowlist=True)
+    return None if is_ok else reason
+
+
 # ---- redaction --------------------------------------------------------------
 
 def redact_computer_action(action: dict) -> dict:
